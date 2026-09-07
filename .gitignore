@@ -24,3 +24,6 @@ dist/
 # OS
 Thumbs.db
 .DS_Store
+
+# Local MCP / tooling config — not part of the published project.
+.mcp.json
