@@ -1,0 +1,26 @@
+# Local planning / working notes — never published.
+notes/
+*.local.md
+
+# Local developer overrides: may hold a real API key or PAT.
+appsettings.Development.json
+appsettings.*.local.json
+
+# Generated index / analysis artifacts, at any depth.
+_fileagent/
+
+# .NET build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+.vs/
+
+# Node / frontend
+node_modules/
+dist/
+
+# OS
+Thumbs.db
+.DS_Store
