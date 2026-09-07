@@ -7,7 +7,7 @@ appsettings.Development.json
 appsettings.*.local.json
 
 # Generated index / analysis artifacts, at any depth.
-_fileagent/
+.folderassistant/
 
 # .NET build output
 bin/
@@ -27,3 +27,10 @@ Thumbs.db
 
 # Local MCP / tooling config — not part of the published project.
 .mcp.json
+
+# Reference working area: verbatim upstream source used only while rebuilding.
+# Never tracked, never committed, never published. See notes/transfer-plan.md.
+_staging/
+
+# Local operating rules for this rebuild — local context, not project docs.
+CLAUDE.local.md
