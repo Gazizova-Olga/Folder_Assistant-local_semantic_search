@@ -12,6 +12,9 @@ internal record AgentConfig
 	/// <summary>Persistence configuration for the folder-scoped local database.</summary>
 	public PersistenceConfig Persistence { get; init; } = new();
 
+	/// <summary>Local indexing configuration (scan, chunk, tokenize, and embedding persistence).</summary>
+	public IndexingConfig Indexing { get; init; } = new();
+
 	/// <summary>HTTP port the web server listens on. Defaults to <c>5000</c>.</summary>
 	public Int32 Port { get; init; } = 5000;
 
@@ -92,4 +95,26 @@ internal record ProviderConfig
 
 	/// <summary>Maximum output tokens per request. When <see langword="null"/>, the model's default is used.</summary>
 	public Int32? MaxTokens { get; init; }
+}
+
+/// <summary>Configuration for the local programmable embedding indexing pipeline.</summary>
+internal record IndexingConfig
+{
+	/// <summary>Enables local folder indexing at startup.</summary>
+	public Boolean Enabled { get; init; } = true;
+
+	/// <summary>Maximum size for text files included in indexing.</summary>
+	public Int64 MaxTextFileSizeBytes { get; init; } = 1_048_576;
+
+	/// <summary>Chunk size in tokens for indexing.</summary>
+	public Int32 ChunkSizeTokens { get; init; } = 256;
+
+	/// <summary>Token overlap between consecutive chunks.</summary>
+	public Int32 ChunkOverlapTokens { get; init; } = 32;
+
+	/// <summary>Vector dimension produced by the programmable vectorizer.</summary>
+	public Int32 VectorDimension { get; init; } = 64;
+
+	/// <summary>Deterministic model version identifier used for persisted vectors.</summary>
+	public String ModelVersionId { get; init; } = "programmable-v1";
 }

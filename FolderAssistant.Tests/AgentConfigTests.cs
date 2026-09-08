@@ -16,6 +16,9 @@ public sealed class AgentConfigTests
 		config.Provider.DeploymentName.Should().Be("gpt-chat");
 		config.Persistence.MetadataFolderName.Should().Be(".folderassistant");
 		config.Persistence.DatabaseFileName.Should().Be("manifest.db");
+		config.Indexing.Enabled.Should().BeTrue();
+		config.Indexing.ChunkSizeTokens.Should().Be(256);
+		config.Indexing.ChunkOverlapTokens.Should().Be(32);
 	}
 
 	[Fact]
@@ -26,11 +29,13 @@ public sealed class AgentConfigTests
 			["FolderAssistant:Provider:Type"] = "OpenAI",
 			["FolderAssistant:Provider:DeploymentName"] = "some-model",
 			["FolderAssistant:ConnectionTimeoutSeconds"] = "45",
+			["FolderAssistant:Indexing:ChunkSizeTokens"] = "128",
 		});
 
 		config.Provider.Type.Should().Be(ProviderConfig.AiProviderType.OpenAI);
 		config.Provider.DeploymentName.Should().Be("some-model");
 		config.ConnectionTimeout.Should().Be(TimeSpan.FromSeconds(45));
+		config.Indexing.ChunkSizeTokens.Should().Be(128);
 	}
 
 	[Fact]

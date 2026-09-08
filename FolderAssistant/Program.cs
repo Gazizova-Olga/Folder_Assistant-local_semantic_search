@@ -1,3 +1,4 @@
+using FolderAssistant.Indexing;
 using FolderAssistant.Persistence;
 
 namespace FolderAssistant;
@@ -20,11 +21,21 @@ internal sealed class Program
 
 		String analyzedFolderPath = config.ResolveAnalyzedFolderPath();
 
-		DatabaseBootstrapResult database = new FolderDatabaseBootstrapper()
-			.EnsureInitialized(analyzedFolderPath, config.Persistence);
+		FolderDatabaseBootstrapper bootstrap = new();
+		DatabaseBootstrapResult database = bootstrap.EnsureInitialized(analyzedFolderPath, config.Persistence);
 
 		Console.WriteLine(
 			$"Database bootstrap: {(database.Created ? "created" : "reused")} at {database.DatabasePath}");
+
+		if (config.Indexing.Enabled)
+		{
+			IndexingResult indexed = new FolderIndexingPipeline()
+				.Run(analyzedFolderPath, database.DatabasePath, config.Indexing);
+
+			Console.WriteLine(
+				$"Indexing: scanned={indexed.FilesScanned}, files={indexed.FilesIndexed}, " +
+				$"chunks={indexed.ChunksIndexed}, vectors={indexed.VectorsIndexed}");
+		}
 
 		WebApplication app = builder.Build();
 
