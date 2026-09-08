@@ -38,6 +38,11 @@ spec is out of date. If approval is withheld, propose the aligned alternative.
 A spec updated in a later commit is a spec that was wrong in between, and the history will
 show the code arriving without it.
 
+## The skill
+
+The workflow above is also packaged as a reusable skill at
+`.agent/skills/spec-alignment/SKILL.md`, so an agent can load it directly.
+
 ## Why this exists
 
 A specification that disagrees with the code is worse than no specification, because it is
