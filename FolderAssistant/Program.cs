@@ -11,9 +11,18 @@ internal sealed class Program
 	{
 		WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
+		AgentConfig config = new();
+		builder.Configuration.GetSection(AgentConfig.SectionName).Bind(config);
+
+		builder.WebHost.UseUrls($"http://localhost:{config.Port}");
+
 		WebApplication app = builder.Build();
 
-		app.MapGet("/", static () => Results.Ok(new { name = "Folder Assistant" }));
+		app.MapGet("/", () => Results.Ok(new
+		{
+			name = "Folder Assistant",
+			analyzedFolder = config.ResolveAnalyzedFolderPath(),
+		}));
 
 		app.Run();
 	}
