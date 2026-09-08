@@ -24,9 +24,3 @@ internal sealed record TextChunk(
 	String ChunkHash,
 	String Content);
 
-/// <summary>A vector, and which model produced it.</summary>
-internal sealed record EmbeddingResult(
-	String ModelVersionId,
-	String ProviderType,
-	Int32 Dimension,
-	IReadOnlyList<Single> Vector);

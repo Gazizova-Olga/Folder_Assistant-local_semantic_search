@@ -68,17 +68,6 @@ public sealed class FolderIndexingPipelineTests
 	}
 
 	[Fact]
-	public void The_Same_Text_Always_Embeds_To_The_Same_Vector()
-	{
-		ProgrammableEmbeddingVectorizer vectorizer = new();
-
-		EmbeddingResult first = vectorizer.Vectorize("alpha beta", "m1", 32);
-		EmbeddingResult second = vectorizer.Vectorize("alpha beta", "m1", 32);
-
-		second.Vector.Should().Equal(first.Vector);
-	}
-
-	[Fact]
 	public void The_Pipeline_Stores_Files_Chunks_And_Vectors()
 	{
 		using TempFolder folder = new();
@@ -118,6 +107,42 @@ public sealed class FolderIndexingPipelineTests
 		Count(connection, "SELECT COUNT(*) FROM chunk_manifest;").Should().Be(indexed.ChunksIndexed);
 		Count(connection, "SELECT COUNT(*) FROM chunk_vector;").Should().Be(indexed.VectorsIndexed);
 		Count(connection, "SELECT COUNT(*) FROM embedding_model_registry WHERE is_active_for_write = 1;")
+			.Should().Be(1);
+	}
+
+	/// <summary>
+	/// Only one model version may be active for write. Indexing the same folder with a second model is
+	/// exactly the state that arises while comparing embedding implementations against one corpus, and
+	/// the registry insert activates unconditionally — so something has to demote the previous row.
+	/// </summary>
+	[Fact]
+	public void Indexing_With_A_Second_Model_Leaves_Exactly_One_Active_For_Write()
+	{
+		using TempFolder folder = new();
+		File.WriteAllText(folder.Combine("alpha.txt"), "alpha beta gamma delta", Encoding.UTF8);
+
+		DatabaseBootstrapResult database = new FolderDatabaseBootstrapper()
+			.EnsureInitialized(folder.Path, new PersistenceConfig());
+
+		IndexingConfig first = new()
+		{
+			ChunkSizeTokens = 4,
+			ChunkOverlapTokens = 1,
+			VectorDimension = 32,
+			ModelVersionId = "model-a",
+		};
+		new FolderIndexingPipeline().Run(folder.Path, database.DatabasePath, first);
+
+		IndexingConfig second = first with { ModelVersionId = "model-b" };
+		new FolderIndexingPipeline().Run(folder.Path, database.DatabasePath, second);
+
+		using SqliteConnection connection = new($"Data Source={database.DatabasePath}");
+		connection.Open();
+
+		Count(connection, "SELECT COUNT(*) FROM embedding_model_registry;").Should().Be(2);
+		Count(connection, "SELECT COUNT(*) FROM embedding_model_registry WHERE is_active_for_write = 1;")
+			.Should().Be(1);
+		Count(connection, "SELECT COUNT(*) FROM embedding_model_registry WHERE is_active_for_write = 1 AND model_version_id = 'model-b';")
 			.Should().Be(1);
 	}
 

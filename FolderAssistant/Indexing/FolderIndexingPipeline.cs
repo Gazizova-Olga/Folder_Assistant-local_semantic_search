@@ -1,3 +1,4 @@
+using FolderAssistant.Embedding;
 using FolderAssistant.Persistence;
 
 namespace FolderAssistant.Indexing;
@@ -23,12 +24,26 @@ internal sealed class FolderIndexingPipeline
 	private readonly LocalTextFileScanner _scanner = new();
 	private readonly SimpleTokenizer _tokenizer = new();
 	private readonly TextChunker _chunker = new();
-	private readonly ProgrammableEmbeddingVectorizer _vectorizer = new();
 	private readonly FolderIndexRepository _repository = new();
+	private readonly IVectorizer? _vectorizer;
+
+	public FolderIndexingPipeline()
+		: this(null)
+	{
+	}
+
+	/// <summary>Composition-time override; with none, the programmable baseline is built from config.</summary>
+	internal FolderIndexingPipeline(IVectorizer? vectorizer)
+	{
+		this._vectorizer = vectorizer;
+	}
 
 	public IndexingResult Run(String analyzedFolderPath, String databasePath, IndexingConfig config)
 	{
 		ArgumentNullException.ThrowIfNull(config);
+
+		IVectorizer vectorizer = this._vectorizer
+			?? new ProgrammableEmbeddingVectorizer(config.ModelVersionId, config.VectorDimension);
 
 		IReadOnlyList<ScannedTextFile> files = this._scanner.Scan(analyzedFolderPath, config.MaxTextFileSizeBytes);
 
@@ -44,10 +59,18 @@ internal sealed class FolderIndexingPipeline
 
 			chunksByFile[file.FileId] = chunks;
 
-			foreach (TextChunk chunk in chunks)
+			if (chunks.Count == 0)
 			{
-				embeddingsByChunk[chunk.ChunkId] =
-					this._vectorizer.Vectorize(chunk.Content, config.ModelVersionId, config.VectorDimension);
+				continue;
+			}
+
+			IReadOnlyList<EmbeddingResult> vectors = vectorizer.Vectorize(
+				chunks.Select(static chunk => chunk.Content).ToArray(),
+				EmbeddingKind.Document);
+
+			for (Int32 i = 0; i < chunks.Count; i++)
+			{
+				embeddingsByChunk[chunks[i].ChunkId] = vectors[i];
 			}
 		}
 
@@ -56,8 +79,7 @@ internal sealed class FolderIndexingPipeline
 			files,
 			chunksByFile,
 			embeddingsByChunk,
-			config.ModelVersionId,
-			config.VectorDimension);
+			vectorizer.Descriptor);
 
 		return new IndexingResult(
 			FilesScanned: files.Count,

@@ -1,3 +1,4 @@
+using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
 using FolderAssistant.Persistence;
 
@@ -29,7 +30,12 @@ internal sealed class Program
 
 		if (config.Indexing.Enabled)
 		{
-			IndexingResult indexed = new FolderIndexingPipeline()
+			// Composition root for the embedding provider: swapping the IVectorizer built here is the
+			// only change needed to index with a different backend.
+			IVectorizer vectorizer = new ProgrammableEmbeddingVectorizer(
+				config.Indexing.ModelVersionId, config.Indexing.VectorDimension);
+
+			IndexingResult indexed = new FolderIndexingPipeline(vectorizer)
 				.Run(analyzedFolderPath, database.DatabasePath, config.Indexing);
 
 			Console.WriteLine(

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Owner | Persistence |
-| Last updated | 2026-06-26 |
+| Last updated | 2026-09-08 |
 
 ## Purpose
 
@@ -78,6 +78,20 @@ migrating every vector already stored.
 
 Deleting a file cascades to its chunks and their vectors. Indexes cover file-path lookup,
 chunk-by-file lookup and vector-by-model lookup.
+
+### The model registry activation invariant
+
+**Exactly one row in `embedding_model_registry` may have `is_active_for_write` set.**
+
+Registering a model version activates it and demotes every other row, in the same
+transaction. Without the demotion, indexing a folder with a second model leaves two rows
+both claiming to be active, and nothing downstream can determine which vectors are current
+— which is precisely the state that arises when comparing two embedding implementations
+against one corpus, the thing the composite vector key exists to make possible.
+
+The registry row is written from the active vectorizer's own descriptor
+([SPEC-160](SPEC-160-embedding-module.md)): provider, model name, dimension and distance
+metric all come from the implementation rather than from configuration.
 
 **Cleanup of stale or orphaned rows is not implemented.** Rows are retained until explicit
 cleanup exists.

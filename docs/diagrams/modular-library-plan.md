@@ -108,7 +108,9 @@ share no latency profile, and averaging them together describes neither.
 folder-scoped database, creates it when missing, and ensures the baseline manifest, chunk,
 vector and model-registry schema on every run.
 
-Nothing embeds yet. The seams in the table above are described here, not written.
+**Phase 1 has started.** `IVectorizer` is extracted and the model registry records which
+implementation produced which vectors, with exactly one active for write. The deterministic
+baseline is the only implementation so far.
 
 ## References
 

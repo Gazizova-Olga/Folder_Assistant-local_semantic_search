@@ -1,3 +1,4 @@
+using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
 using Microsoft.Data.Sqlite;
 
@@ -36,12 +37,14 @@ internal sealed class FolderIndexRepository
 		IReadOnlyList<ScannedTextFile> files,
 		IReadOnlyDictionary<String, IReadOnlyList<TextChunk>> chunksByFile,
 		IReadOnlyDictionary<String, EmbeddingResult> embeddingsByChunk,
-		String modelVersionId,
-		Int32 vectorDimension)
+		ModelDescriptor descriptor)
 	{
 		ArgumentNullException.ThrowIfNull(files);
 		ArgumentNullException.ThrowIfNull(chunksByFile);
 		ArgumentNullException.ThrowIfNull(embeddingsByChunk);
+		ArgumentNullException.ThrowIfNull(descriptor);
+
+		String modelVersionId = descriptor.ModelVersionId;
 
 		using SqliteConnection connection = new(new SqliteConnectionStringBuilder
 		{
@@ -54,7 +57,7 @@ internal sealed class FolderIndexRepository
 
 		using SqliteTransaction transaction = connection.BeginTransaction();
 
-		UpsertModel(connection, transaction, modelVersionId, vectorDimension);
+		UpsertModel(connection, transaction, descriptor);
 
 		Int32 fileCount = 0;
 		Int32 chunkCount = 0;
@@ -81,7 +84,7 @@ internal sealed class FolderIndexRepository
 				}
 
 				this._vectorStoreWriter.UpsertVector(
-					connection, transaction, chunk.ChunkId, modelVersionId, embedding.Vector, vectorDimension);
+					connection, transaction, chunk.ChunkId, modelVersionId, embedding.Vector, descriptor.Dimension);
 				vectorCount++;
 			}
 		}
@@ -94,16 +97,27 @@ internal sealed class FolderIndexRepository
 	private static void UpsertModel(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
-		String modelVersionId,
-		Int32 vectorDimension)
+		ModelDescriptor descriptor)
 	{
+		// Exactly one model version may be active for write. Activating this one demotes the rest in the
+		// same transaction — the insert below hardcoded is_active_for_write to 1, so indexing a folder
+		// with a second model left both rows claiming it.
+		using (SqliteCommand demote = connection.CreateCommand())
+		{
+			demote.Transaction = transaction;
+			demote.CommandText =
+				"UPDATE embedding_model_registry SET is_active_for_write = 0 WHERE model_version_id <> $id;";
+			demote.Parameters.AddWithValue("$id", descriptor.ModelVersionId);
+			demote.ExecuteNonQuery();
+		}
+
 		using SqliteCommand command = connection.CreateCommand();
 		command.Transaction = transaction;
 		command.CommandText = """
 			INSERT INTO embedding_model_registry (
 				model_version_id, provider_type, model_name, vector_dimension,
 				distance_metric, is_active_for_write, activated_utc)
-			VALUES ($id, 'programmable', 'programmable-embedding', $dimension, 'cosine', 1, $activated)
+			VALUES ($id, $providerType, $modelName, $dimension, $metric, 1, $activated)
 			ON CONFLICT(model_version_id) DO UPDATE SET
 				provider_type = excluded.provider_type,
 				model_name = excluded.model_name,
@@ -112,8 +126,11 @@ internal sealed class FolderIndexRepository
 				is_active_for_write = excluded.is_active_for_write,
 				activated_utc = excluded.activated_utc;
 			""";
-		command.Parameters.AddWithValue("$id", modelVersionId);
-		command.Parameters.AddWithValue("$dimension", vectorDimension);
+		command.Parameters.AddWithValue("$id", descriptor.ModelVersionId);
+		command.Parameters.AddWithValue("$providerType", descriptor.ProviderType);
+		command.Parameters.AddWithValue("$modelName", descriptor.ModelName);
+		command.Parameters.AddWithValue("$dimension", descriptor.Dimension);
+		command.Parameters.AddWithValue("$metric", descriptor.DistanceMetric);
 		command.Parameters.AddWithValue("$activated", UtcNow());
 		command.ExecuteNonQuery();
 	}

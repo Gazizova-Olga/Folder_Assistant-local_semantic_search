@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FluentAssertions;
+using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
 using FolderAssistant.Persistence;
 using Microsoft.Data.Sqlite;
@@ -30,8 +31,7 @@ public sealed class VectorStoreWriterTests
 				["c1"] = Embedding([1.0f, 0.0f, 0.0f]),
 				["c2"] = Embedding([0.0f, 1.0f, 0.0f]),
 			},
-			"programmable-v1",
-			vectorDimension: 3);
+			Descriptor(3));
 
 		summary.VectorsUpserted.Should().Be(2);
 		writer.Calls.Should().HaveCount(2);
@@ -60,8 +60,7 @@ public sealed class VectorStoreWriterTests
 				[OneFile()],
 				new Dictionary<String, IReadOnlyList<TextChunk>> { ["f1"] = [Chunk("c1", 0)] },
 				new Dictionary<String, EmbeddingResult> { ["c1"] = Embedding([1.0f]) },
-				"programmable-v1",
-				vectorDimension: 1))
+				Descriptor(1)))
 			.Should().Throw<InvalidOperationException>();
 
 		using SqliteConnection connection = Connect(databasePath);
@@ -80,8 +79,7 @@ public sealed class VectorStoreWriterTests
 			[OneFile()],
 			new Dictionary<String, IReadOnlyList<TextChunk>> { ["f1"] = [Chunk("c1", 0)] },
 			new Dictionary<String, EmbeddingResult> { ["c1"] = Embedding([0.5f, -0.25f]) },
-			"programmable-v1",
-			vectorDimension: 2);
+			Descriptor(2));
 
 		using SqliteConnection connection = Connect(databasePath);
 		using SqliteCommand command = connection.CreateCommand();
@@ -143,8 +141,11 @@ public sealed class VectorStoreWriterTests
 	private static TextChunk Chunk(String chunkId, Int32 index)
 		=> new(chunkId, index, index, index + 1, $"hash-{chunkId}", $"content {chunkId}");
 
+	private static ModelDescriptor Descriptor(Int32 dimension)
+		=> new("programmable-v1", "programmable", "programmable-embedding", dimension);
+
 	private static EmbeddingResult Embedding(Single[] vector)
-		=> new("programmable-v1", "programmable", vector.Length, vector);
+		=> new(vector, "programmable-v1", vector.Length, "programmable");
 
 	private static SqliteConnection Connect(String databasePath)
 	{
