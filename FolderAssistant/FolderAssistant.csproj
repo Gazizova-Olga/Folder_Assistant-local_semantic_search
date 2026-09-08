@@ -29,6 +29,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<PackageReference Include="Microsoft.Data.Sqlite" />
+		<!-- Promotes the transitive SQLitePCLRaw 2.1.11 off GHSA-2m69-gcr7-jv3q; see Directory.Packages.props. -->
+		<PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
 	</ItemGroup>
 
 	<ItemGroup>

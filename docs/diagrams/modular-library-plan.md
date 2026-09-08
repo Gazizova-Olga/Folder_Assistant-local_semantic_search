@@ -102,7 +102,16 @@ share no latency profile, and averaging them together describes neither.
 | An unbounded call to a local service hangs indexing forever | Bound the call; a file that never returns must fail rather than wait |
 | Interfaces multiply past their usefulness | A seam needs a second real implementation, not a hypothetical one |
 
+## Implementation status
+
+**Phase 0 is under way.** Startup persistence bootstrap exists: the application resolves the
+folder-scoped database, creates it when missing, and ensures the baseline manifest, chunk,
+vector and model-registry schema on every run.
+
+Nothing embeds yet. The seams in the table above are described here, not written.
+
 ## References
 
 - [Library architecture](library-architecture.md)
 - [SPEC-000 — System concept](../specs/SPEC-000-system-concept.md)
+

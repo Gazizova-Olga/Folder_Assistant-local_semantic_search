@@ -1,3 +1,5 @@
+using FolderAssistant.Persistence;
+
 namespace FolderAssistant;
 
 internal sealed class Program
@@ -16,12 +18,20 @@ internal sealed class Program
 
 		builder.WebHost.UseUrls($"http://localhost:{config.Port}");
 
+		String analyzedFolderPath = config.ResolveAnalyzedFolderPath();
+
+		DatabaseBootstrapResult database = new FolderDatabaseBootstrapper()
+			.EnsureInitialized(analyzedFolderPath, config.Persistence);
+
+		Console.WriteLine(
+			$"Database bootstrap: {(database.Created ? "created" : "reused")} at {database.DatabasePath}");
+
 		WebApplication app = builder.Build();
 
 		app.MapGet("/", () => Results.Ok(new
 		{
 			name = "Folder Assistant",
-			analyzedFolder = config.ResolveAnalyzedFolderPath(),
+			analyzedFolder = analyzedFolderPath,
 		}));
 
 		app.Run();

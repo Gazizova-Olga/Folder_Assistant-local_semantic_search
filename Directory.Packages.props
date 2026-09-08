@@ -6,7 +6,26 @@
 	<!--
 		Every version lives here and nowhere else. A version in a .csproj is invisible from the one
 		place someone looks when auditing what the build pulls in.
+
+		Entries are added as the code that needs them lands, not up front — an unreferenced pin is a
+		claim about a dependency the project does not actually have.
 	-->
+
+	<ItemGroup Label="Runtime">
+		<PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+		<!--
+			Security pin, and the reason it is a direct reference rather than left transitive.
+
+			Microsoft.Data.Sqlite 10.0.9 pulls SQLitePCLRaw 2.1.11, whose bundled SQLite predates 3.50.2
+			and carries GHSA-2m69-gcr7-jv3q (high severity). NuGet audit reports it as NU1903, which the
+			repo-wide warning gate turns into a build failure, so this is enforced rather than documented.
+
+			2.1.12 is the in-line patch: same 2.1.x ABI, SQLite >= 3.50.2. Referencing the bundle directly
+			from each project that touches SQLite promotes the whole 2.1.11 set. Drop this once
+			Microsoft.Data.Sqlite ships a fixed transitive pin of its own.
+		-->
+		<PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+	</ItemGroup>
 
 	<ItemGroup Label="Tests">
 		<PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
@@ -19,8 +38,9 @@
 
 	<ItemGroup Label="Analyzers">
 		<!--
-			Runs on every build in every project. GlobalPackageReference rather than a per-project
-			reference, so a new project cannot be created without it.
+			Runs on every build in every project, paired with the repo-wide zero-warning gate in
+			Directory.Build.props. GlobalPackageReference rather than a per-project reference, so a new
+			project cannot be created without it.
 		-->
 		<GlobalPackageReference Include="SonarAnalyzer.CSharp" Version="10.8.0.113526">
 			<PrivateAssets>All</PrivateAssets>
