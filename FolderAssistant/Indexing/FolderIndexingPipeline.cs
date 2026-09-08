@@ -58,6 +58,29 @@ internal sealed class FolderIndexingPipeline
 				file.FileId, tokens.Tokens, config.ChunkSizeTokens, config.ChunkOverlapTokens);
 
 			chunksByFile[file.FileId] = chunks;
+		}
+
+		// A corpus-fitted vectorizer needs the whole corpus before it can embed anything, so chunking
+		// is drained in full first. The artifact it returns is persisted alongside the vectors it
+		// produced, in the same transaction.
+		String? fitArtifactJson = null;
+
+		if (vectorizer is IFittableVectorizer fittable)
+		{
+			String[] corpus = files
+				.SelectMany(file => chunksByFile[file.FileId])
+				.Select(static chunk => chunk.Content)
+				.ToArray();
+
+			if (corpus.Length > 0)
+			{
+				fitArtifactJson = fittable.Fit(corpus);
+			}
+		}
+
+		foreach (ScannedTextFile file in files)
+		{
+			IReadOnlyList<TextChunk> chunks = chunksByFile[file.FileId];
 
 			if (chunks.Count == 0)
 			{
@@ -74,12 +97,15 @@ internal sealed class FolderIndexingPipeline
 			}
 		}
 
+		// Read after fitting: the descriptor's dimension is the rank actually achieved, not the one
+		// that was asked for.
 		IndexWriteSummary summary = this._repository.Upsert(
 			databasePath,
 			files,
 			chunksByFile,
 			embeddingsByChunk,
-			vectorizer.Descriptor);
+			vectorizer.Descriptor,
+			fitArtifactJson);
 
 		return new IndexingResult(
 			FilesScanned: files.Count,

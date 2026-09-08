@@ -37,7 +37,8 @@ internal sealed class FolderIndexRepository
 		IReadOnlyList<ScannedTextFile> files,
 		IReadOnlyDictionary<String, IReadOnlyList<TextChunk>> chunksByFile,
 		IReadOnlyDictionary<String, EmbeddingResult> embeddingsByChunk,
-		ModelDescriptor descriptor)
+		ModelDescriptor descriptor,
+		String? fitArtifactJson = null)
 	{
 		ArgumentNullException.ThrowIfNull(files);
 		ArgumentNullException.ThrowIfNull(chunksByFile);
@@ -58,6 +59,13 @@ internal sealed class FolderIndexRepository
 		using SqliteTransaction transaction = connection.BeginTransaction();
 
 		UpsertModel(connection, transaction, descriptor);
+
+		// Written in the same transaction as the vectors it produced. An artifact that disagrees with
+		// the stored vectors corrupts every query embedded against it, and nothing would report that.
+		if (fitArtifactJson is not null)
+		{
+			UpsertFitArtifact(connection, transaction, modelVersionId, fitArtifactJson);
+		}
 
 		Int32 fileCount = 0;
 		Int32 chunkCount = 0;
@@ -132,6 +140,27 @@ internal sealed class FolderIndexRepository
 		command.Parameters.AddWithValue("$dimension", descriptor.Dimension);
 		command.Parameters.AddWithValue("$metric", descriptor.DistanceMetric);
 		command.Parameters.AddWithValue("$activated", UtcNow());
+		command.ExecuteNonQuery();
+	}
+
+	private static void UpsertFitArtifact(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String modelVersionId,
+		String artifactJson)
+	{
+		using SqliteCommand command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = """
+			INSERT INTO embedding_fit_artifact (model_version_id, artifact_json, created_utc)
+			VALUES ($id, $artifact, $created)
+			ON CONFLICT(model_version_id) DO UPDATE SET
+				artifact_json = excluded.artifact_json,
+				created_utc = excluded.created_utc;
+			""";
+		command.Parameters.AddWithValue("$id", modelVersionId);
+		command.Parameters.AddWithValue("$artifact", artifactJson);
+		command.Parameters.AddWithValue("$created", UtcNow());
 		command.ExecuteNonQuery();
 	}
 

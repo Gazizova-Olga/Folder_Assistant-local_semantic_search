@@ -108,11 +108,14 @@ share no latency profile, and averaging them together describes neither.
 folder-scoped database, creates it when missing, and ensures the baseline manifest, chunk,
 vector and model-registry schema on every run.
 
-**Phase 1 has started.** `IVectorizer`, `IVectorStoreWriter`/`IVectorStoreReader` and
+**Phase 1 is done.** `IVectorizer`, `IVectorStoreWriter`/`IVectorStoreReader` and
 `IRetrievalQuery` are all extracted, and the model registry records which
-implementation produced which vectors, with exactly one active for write. The deterministic
-baseline is the only embedding implementation so far, and brute-force cosine the only
-retrieval strategy.
+implementation produced which vectors, with exactly one active for write.
+
+**Phase 2 has produced its first real embedder.** The corpus-fitted implementation is built
+and persists its fit alongside the vectors it produced. The baseline is still what the
+composition root wires — promoting the fitted one waits on benchmark evidence — and
+brute-force cosine is the only retrieval strategy.
 
 ## References
 

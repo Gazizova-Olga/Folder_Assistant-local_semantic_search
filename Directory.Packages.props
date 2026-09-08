@@ -12,6 +12,7 @@
 	-->
 
 	<ItemGroup Label="Runtime">
+		<PackageVersion Include="MathNet.Numerics" Version="5.0.0" />
 		<PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
 		<!--
 			Security pin, and the reason it is a direct reference rather than left transitive.
