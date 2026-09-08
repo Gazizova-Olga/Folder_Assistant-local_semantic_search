@@ -1,4 +1,3 @@
-using System.Text.Json;
 using FolderAssistant.Indexing;
 using Microsoft.Data.Sqlite;
 
@@ -18,6 +17,20 @@ internal sealed record IndexWriteSummary(Int32 FilesUpserted, Int32 ChunksUpsert
 /// </summary>
 internal sealed class FolderIndexRepository
 {
+	private readonly IVectorStoreWriter _vectorStoreWriter;
+
+	public FolderIndexRepository()
+		: this(new SqliteJsonVectorStoreWriter())
+	{
+	}
+
+	internal FolderIndexRepository(IVectorStoreWriter vectorStoreWriter)
+	{
+		ArgumentNullException.ThrowIfNull(vectorStoreWriter);
+
+		this._vectorStoreWriter = vectorStoreWriter;
+	}
+
 	public IndexWriteSummary Upsert(
 		String databasePath,
 		IReadOnlyList<ScannedTextFile> files,
@@ -67,7 +80,8 @@ internal sealed class FolderIndexRepository
 					continue;
 				}
 
-				UpsertVector(connection, transaction, chunk.ChunkId, modelVersionId, embedding.Vector, vectorDimension);
+				this._vectorStoreWriter.UpsertVector(
+					connection, transaction, chunk.ChunkId, modelVersionId, embedding.Vector, vectorDimension);
 				vectorCount++;
 			}
 		}
@@ -159,33 +173,6 @@ internal sealed class FolderIndexRepository
 		command.Parameters.AddWithValue("$tokenEnd", chunk.TokenEnd);
 		command.Parameters.AddWithValue("$hash", chunk.ChunkHash);
 		command.Parameters.AddWithValue("$modelVersion", modelVersionId);
-		command.Parameters.AddWithValue("$updated", UtcNow());
-		command.ExecuteNonQuery();
-	}
-
-	private static void UpsertVector(
-		SqliteConnection connection,
-		SqliteTransaction transaction,
-		String chunkId,
-		String modelVersionId,
-		IReadOnlyList<Single> vector,
-		Int32 vectorDimension)
-	{
-		using SqliteCommand command = connection.CreateCommand();
-		command.Transaction = transaction;
-		command.CommandText = """
-			INSERT INTO chunk_vector (
-				chunk_id, model_version_id, vector_json, vector_dimension, updated_utc)
-			VALUES ($chunkId, $modelVersionId, $vectorJson, $dimension, $updated)
-			ON CONFLICT(chunk_id, model_version_id) DO UPDATE SET
-				vector_json = excluded.vector_json,
-				vector_dimension = excluded.vector_dimension,
-				updated_utc = excluded.updated_utc;
-			""";
-		command.Parameters.AddWithValue("$chunkId", chunkId);
-		command.Parameters.AddWithValue("$modelVersionId", modelVersionId);
-		command.Parameters.AddWithValue("$vectorJson", JsonSerializer.Serialize(vector));
-		command.Parameters.AddWithValue("$dimension", vectorDimension);
 		command.Parameters.AddWithValue("$updated", UtcNow());
 		command.ExecuteNonQuery();
 	}

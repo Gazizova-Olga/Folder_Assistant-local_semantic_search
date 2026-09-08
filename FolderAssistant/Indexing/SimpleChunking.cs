@@ -7,15 +7,6 @@ namespace FolderAssistant.Indexing;
 /// <summary>The tokens a file was split into.</summary>
 internal sealed record TokenizedText(IReadOnlyList<String> Tokens);
 
-/// <summary>One overlapping window of tokens, and the text it covers.</summary>
-internal sealed record TextChunk(
-	String ChunkId,
-	Int32 Index,
-	Int32 TokenStart,
-	Int32 TokenEnd,
-	String ChunkHash,
-	String Content);
-
 /// <summary>Splits text on whitespace. A token here is a run of non-space characters, nothing more.</summary>
 internal sealed partial class SimpleTokenizer
 {

@@ -3,17 +3,6 @@ using System.Text;
 
 namespace FolderAssistant.Indexing;
 
-/// <summary>One text file found under the analyzed folder, with its content already read.</summary>
-internal sealed record ScannedTextFile(
-	String FileId,
-	String FullPath,
-	String RelativePath,
-	String FileHash,
-	Int64 SizeBytes,
-	DateTime ModifiedUtc,
-	String Content,
-	String FileType);
-
 /// <summary>
 /// Walks the analyzed folder and returns the text files worth indexing.
 ///

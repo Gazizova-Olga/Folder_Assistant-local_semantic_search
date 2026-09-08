@@ -1,0 +1,164 @@
+using System.Text.Json;
+using FluentAssertions;
+using FolderAssistant.Indexing;
+using FolderAssistant.Persistence;
+using Microsoft.Data.Sqlite;
+
+namespace FolderAssistant.Tests;
+
+public sealed class VectorStoreWriterTests
+{
+	/// <summary>
+	/// The point of the seam: the repository must have no vector-writing path of its own. A recording
+	/// writer that stores nothing leaves <c>chunk_vector</c> empty while the file and chunk rows still
+	/// land — which it could not do if the repository also wrote vectors directly.
+	/// </summary>
+	[Fact]
+	public void Every_Vector_Goes_Through_The_Injected_Writer_And_No_Other_Path()
+	{
+		using TempFolder folder = new();
+		String databasePath = BootstrapIn(folder);
+
+		RecordingVectorStoreWriter writer = new();
+
+		IndexWriteSummary summary = new FolderIndexRepository(writer).Upsert(
+			databasePath,
+			[OneFile()],
+			new Dictionary<String, IReadOnlyList<TextChunk>> { ["f1"] = [Chunk("c1", 0), Chunk("c2", 1)] },
+			new Dictionary<String, EmbeddingResult>
+			{
+				["c1"] = Embedding([1.0f, 0.0f, 0.0f]),
+				["c2"] = Embedding([0.0f, 1.0f, 0.0f]),
+			},
+			"programmable-v1",
+			vectorDimension: 3);
+
+		summary.VectorsUpserted.Should().Be(2);
+		writer.Calls.Should().HaveCount(2);
+		writer.Calls.Select(static call => call.ChunkId).Should().Equal("c1", "c2");
+		writer.Calls.Should().OnlyContain(call => call.ModelVersionId == "programmable-v1" && call.Dimension == 3);
+
+		using SqliteConnection connection = Connect(databasePath);
+		Count(connection, "SELECT COUNT(*) FROM chunk_manifest;").Should().Be(2);
+		Count(connection, "SELECT COUNT(*) FROM chunk_vector;").Should().Be(0);
+	}
+
+	/// <summary>
+	/// The writer is handed the caller's transaction, not one of its own, so a vector cannot survive a
+	/// pass whose chunk rows were rolled back.
+	/// </summary>
+	[Fact]
+	public void A_Vector_Written_Through_The_Seam_Is_Inside_The_Callers_Transaction()
+	{
+		using TempFolder folder = new();
+		String databasePath = BootstrapIn(folder);
+
+		ThrowingVectorStoreWriter writer = new();
+
+		FluentActions.Invoking(() => new FolderIndexRepository(writer).Upsert(
+				databasePath,
+				[OneFile()],
+				new Dictionary<String, IReadOnlyList<TextChunk>> { ["f1"] = [Chunk("c1", 0)] },
+				new Dictionary<String, EmbeddingResult> { ["c1"] = Embedding([1.0f]) },
+				"programmable-v1",
+				vectorDimension: 1))
+			.Should().Throw<InvalidOperationException>();
+
+		using SqliteConnection connection = Connect(databasePath);
+		Count(connection, "SELECT COUNT(*) FROM file_manifest;").Should().Be(0);
+		Count(connection, "SELECT COUNT(*) FROM chunk_manifest;").Should().Be(0);
+	}
+
+	[Fact]
+	public void The_Default_Writer_Stores_The_Vector_As_A_Json_Array()
+	{
+		using TempFolder folder = new();
+		String databasePath = BootstrapIn(folder);
+
+		new FolderIndexRepository().Upsert(
+			databasePath,
+			[OneFile()],
+			new Dictionary<String, IReadOnlyList<TextChunk>> { ["f1"] = [Chunk("c1", 0)] },
+			new Dictionary<String, EmbeddingResult> { ["c1"] = Embedding([0.5f, -0.25f]) },
+			"programmable-v1",
+			vectorDimension: 2);
+
+		using SqliteConnection connection = Connect(databasePath);
+		using SqliteCommand command = connection.CreateCommand();
+		command.CommandText = "SELECT vector_json, vector_dimension FROM chunk_vector WHERE chunk_id = 'c1';";
+		using SqliteDataReader reader = command.ExecuteReader();
+
+		reader.Read().Should().BeTrue();
+		JsonSerializer.Deserialize<Single[]>(reader.GetString(0)).Should().Equal(0.5f, -0.25f);
+		reader.GetInt32(1).Should().Be(2);
+	}
+
+	[Fact]
+	public void A_Repository_Cannot_Be_Built_Without_A_Writer()
+		=> FluentActions.Invoking(() => new FolderIndexRepository(null!))
+			.Should().Throw<ArgumentNullException>();
+
+	private sealed record WriteCall(String ChunkId, String ModelVersionId, Int32 Dimension);
+
+	private sealed class RecordingVectorStoreWriter : IVectorStoreWriter
+	{
+		public List<WriteCall> Calls { get; } = [];
+
+		public void UpsertVector(
+			SqliteConnection connection,
+			SqliteTransaction transaction,
+			String chunkId,
+			String modelVersionId,
+			IReadOnlyList<Single> vector,
+			Int32 vectorDimension)
+			=> this.Calls.Add(new WriteCall(chunkId, modelVersionId, vectorDimension));
+	}
+
+	private sealed class ThrowingVectorStoreWriter : IVectorStoreWriter
+	{
+		public void UpsertVector(
+			SqliteConnection connection,
+			SqliteTransaction transaction,
+			String chunkId,
+			String modelVersionId,
+			IReadOnlyList<Single> vector,
+			Int32 vectorDimension)
+			=> throw new InvalidOperationException("The backend refused the vector.");
+	}
+
+	private static String BootstrapIn(TempFolder folder)
+		=> new FolderDatabaseBootstrapper().EnsureInitialized(folder.Path, new PersistenceConfig()).DatabasePath;
+
+	private static ScannedTextFile OneFile()
+		=> new(
+			FileId: "f1",
+			FullPath: "/tmp/a.md",
+			RelativePath: "a.md",
+			FileHash: "filehash",
+			SizeBytes: 10,
+			ModifiedUtc: new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+			Content: "alpha beta",
+			FileType: ".md");
+
+	private static TextChunk Chunk(String chunkId, Int32 index)
+		=> new(chunkId, index, index, index + 1, $"hash-{chunkId}", $"content {chunkId}");
+
+	private static EmbeddingResult Embedding(Single[] vector)
+		=> new("programmable-v1", "programmable", vector.Length, vector);
+
+	private static SqliteConnection Connect(String databasePath)
+	{
+		SqliteConnection connection = new($"Data Source={databasePath}");
+		connection.Open();
+
+		return connection;
+	}
+
+	private static Int64 Count(SqliteConnection connection, String sql)
+	{
+		using SqliteCommand command = connection.CreateCommand();
+		command.CommandText = sql;
+
+		return (Int64)(command.ExecuteScalar() ?? 0L);
+	}
+}

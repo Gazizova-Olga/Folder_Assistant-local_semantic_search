@@ -1,12 +1,5 @@
 namespace FolderAssistant.Indexing;
 
-/// <summary>A vector, and which model produced it.</summary>
-internal sealed record EmbeddingResult(
-	String ModelVersionId,
-	String ProviderType,
-	Int32 Dimension,
-	IReadOnlyList<Single> Vector);
-
 /// <summary>
 /// A deterministic embedder: a character-bucket histogram, L2-normalized.
 ///
