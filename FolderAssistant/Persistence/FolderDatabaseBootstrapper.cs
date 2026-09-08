@@ -28,6 +28,18 @@ internal interface IFolderDatabaseBootstrapper
 /// Every statement is <c>IF NOT EXISTS</c>, so this runs on every start, and versioned migrations
 /// can hang off <c>schema_version</c> later.
 /// </para>
+///
+/// <para>
+/// The schema and the version row go in under one transaction, so a run that fails partway leaves
+/// the database as it found it rather than half-built — a half-built database still satisfies every
+/// <c>IF NOT EXISTS</c> on the next run, so the missing tables would never be created.
+/// </para>
+///
+/// <para>
+/// <c>Created</c> reports whether this call inserted the <c>schema_version</c> row, not whether the
+/// file was absent beforehand. Two callers starting together both find no file and would both claim
+/// to have created it; only one of them inserts.
+/// </para>
 /// </summary>
 internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 {
@@ -58,7 +70,6 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 		Directory.CreateDirectory(metadataPath);
 
 		String databasePath = Path.Combine(metadataPath, config.DatabaseFileName);
-		Boolean created = !File.Exists(databasePath);
 
 		using SqliteConnection connection = new(new SqliteConnectionStringBuilder
 		{
@@ -71,20 +82,22 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 
 		using (SqliteCommand pragma = connection.CreateCommand())
 		{
-			pragma.CommandText = "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;";
+			// busy_timeout makes a connection wait for a held lock instead of failing at once. No test
+			// here demonstrates it: removing it leaves eight concurrent bootstraps passing, five runs
+			// out of five — so it stands as a guard against contention these tests do not produce.
+			pragma.CommandText = "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;";
 			pragma.ExecuteNonQuery();
 		}
 
+		using SqliteTransaction transaction = connection.BeginTransaction();
+
 		using SqliteCommand schema = connection.CreateCommand();
-		schema.CommandText = $"""
+		schema.Transaction = transaction;
+		schema.CommandText = """
 			CREATE TABLE IF NOT EXISTS schema_version (
 				id      INTEGER PRIMARY KEY CHECK (id = 1),
 				version INTEGER NOT NULL
 			);
-
-			INSERT INTO schema_version (id, version)
-			SELECT 1, {SchemaVersion}
-			WHERE NOT EXISTS (SELECT 1 FROM schema_version WHERE id = 1);
 
 			CREATE TABLE IF NOT EXISTS file_manifest (
 				file_id      TEXT PRIMARY KEY,
@@ -135,6 +148,18 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 			CREATE INDEX IF NOT EXISTS idx_chunk_vector_model ON chunk_vector(model_version_id);
 			""";
 		schema.ExecuteNonQuery();
+
+		using SqliteCommand seed = connection.CreateCommand();
+		seed.Transaction = transaction;
+		seed.CommandText = $"""
+			INSERT INTO schema_version (id, version)
+			SELECT 1, {SchemaVersion}
+			WHERE NOT EXISTS (SELECT 1 FROM schema_version WHERE id = 1);
+			""";
+
+		Boolean created = seed.ExecuteNonQuery() > 0;
+
+		transaction.Commit();
 
 		return new DatabaseBootstrapResult(databasePath, created);
 	}

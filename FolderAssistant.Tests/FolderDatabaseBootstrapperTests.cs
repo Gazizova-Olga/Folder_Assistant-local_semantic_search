@@ -71,6 +71,59 @@ public sealed class FolderDatabaseBootstrapperTests
 	}
 
 	/// <summary>
+	/// Callers starting together all find the file absent, so the presence of the file cannot be what
+	/// <c>Created</c> reports. Exactly one of them inserts the version row, and that is the one.
+	/// </summary>
+	[Fact]
+	public async Task Only_One_Of_Several_Concurrent_Bootstraps_Reports_Creating_The_Database()
+	{
+		using TempFolder folder = new();
+
+		DatabaseBootstrapResult[] results = await Task.WhenAll(
+			Enumerable.Range(0, 8).Select(_ => Task.Run(() => BootstrapIn(folder.Path))));
+
+		results.Select(static r => r.DatabasePath).Distinct().Should().ContainSingle();
+		results.Count(static r => r.Created).Should().Be(1);
+		ReadScalar(results[0].DatabasePath, "SELECT COUNT(*) FROM schema_version;").Should().Be(1L);
+	}
+
+	/// <summary>
+	/// A run that fails partway has to leave nothing behind. Every statement is <c>IF NOT EXISTS</c>,
+	/// so a half-created schema reads as complete on the next run and the missing tables are never
+	/// made — the failure would be permanent and silent.
+	///
+	/// <para>
+	/// The failure is staged by taking the name the last index wants, which makes the DDL fail after
+	/// all five tables have been created and so leaves the transaction something to undo.
+	/// </para>
+	/// </summary>
+	[Fact]
+	public void A_Failure_Partway_Through_The_Schema_Leaves_Nothing_Behind()
+	{
+		using TempFolder folder = new();
+
+		String databasePath = Path.Combine(folder.Path, ".folderassistant", "manifest.db");
+		Directory.CreateDirectory(Path.Combine(folder.Path, ".folderassistant"));
+
+		using (SqliteConnection staged = Connect(databasePath))
+		{
+			Execute(staged, "CREATE TABLE idx_file_manifest_path (id INTEGER PRIMARY KEY);");
+		}
+
+		FluentActions.Invoking(() => BootstrapIn(folder.Path)).Should().Throw<SqliteException>();
+
+		ObjectNames(databasePath, "table").Should()
+			.Contain("idx_file_manifest_path")
+			.And.NotContain([
+				"schema_version",
+				"file_manifest",
+				"chunk_manifest",
+				"embedding_model_registry",
+				"chunk_vector",
+			]);
+	}
+
+	/// <summary>
 	/// The reason the schema is created whole: a second embedding model has to be able to store its
 	/// vectors alongside the first, without migrating what is already there.
 	/// </summary>
