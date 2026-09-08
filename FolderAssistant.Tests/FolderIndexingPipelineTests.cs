@@ -158,15 +158,21 @@ public sealed class FolderIndexingPipelineTests
 		IndexingConfig config = new() { ChunkSizeTokens = 4, ChunkOverlapTokens = 1, VectorDimension = 32 };
 
 		FolderIndexingPipeline pipeline = new();
-		pipeline.Run(folder.Path, database.DatabasePath, config);
+		IndexingResult first = pipeline.Run(folder.Path, database.DatabasePath, config);
 		IndexingResult second = pipeline.Run(folder.Path, database.DatabasePath, config);
 
 		using SqliteConnection connection = new($"Data Source={database.DatabasePath}");
 		connection.Open();
 
+		// The second pass embeds nothing, because nothing changed — but the rows the first pass wrote
+		// are still there. Counting against the second pass's own totals would now assert the wrong
+		// thing entirely, which is what it did before skipping existed.
+		second.FilesIndexed.Should().Be(0);
+		second.FilesUnchanged.Should().Be(1);
+
 		Count(connection, "SELECT COUNT(*) FROM file_manifest;").Should().Be(1);
-		Count(connection, "SELECT COUNT(*) FROM chunk_manifest;").Should().Be(second.ChunksIndexed);
-		Count(connection, "SELECT COUNT(*) FROM chunk_vector;").Should().Be(second.VectorsIndexed);
+		Count(connection, "SELECT COUNT(*) FROM chunk_manifest;").Should().Be(first.ChunksIndexed);
+		Count(connection, "SELECT COUNT(*) FROM chunk_vector;").Should().Be(first.VectorsIndexed);
 	}
 
 	private static Int64 Count(SqliteConnection connection, String sql)

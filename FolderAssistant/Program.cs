@@ -39,7 +39,8 @@ internal sealed class Program
 				.Run(analyzedFolderPath, database.DatabasePath, config.Indexing);
 
 			Console.WriteLine(
-				$"Indexing: scanned={indexed.FilesScanned}, files={indexed.FilesIndexed}, " +
+				$"Indexing: scanned={indexed.FilesScanned}, indexed={indexed.FilesIndexed}, " +
+				$"unchanged={indexed.FilesUnchanged}, deleted={indexed.FilesDeleted}, " +
 				$"chunks={indexed.ChunksIndexed}, vectors={indexed.VectorsIndexed}");
 		}
 

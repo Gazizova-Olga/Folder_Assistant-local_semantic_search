@@ -15,7 +15,7 @@ internal sealed class LsaEmbeddingVectorizer : IFittableVectorizer
 {
 	public const String ProviderTypeName = "programmable-lsa";
 
-	private readonly TextAnalyzer _analyzer;
+	private TextAnalyzer _analyzer;
 	private readonly Boolean _includeTrigrams;
 	private readonly Int32 _targetDimension;
 	private readonly String _modelVersionId;
@@ -79,6 +79,17 @@ internal sealed class LsaEmbeddingVectorizer : IFittableVectorizer
 		this._model = new LsaTrainer(this._analyzer, this._includeTrigrams).Fit(corpus, this._targetDimension);
 
 		return this._model.Serialize();
+	}
+
+	public void LoadFit(String artifactJson)
+	{
+		LsaModel model = LsaModel.Deserialize(artifactJson);
+
+		// The analyzer is rebuilt from the artifact, never from this instance's construction
+		// arguments. Features extracted differently from the corpus would be projected out of a
+		// different space, and nothing would report it.
+		this._analyzer = new TextAnalyzer(model.IncludeTrigrams);
+		this._model = model;
 	}
 
 	public IReadOnlyList<EmbeddingResult> Vectorize(

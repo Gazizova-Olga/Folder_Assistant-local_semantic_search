@@ -5,7 +5,11 @@ using Microsoft.Data.Sqlite;
 namespace FolderAssistant.Persistence;
 
 /// <summary>What a single indexing pass wrote.</summary>
-internal sealed record IndexWriteSummary(Int32 FilesUpserted, Int32 ChunksUpserted, Int32 VectorsUpserted);
+internal sealed record IndexWriteSummary(
+	Int32 FilesUpserted,
+	Int32 ChunksUpserted,
+	Int32 VectorsUpserted,
+	Int32 FilesDeleted);
 
 /// <summary>
 /// Writes a whole indexing pass to the database, in one transaction.
@@ -56,6 +60,19 @@ internal sealed class FolderIndexRepository
 
 		connection.Open();
 
+		using (SqliteCommand pragma = connection.CreateCommand())
+		{
+			// Foreign keys are per connection in SQLite, not per database, so what the bootstrap set does
+			// not carry here. The deletions below rely on the cascade.
+			//
+			// No test demonstrates this line: measured, this provider already opens with
+			// foreign_keys=1, so removing it changes nothing. It is set because the cascade should
+			// depend on something this code states, not on a provider default that is not part of the
+			// contract and can be turned off from a connection string.
+			pragma.CommandText = "PRAGMA foreign_keys = ON;";
+			pragma.ExecuteNonQuery();
+		}
+
 		using SqliteTransaction transaction = connection.BeginTransaction();
 
 		UpsertModel(connection, transaction, descriptor);
@@ -67,6 +84,10 @@ internal sealed class FolderIndexRepository
 			UpsertFitArtifact(connection, transaction, modelVersionId, fitArtifactJson);
 		}
 
+		// Before the upserts, matching the order the rest of the pass assumes: rows for files that are
+		// gone leave first, taking their chunks and vectors with them.
+		Int32 deletedCount = DeleteRemovedFiles(connection, transaction, files);
+
 		Int32 fileCount = 0;
 		Int32 chunkCount = 0;
 		Int32 vectorCount = 0;
@@ -76,7 +97,12 @@ internal sealed class FolderIndexRepository
 			UpsertFile(connection, transaction, file);
 			fileCount++;
 
-			if (!chunksByFile.TryGetValue(file.FileId, out IReadOnlyList<TextChunk>? chunks))
+			chunksByFile.TryGetValue(file.FileId, out IReadOnlyList<TextChunk>? chunks);
+			chunks ??= [];
+
+			DeleteSupersededChunks(connection, transaction, file.FileId, chunks);
+
+			if (chunks.Count == 0)
 			{
 				continue;
 			}
@@ -99,7 +125,89 @@ internal sealed class FolderIndexRepository
 
 		transaction.Commit();
 
-		return new IndexWriteSummary(fileCount, chunkCount, vectorCount);
+		return new IndexWriteSummary(fileCount, chunkCount, vectorCount, deletedCount);
+	}
+
+	/// <summary>
+	/// Removes chunk rows for a file that the current scan no longer produces.
+	///
+	/// <para>
+	/// Two cases need it. A content edit yields a new content-addressed <c>chunk_id</c> for the same
+	/// <c>(file_id, chunk_index)</c> slot, which the unique constraint on that pair would otherwise
+	/// reject; and a file that shrank leaves trailing chunks behind with nothing to overwrite them.
+	/// Their vectors cascade away, which is what keeps every stored vector bound to the content it
+	/// was computed from, under every model version.
+	/// </para>
+	/// </summary>
+	private static void DeleteSupersededChunks(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String fileId,
+		IReadOnlyList<TextChunk> currentChunks)
+	{
+		using SqliteCommand command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.Parameters.AddWithValue("$fileId", fileId);
+
+		if (currentChunks.Count == 0)
+		{
+			command.CommandText = "DELETE FROM chunk_manifest WHERE file_id = $fileId;";
+			command.ExecuteNonQuery();
+
+			return;
+		}
+
+		String[] keepParameters = new String[currentChunks.Count];
+
+		for (Int32 i = 0; i < currentChunks.Count; i++)
+		{
+			keepParameters[i] = $"$keep{i}";
+			command.Parameters.AddWithValue(keepParameters[i], currentChunks[i].ChunkId);
+		}
+
+		command.CommandText =
+			$"DELETE FROM chunk_manifest WHERE file_id = $fileId AND chunk_id NOT IN ({String.Join(", ", keepParameters)});";
+		command.ExecuteNonQuery();
+	}
+
+	/// <summary>
+	/// Removes manifest rows for files that are no longer on disk; their chunks and vectors cascade
+	/// away with them.
+	///
+	/// <para>
+	/// This treats the scanned file list as the authoritative current state of the folder — which is
+	/// a sharp edge worth naming: a scan that silently returned nothing would clear the index. The
+	/// scanner throws on a bad path rather than returning an empty result, which is what makes this
+	/// sound.
+	/// </para>
+	/// </summary>
+	private static Int32 DeleteRemovedFiles(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		IReadOnlyList<ScannedTextFile> files)
+	{
+		using SqliteCommand command = connection.CreateCommand();
+		command.Transaction = transaction;
+
+		if (files.Count == 0)
+		{
+			command.CommandText = "DELETE FROM file_manifest;";
+
+			return command.ExecuteNonQuery();
+		}
+
+		String[] keepParameters = new String[files.Count];
+
+		for (Int32 i = 0; i < files.Count; i++)
+		{
+			keepParameters[i] = $"$keep{i}";
+			command.Parameters.AddWithValue(keepParameters[i], files[i].FileId);
+		}
+
+		command.CommandText =
+			$"DELETE FROM file_manifest WHERE file_id NOT IN ({String.Join(", ", keepParameters)});";
+
+		return command.ExecuteNonQuery();
 	}
 
 	private static void UpsertModel(

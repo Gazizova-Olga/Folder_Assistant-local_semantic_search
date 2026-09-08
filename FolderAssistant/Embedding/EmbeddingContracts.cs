@@ -56,7 +56,20 @@ internal interface IVectorizer
 /// </summary>
 internal interface IFittableVectorizer : IVectorizer
 {
+	/// <summary>Fits against the corpus and returns the artifact to persist.</summary>
 	String Fit(IReadOnlyList<String> corpus);
+
+	/// <summary>
+	/// Adopts a fit that was already persisted, instead of computing a new one.
+	///
+	/// <para>
+	/// Incremental indexing reuses the existing fit so that newly embedded chunks land in the same
+	/// space as the ones already stored. Refitting would change the projection and invalidate every
+	/// vector under that model version, so it stays a deliberate operation under a new one — not
+	/// something an ordinary edit to a file triggers.
+	/// </para>
+	/// </summary>
+	void LoadFit(String artifactJson);
 }
 
 internal static class VectorizerExtensions

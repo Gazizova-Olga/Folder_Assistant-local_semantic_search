@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-08 |
 
@@ -94,8 +94,11 @@ The registry row is written from the active vectorizer's own descriptor
 ([SPEC-160](SPEC-160-embedding-module.md)): provider, model name, dimension and distance
 metric all come from the implementation rather than from configuration.
 
-**Cleanup of stale or orphaned rows is not implemented.** Rows are retained until explicit
-cleanup exists.
+**Orphan cleanup is implemented** ([SPEC-120](SPEC-120-rag-indexing.md) delta handling): a
+manifest row whose file is gone is removed and its chunks and vectors cascade away, and chunks
+superseded by an edit are removed before the new ones are written. Foreign keys are enabled on
+the writing connection, since they are per connection in SQLite and what the bootstrap set does
+not carry.
 
 ## Configuration
 

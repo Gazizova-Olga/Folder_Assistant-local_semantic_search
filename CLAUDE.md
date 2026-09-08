@@ -97,6 +97,12 @@ Properties worth stating because they are easy to "simplify" away:
 - **Write the columns you own, not the row you read.** A writer that reads a row, does
   something slow (an embedding round-trip), then writes the whole row back will silently
   revert whatever another writer recorded in between.
+- **Skipping an unchanged file takes two conditions, not one.** The content hash must
+  match *and* the active model must already have vectors for it. After switching embedding
+  implementation every file is unchanged, yet none has a vector in the new model's space —
+  so skipping on the hash alone leaves the new model with a silently empty index. Only
+  embedding is skipped; chunking runs every pass, because the content has already been read
+  and a corpus-fitted embedder needs the whole chunk set regardless.
 - Indexing runs **off** the startup path; the web host does not wait for it.
 
 ### Retrieval
