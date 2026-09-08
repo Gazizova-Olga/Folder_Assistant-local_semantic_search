@@ -49,6 +49,7 @@ public sealed class FolderDatabaseBootstrapperTests
 			"chunk_manifest",
 			"embedding_model_registry",
 			"chunk_vector",
+			"embedding_fit_artifact",
 		]);
 
 		ObjectNames(result.DatabasePath, "index").Should().Contain([
@@ -67,7 +68,7 @@ public sealed class FolderDatabaseBootstrapperTests
 		BootstrapIn(folder.Path);
 
 		ReadScalar(result.DatabasePath, "SELECT COUNT(*) FROM schema_version;").Should().Be(1L);
-		ReadScalar(result.DatabasePath, "SELECT version FROM schema_version;").Should().Be(1L);
+		ReadScalar(result.DatabasePath, "SELECT version FROM schema_version;").Should().Be(2L);
 	}
 
 	/// <summary>

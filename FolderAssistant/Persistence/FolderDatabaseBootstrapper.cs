@@ -43,7 +43,10 @@ internal interface IFolderDatabaseBootstrapper
 /// </summary>
 internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 {
-	private const Int32 SchemaVersion = 1;
+	// Version 2 adds embedding_fit_artifact. An existing version 1 database picks the table up
+	// through the idempotent CREATE below; what changes here is only the value seeded into a
+	// database created from now on.
+	private const Int32 SchemaVersion = 2;
 
 	/// <summary>Ensures the metadata folder, the database and its schema exist. Idempotent.</summary>
 	public DatabaseBootstrapResult EnsureInitialized(String analyzedFolderPath, PersistenceConfig config)
@@ -145,6 +148,13 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 
 			CREATE INDEX IF NOT EXISTS idx_file_manifest_path ON file_manifest(file_path);
 			CREATE INDEX IF NOT EXISTS idx_chunk_manifest_file ON chunk_manifest(file_id);
+			CREATE TABLE IF NOT EXISTS embedding_fit_artifact (
+				model_version_id TEXT PRIMARY KEY,
+				artifact_json    TEXT NOT NULL,
+				created_utc      TEXT NOT NULL,
+				FOREIGN KEY (model_version_id) REFERENCES embedding_model_registry(model_version_id) ON DELETE CASCADE
+			);
+
 			CREATE INDEX IF NOT EXISTS idx_chunk_vector_model ON chunk_vector(model_version_id);
 			""";
 		schema.ExecuteNonQuery();

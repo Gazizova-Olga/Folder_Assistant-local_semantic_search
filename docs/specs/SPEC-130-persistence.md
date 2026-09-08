@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-08 |
 
@@ -19,7 +19,7 @@ concurrent readers and writers correct.
 - Locating and creating the database for an analyzed folder.
 - Schema definition and its forward migration path.
 - Transaction boundaries and connection policy.
-- Repository contracts for the manifest, chunks and vectors.
+- Repository contracts for the manifest, chunks and vectors, on both the read and write side.
 
 **Out of scope**
 
@@ -69,6 +69,7 @@ Tables created at baseline:
 | `chunk_manifest` | One row per chunk, with its token window |
 | `embedding_model_registry` | One row per embedding model version |
 | `chunk_vector` | The vectors |
+| `embedding_fit_artifact` | The persisted fit for a corpus-dependent model, where there is one |
 
 **The schema is created whole rather than grown a table at a time.** One of its invariants
 cannot be retrofitted: `chunk_vector` is keyed `(chunk_id, model_version_id)` so that
@@ -116,6 +117,10 @@ cleanup exists.
 - **Operability** — bootstrap reports whether it created or reused the database, and where.
 
 ## Migration
+
+**Schema version 2** adds `embedding_fit_artifact`. An existing version 1 database picks the
+table up through the idempotent `CREATE`; what the version bump changes is only the value
+seeded into a database created from now on.
 
 Forward migrations key off `schema_version.version`. The baseline uses idempotent table and
 index creation; versioned migrations are added when the first breaking change arrives.

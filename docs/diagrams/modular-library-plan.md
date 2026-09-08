@@ -108,9 +108,11 @@ share no latency profile, and averaging them together describes neither.
 folder-scoped database, creates it when missing, and ensures the baseline manifest, chunk,
 vector and model-registry schema on every run.
 
-**Phase 1 has started.** `IVectorizer` is extracted and the model registry records which
+**Phase 1 has started.** `IVectorizer`, `IVectorStoreWriter`/`IVectorStoreReader` and
+`IRetrievalQuery` are all extracted, and the model registry records which
 implementation produced which vectors, with exactly one active for write. The deterministic
-baseline is the only implementation so far.
+baseline is the only embedding implementation so far, and brute-force cosine the only
+retrieval strategy.
 
 ## References
 
