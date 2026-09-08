@@ -56,4 +56,5 @@ reports more than it did yesterday has introduced something.
 - [`docs/archive/`](docs/archive/) — designs that were considered and not built, kept for
   the reasoning that rejected them.
 
-Start at [SPEC-000](docs/specs/SPEC-000-system-concept.md).
+Start at [SPEC-000](docs/specs/SPEC-000-system-concept.md). The storage choice and its
+alternatives are in [SPEC-131](docs/specs/SPEC-131-database-options-analysis.md).

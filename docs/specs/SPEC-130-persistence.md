@@ -118,4 +118,5 @@ Recovery is currently limited to restoring the database file. Nothing automates 
 ## References
 
 - [Single-database design and model evolution](../diagrams/single-db-table-design-and-model-evolution.md)
+- [SPEC-131 — Database options analysis](SPEC-131-database-options-analysis.md) — why SQLite, and what would change it
 - [SPEC-160 — Embedding module](SPEC-160-embedding-module.md)
