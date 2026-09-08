@@ -1,0 +1,51 @@
+@startuml microservice-architecture
+title Microservice Architecture — SUPERSEDED, not built
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Sans
+
+actor Client
+
+package "Services" #DCE9F5 {
+  [API gateway] as Gateway
+  [Conversation service] as Conversation
+  [Indexing service] as Indexing
+  [Embedding service] as Embedding
+  [Retrieval service] as RetrievalSvc
+}
+
+package "Infrastructure" #E2E2E2 {
+  queue "Message broker" as Broker
+  database "Manifest store" as Manifest
+  database "Vector store" as Vectors
+}
+
+package "External" #E6DAF2 {
+  [LLM provider] as Llm
+}
+
+Client --> Gateway
+Gateway --> Conversation
+Conversation --> RetrievalSvc
+Conversation --> Llm
+RetrievalSvc --> Embedding
+RetrievalSvc --> Vectors
+Indexing --> Embedding
+Indexing --> Manifest
+Indexing --> Vectors
+Indexing <--> Broker
+Conversation <--> Broker
+
+note as N1
+  Rejected. Every benefit is a
+  scaling benefit; this system
+  indexes one local folder for
+  one user. The one-transaction
+  write across manifest, chunks
+  and vectors would become a
+  saga guarding a failure that
+  is already invisible.
+end note
+
+@enduml

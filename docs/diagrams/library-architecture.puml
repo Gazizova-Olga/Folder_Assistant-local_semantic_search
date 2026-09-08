@@ -1,0 +1,65 @@
+@startuml library-architecture
+title Folder Assistant — Library Architecture
+
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName Sans
+
+package "Client surfaces" #DCE9F5 {
+  [Console loop] as Console
+  [HTTP API] as Http
+}
+
+package "Host libraries" #DCE9F5 {
+  [Conversation orchestration] as Orchestration
+  [Folder tools] as Tools
+  [Indexing pipeline] as Pipeline
+  [Retrieval] as Retrieval
+}
+
+package "Extension points" #F5E3CC {
+  interface IVectorizer
+  interface IVectorStoreWriter
+  interface IVectorStoreReader
+  interface IRetrievalQuery
+}
+
+package "Storage" #E2E2E2 {
+  database "Folder database" as Db
+}
+
+package "External providers" #E6DAF2 {
+  [Language model provider] as Llm
+  [Embedding service (optional)] as EmbedSvc
+}
+
+Console --> Orchestration
+Http --> Orchestration
+Orchestration --> Tools
+Orchestration --> Retrieval
+Orchestration --> Llm
+
+Pipeline --> IVectorizer
+Pipeline --> IVectorStoreWriter
+Retrieval --> IRetrievalQuery
+Retrieval --> IVectorizer
+IRetrievalQuery --> IVectorStoreReader
+
+IVectorizer ..> EmbedSvc : only for service-backed\nimplementations
+IVectorStoreWriter --> Db
+IVectorStoreReader --> Db
+
+note right of IVectorizer
+  Reports its own dimension.
+  A trained model's dimension is
+  fixed by its weights, so
+  configuration cannot choose it.
+end note
+
+note bottom of Db
+  Vectors keyed
+  (chunk_id, model_version_id),
+  so two models coexist.
+end note
+
+@enduml

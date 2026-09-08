@@ -46,3 +46,14 @@ versions. Add a new package's version to `Directory.Packages.props`.
 
 The analyzer runs on every build. Warnings are not noise to be scrolled past; a build that
 reports more than it did yesterday has introduced something.
+
+## Documentation
+
+- [`docs/specs/`](docs/specs/) — one specification per module. Most are placeholders for
+  now and say so; they exist as a set so a module being built has somewhere to record its
+  decisions at the time they are taken, rather than somewhere to write them up afterwards.
+- [`docs/diagrams/`](docs/diagrams/) — the architecture as it is meant to hold together.
+- [`docs/archive/`](docs/archive/) — designs that were considered and not built, kept for
+  the reasoning that rejected them.
+
+Start at [SPEC-000](docs/specs/SPEC-000-system-concept.md).
