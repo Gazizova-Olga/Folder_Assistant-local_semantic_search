@@ -1,0 +1,9 @@
+# Store LF in the repository and check out LF everywhere, matching .editorconfig.
+# Plain `text=auto` checks out CRLF on Windows, which contradicts it and makes every
+# file report a pending line-ending change on a machine that never edited it.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
+*.docx binary

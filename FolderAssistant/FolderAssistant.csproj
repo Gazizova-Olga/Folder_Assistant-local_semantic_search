@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<OutputType>Exe</OutputType>
+		<RootNamespace>FolderAssistant</RootNamespace>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<!-- dotnet publish -c Release -r <rid> for a self-contained single file. -->
+	<PropertyGroup Condition="'$(RuntimeIdentifier)' == 'osx-arm64' or '$(RuntimeIdentifier)' == 'osx-x64'">
+		<PublishSingleFile>true</PublishSingleFile>
+		<SelfContained>true</SelfContained>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!--
+			The app keeps its contracts in one assembly rather than splitting an abstractions library out
+			of it, so the tests reach them through InternalsVisibleTo. Production types stay `internal`
+			rather than dropping to `private` when they need coverage.
+		-->
+		<InternalsVisibleTo Include="FolderAssistant.Tests" />
+		<!--
+			Moq builds its proxies in a dynamic assembly, so mocking an internal interface needs that
+			assembly to see internals too — visibility to the test assembly alone is not enough.
+		-->
+		<InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+	</ItemGroup>
+
+	<ItemGroup>
+	</ItemGroup>
+
+	<ItemGroup>
+	</ItemGroup>
+
+</Project>

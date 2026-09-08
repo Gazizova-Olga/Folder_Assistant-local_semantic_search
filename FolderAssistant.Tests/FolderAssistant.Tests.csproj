@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<!--
+		One test project for both assemblies. They are tested together because they are deployed
+		together, and a second project would only duplicate the harness.
+	-->
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<IsPackable>false</IsPackable>
+		<IsTestProject>true</IsTestProject>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.NET.Test.Sdk" />
+		<PackageReference Include="XUnit" />
+		<PackageReference Include="XUnit.Runner.VisualStudio" />
+		<PackageReference Include="FluentAssertions" />
+		<PackageReference Include="Moq" />
+		<PackageReference Include="coverlet.collector" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\FolderAssistant\FolderAssistant.csproj" />
+	</ItemGroup>
+
+</Project>

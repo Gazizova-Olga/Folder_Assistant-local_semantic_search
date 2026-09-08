@@ -1,0 +1,11 @@
+<Solution>
+	<Folder Name="/Solution Items/">
+		<File Path=".editorconfig" />
+		<File Path=".gitignore" />
+		<File Path="CLAUDE.md" />
+		<File Path="Directory.Packages.props" />
+		<File Path="NuGet.config" />
+	</Folder>
+	<Project Path="FolderAssistant/FolderAssistant.csproj" />
+	<Project Path="FolderAssistant.Tests/FolderAssistant.Tests.csproj" />
+</Solution>
