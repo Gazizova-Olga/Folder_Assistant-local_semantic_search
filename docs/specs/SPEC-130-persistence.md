@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-09 |
 
@@ -41,7 +41,12 @@ and model-registry tables are created idempotently.
 - The metadata folder and the database file are created on first run.
 - The schema is ensured on **every** run, not only at creation.
 - Bootstrap runs **synchronously at startup, before any request is handled**. A query
-  against a database that does not yet exist is not a case worth supporting.
+  against a database that does not yet exist is not a case worth supporting. The ordering is
+  enforced by an `IStartupFilter`, which the host resolves before the server starts listening.
+  It is deliberately not run inline at the end of `Main`: the configuration is not final until
+  the host is built, and a test host intercepts at that point, so an inline call would hold in
+  production and silently not hold anywhere it was checked
+  ([SPEC-100](SPEC-100-conversation-orchestration.md)).
 
 ### Contracts
 

@@ -20,6 +20,32 @@ dotnet build
 dotnet test
 ```
 
+## Configure
+
+Defaults work with no configuration: the folder the app is started in is the folder it indexes.
+
+To point it somewhere else, or to change indexing behaviour, edit
+`FolderAssistant/appsettings.json` — or use environment variables or user secrets, which is what
+you want for anything you would not commit:
+
+```json
+{
+  "FolderAssistant": {
+    "Persistence": { "AnalyzedFolderPath": "C:/some/folder" },
+    "Indexing": { "Enabled": true, "WatchEnabled": true }
+  }
+}
+```
+
+For local development, copy the template and fill in your own values:
+
+```bash
+cp FolderAssistant/appsettings.Development.template.json FolderAssistant/appsettings.Development.json
+```
+
+`appsettings.Development.json` is **git-ignored**, and it takes precedence over
+`appsettings.json` whenever the app runs in the Development environment.
+
 ## Run
 
 ```bash

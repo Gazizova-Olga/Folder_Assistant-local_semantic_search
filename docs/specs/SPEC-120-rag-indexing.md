@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-09 |
 
@@ -123,7 +123,9 @@ degraded feature.
 
 **When indexing is disabled**, the state is marked ready at startup. Nothing is going to build an
 index, so a query must not sit waiting for one; ready over an empty store returns no hits, which
-is the honest answer.
+is the honest answer. `IndexingDisabledService` is what does it: whether indexing runs at all is
+decided when the hosted-service factory executes, which is after the configuration is final
+([SPEC-100](SPEC-100-conversation-orchestration.md)).
 
 
 ### Keeping up with the folder
