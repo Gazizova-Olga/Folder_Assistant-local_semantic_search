@@ -24,14 +24,7 @@ internal sealed class SqliteFolderManifestReader : IFolderManifestReader
 	{
 		Dictionary<String, IndexedFileState> states = new(StringComparer.OrdinalIgnoreCase);
 
-		using SqliteConnection connection = new(new SqliteConnectionStringBuilder
-		{
-			DataSource = databasePath,
-			Mode = SqliteOpenMode.ReadOnly,
-			Cache = SqliteCacheMode.Shared,
-		}.ToString());
-
-		connection.Open();
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
 
 		using SqliteCommand command = connection.CreateCommand();
 

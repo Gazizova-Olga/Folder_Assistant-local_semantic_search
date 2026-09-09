@@ -38,7 +38,7 @@ internal sealed class SqliteJsonVectorStoreReader : IVectorStoreReader
 {
 	public IReadOnlyList<StoredChunkVector> ReadByModelVersion(String databasePath, String modelVersionId)
 	{
-		using SqliteConnection connection = OpenRead(databasePath);
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
 		using SqliteCommand command = connection.CreateCommand();
 
 		// The join is what makes a hit locatable: a vector on its own says how well something matched
@@ -71,26 +71,12 @@ internal sealed class SqliteJsonVectorStoreReader : IVectorStoreReader
 
 	public String? ReadFitArtifact(String databasePath, String modelVersionId)
 	{
-		using SqliteConnection connection = OpenRead(databasePath);
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
 		using SqliteCommand command = connection.CreateCommand();
 
 		command.CommandText = "SELECT artifact_json FROM embedding_fit_artifact WHERE model_version_id = $id;";
 		command.Parameters.AddWithValue("$id", modelVersionId);
 
 		return command.ExecuteScalar() as String;
-	}
-
-	private static SqliteConnection OpenRead(String databasePath)
-	{
-		SqliteConnection connection = new(new SqliteConnectionStringBuilder
-		{
-			DataSource = databasePath,
-			Mode = SqliteOpenMode.ReadOnly,
-			Cache = SqliteCacheMode.Shared,
-		}.ToString());
-
-		connection.Open();
-
-		return connection;
 	}
 }

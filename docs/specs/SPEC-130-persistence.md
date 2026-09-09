@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-08 |
+| Last updated | 2026-09-09 |
 
 ## Purpose
 
@@ -114,10 +114,49 @@ not carry.
   database is reused; missing objects are created without destructive change.
 - **Compatibility** — the manifest, chunk and vector tables stay usable when the embedding
   implementation changes between runs.
-- **Concurrency** — write-ahead logging and foreign keys are enabled at bootstrap. Note
-  that both are connection-scoped in SQLite except for the journal mode, which is stored in
-  the file.
+- **Concurrency** — see the rules below; the summary is one writer, many readers, under WAL,
+  with no shared cache.
 - **Operability** — bootstrap reports whether it created or reused the database, and where.
+
+
+## Concurrency rules
+
+- The access pattern is **one writer, many readers**. The indexing service writes on a
+  background thread — its passes serialized ([SPEC-120](SPEC-120-rag-indexing.md)) — while
+  retrieval reads on request threads, against the same database file.
+- **WAL is what makes that legal**, and is the only reason a read does not block behind an
+  index in flight. It is set once at bootstrap: `journal_mode` is persisted in the database
+  file rather than being a property of a connection.
+- **`PRAGMA foreign_keys` and `PRAGMA busy_timeout` are per-connection and are not
+  persisted**, so every connection sets them for itself immediately after opening.
+  `foreign_keys` additionally cannot be set inside a transaction, and cascading deletes
+  silently do nothing without it — no error, just rows that quietly stay behind.
+- **Shared-cache mode must not be used.** It exists to share an *in-memory* database between
+  connections. On a file-backed database it makes every connection in the process share one
+  cache, and concurrent use then faults inside `sqlite3_prepare_v2` when the GC finalizes a
+  handle while another connection is preparing a statement. It also converts contention into
+  `SQLITE_LOCKED`, for which the busy handler is never invoked — so it quietly defeats the
+  busy timeout as well.
+- **All connections open through one helper** (`FolderDatabaseConnection`), so these settings
+  cannot drift apart between call sites. They already had: the shared-cache flag reached all
+  four sites by someone copying a working connection string, and the writer ran with no busy
+  timeout at all, because only the bootstrapper had ever set one.
+- Regression guard: `PersistenceConcurrencyTests` — concurrent bootstraps under GC pressure,
+  and retrieval reading while the indexer writes.
+
+### Known: concurrent bootstrap faults intermittently
+
+`Concurrent_Bootstraps_Of_The_Same_Folder_Never_Fault` goes red in roughly one run in five
+(**measured: 3 red in 15 runs, in isolation**), with `SQLITE_ERROR` (code 1, "SQL logic
+error") raised from `BeginTransaction` inside `FolderDatabaseBootstrapper`.
+
+**This is not the shared-cache fault and not a busy-timeout shortfall.** It is never
+`SQLITE_BUSY`, and the busy handler is not invoked for `SQLITE_ERROR`, so the timeout every
+connection now sets is not involved. The connection stays usable afterwards.
+
+The cause is not established and nothing here fixes it. It is recorded rather than left for
+someone to rediscover as an unexplained red build — and it must not be "fixed" by lowering
+the test's concurrency, which is the only thing making the property testable at all.
 
 ## Migration
 

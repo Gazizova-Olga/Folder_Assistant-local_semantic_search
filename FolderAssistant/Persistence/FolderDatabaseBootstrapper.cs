@@ -74,21 +74,14 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 
 		String databasePath = Path.Combine(metadataPath, config.DatabaseFileName);
 
-		using SqliteConnection connection = new(new SqliteConnectionStringBuilder
-		{
-			DataSource = databasePath,
-			Mode = SqliteOpenMode.ReadWriteCreate,
-			Cache = SqliteCacheMode.Shared,
-		}.ToString());
-
-		connection.Open();
+		using SqliteConnection connection = FolderDatabaseConnection.OpenCreate(databasePath);
 
 		using (SqliteCommand pragma = connection.CreateCommand())
 		{
-			// busy_timeout makes a connection wait for a held lock instead of failing at once. No test
-			// here demonstrates it: removing it leaves eight concurrent bootstraps passing, five runs
-			// out of five — so it stands as a guard against contention these tests do not produce.
-			pragma.CommandText = "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;";
+			// journal_mode is persisted in the database file, so unlike the per-connection PRAGMAs
+			// the connection factory sets, it only has to be written once — here. WAL is what lets
+			// retrieval read while the indexer writes.
+			pragma.CommandText = "PRAGMA journal_mode = WAL;";
 			pragma.ExecuteNonQuery();
 		}
 

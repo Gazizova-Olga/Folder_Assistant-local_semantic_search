@@ -51,27 +51,10 @@ internal sealed class FolderIndexRepository
 
 		String modelVersionId = descriptor.ModelVersionId;
 
-		using SqliteConnection connection = new(new SqliteConnectionStringBuilder
-		{
-			DataSource = databasePath,
-			Mode = SqliteOpenMode.ReadWrite,
-			Cache = SqliteCacheMode.Shared,
-		}.ToString());
-
-		connection.Open();
-
-		using (SqliteCommand pragma = connection.CreateCommand())
-		{
-			// Foreign keys are per connection in SQLite, not per database, so what the bootstrap set does
-			// not carry here. The deletions below rely on the cascade.
-			//
-			// No test demonstrates this line: measured, this provider already opens with
-			// foreign_keys=1, so removing it changes nothing. It is set because the cascade should
-			// depend on something this code states, not on a provider default that is not part of the
-			// contract and can be turned off from a connection string.
-			pragma.CommandText = "PRAGMA foreign_keys = ON;";
-			pragma.ExecuteNonQuery();
-		}
+		// foreign_keys is per connection in SQLite, not per database, so what the bootstrap set does
+		// not carry here — and the deletions below rely on the cascade. The connection factory sets
+		// it, along with the busy timeout this call site never had.
+		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(databasePath);
 
 		using SqliteTransaction transaction = connection.BeginTransaction();
 
