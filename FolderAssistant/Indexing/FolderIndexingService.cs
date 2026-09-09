@@ -38,7 +38,7 @@ internal sealed class FolderIndexingService : BackgroundService
 
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 	{
-		await this.IndexAsync(isInitial: true, "startup", stoppingToken).ConfigureAwait(false);
+		await this.IndexAsync("startup", stoppingToken).ConfigureAwait(false);
 
 		if (this._changeFeed is null)
 		{
@@ -54,7 +54,7 @@ internal sealed class FolderIndexingService : BackgroundService
 			await foreach (FolderChangeSignal signal in
 				this._changeFeed.ReadAllAsync(stoppingToken).ConfigureAwait(false))
 			{
-				await this.IndexAsync(isInitial: false, signal.Reason, stoppingToken).ConfigureAwait(false);
+				await this.IndexAsync(signal.Reason, stoppingToken).ConfigureAwait(false);
 			}
 		}
 		catch (OperationCanceledException)
@@ -63,7 +63,7 @@ internal sealed class FolderIndexingService : BackgroundService
 		}
 	}
 
-	private async Task IndexAsync(Boolean isInitial, String reason, CancellationToken cancellationToken)
+	private async Task IndexAsync(String reason, CancellationToken cancellationToken)
 	{
 		try
 		{
@@ -88,16 +88,11 @@ internal sealed class FolderIndexingService : BackgroundService
 		{
 			// Nothing else observes this pass. A background failure that only writes to a log leaves
 			// retrieval answering as though the index were merely empty, so the state carries it.
+			// Keeping a failed refresh from tearing down a serving index is MarkFailed's job, not a
+			// branch here: it refuses to leave Ready, so both callers report unconditionally.
 			this._state.MarkFailed(ex);
 
 			Console.WriteLine($"Indexing ({reason}) failed: {ex.Message}");
-
-			// A refresh that fails must not tear down an index that is already serving queries; only
-			// the initial build can leave the state unusable.
-			if (isInitial)
-			{
-				return;
-			}
 		}
 	}
 }

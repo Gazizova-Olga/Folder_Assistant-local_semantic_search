@@ -103,17 +103,24 @@ internal sealed class IndexState : IIndexState
 	/// have gone away — and a folder that is briefly unreadable would otherwise take a working index out
 	/// of service and refuse queries it could still answer.
 	/// </para>
+	///
+	/// <para>
+	/// It records no error in that case either. <see cref="Error"/> is the reason the index is unusable,
+	/// not a log of the last thing that went wrong, and publishing one against a Ready index makes a
+	/// healthy index look broken to anything reading it as that signal.
+	/// </para>
 	/// </summary>
 	public void MarkFailed(Exception error)
 	{
 		lock (this._gate)
 		{
-			this._error = error;
-
-			if (this._status != IndexStatus.Ready)
+			if (this._status == IndexStatus.Ready)
 			{
-				this._status = IndexStatus.Failed;
+				return;
 			}
+
+			this._status = IndexStatus.Failed;
+			this._error = error;
 		}
 	}
 }

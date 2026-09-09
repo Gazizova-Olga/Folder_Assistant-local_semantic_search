@@ -189,6 +189,22 @@ public sealed class BackgroundIndexingTests
 		state.Status.Should().Be(IndexStatus.Ready);
 	}
 
+	/// <summary>
+	/// Not just the status. An error published against a Ready index makes a healthy index look broken
+	/// to anything treating Error as the "is it usable" signal — which is what Error is for.
+	/// </summary>
+	[Fact]
+	public void A_Failed_Refresh_Leaves_A_Ready_Index_Unblemished()
+	{
+		IndexState state = new();
+		state.MarkReady(DateTime.UtcNow);
+
+		state.MarkFailed(new IOException("the folder went away"));
+
+		state.Status.Should().Be(IndexStatus.Ready);
+		state.Error.Should().BeNull();
+	}
+
 	/// <summary>The same property from the caller's side: the refusal does not come back.</summary>
 	[Fact]
 	public void Retrieval_Still_Answers_After_A_Refresh_Fails()

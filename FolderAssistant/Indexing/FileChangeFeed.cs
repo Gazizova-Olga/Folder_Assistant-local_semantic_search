@@ -41,6 +41,11 @@ internal sealed class FileSystemWatcherChangeFeed : IFileChangeFeed
 {
 	private static readonly String[] IgnoredDirectorySegments = [".git", ".vs", "bin", "obj", "node_modules"];
 
+	// Must stay a Char[]. Passing the two separators as loose arguments binds to
+	// Split(Char, Int32) rather than the params overload, because Char converts implicitly to
+	// Int32 — and the alt separator silently becomes a count.
+	private static readonly Char[] PathSeparators = [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar];
+
 	// Capacity one, dropping writes when full. A burst of file events collapses into a single
 	// pending signal, which is all a consumer that rescans the whole folder can act on. Queueing
 	// ten of them would buy ten identical passes.
@@ -141,7 +146,7 @@ internal sealed class FileSystemWatcherChangeFeed : IFileChangeFeed
 	private Boolean ShouldIgnore(String fullPath)
 	{
 		String relative = Path.GetRelativePath(this._rootPath, fullPath);
-		String[] segments = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+		String[] segments = relative.Split(PathSeparators, StringSplitOptions.RemoveEmptyEntries);
 
 		foreach (String segment in segments)
 		{

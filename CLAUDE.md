@@ -52,6 +52,14 @@ dotnet test --filter "DisplayName~Cascades"
 Targets **.NET 10**. NuGet versions are managed centrally in `Directory.Packages.props`
 (Central Package Management) — **do not put versions in `.csproj` files**.
 
+`SonarAnalyzer.CSharp` runs as a global analyzer on every build, and the build does not fail on
+warnings — so they have to be read by hand. **The baseline is 8 warnings**, each triaged in
+[docs/ANALYZER-WARNINGS.md](docs/ANALYZER-WARNINGS.md). A build reporting more has introduced
+something new: triage it against that file rather than adding to the pile. Three of the eight are
+deliberate and must **not** be "fixed". This matters because a real defect has already hidden in
+that noise once — a `Split` overload mis-binding in the watcher's metadata-folder guard, in a
+fully green build that no test could have caught.
+
 ## Target architecture
 
 Written down so the rebuild has something to converge on. These sections describe intent;
