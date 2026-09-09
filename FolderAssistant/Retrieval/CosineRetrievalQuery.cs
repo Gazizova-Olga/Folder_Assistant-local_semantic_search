@@ -1,4 +1,5 @@
 using FolderAssistant.Embedding;
+using FolderAssistant.Indexing;
 using FolderAssistant.Persistence;
 
 namespace FolderAssistant.Retrieval;
@@ -16,19 +17,24 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 {
 	private readonly IVectorizer _vectorizer;
 	private readonly IVectorStoreReader _vectorStoreReader;
+	private readonly IIndexState? _indexState;
 
-	public CosineRetrievalQuery(IVectorizer vectorizer)
-		: this(vectorizer, new SqliteJsonVectorStoreReader())
+	public CosineRetrievalQuery(IVectorizer vectorizer, IIndexState? indexState = null)
+		: this(vectorizer, new SqliteJsonVectorStoreReader(), indexState)
 	{
 	}
 
-	internal CosineRetrievalQuery(IVectorizer vectorizer, IVectorStoreReader vectorStoreReader)
+	internal CosineRetrievalQuery(
+		IVectorizer vectorizer,
+		IVectorStoreReader vectorStoreReader,
+		IIndexState? indexState = null)
 	{
 		ArgumentNullException.ThrowIfNull(vectorizer);
 		ArgumentNullException.ThrowIfNull(vectorStoreReader);
 
 		this._vectorizer = vectorizer;
 		this._vectorStoreReader = vectorStoreReader;
+		this._indexState = indexState;
 	}
 
 	public IReadOnlyList<RetrievalHit> Search(String databasePath, String queryText, RetrievalOptions options)
@@ -39,6 +45,8 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 		{
 			throw new ArgumentOutOfRangeException(nameof(options), "TopK must be greater than zero.");
 		}
+
+		this.EnsureIndexIsQueryable();
 
 		ModelDescriptor descriptor = this._vectorizer.Descriptor;
 
@@ -91,6 +99,37 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 			.ThenBy(static hit => hit.ChunkId, StringComparer.Ordinal)
 			.Take(options.TopK)
 			.ToArray();
+	}
+
+	/// <summary>
+	/// Refuses the query outright unless the index is in a state that can answer it.
+	///
+	/// <para>
+	/// The check is skipped when no state was supplied, which is how a test or a caller that builds
+	/// its own store on the spot searches without standing up an indexing pass to satisfy.
+	/// </para>
+	/// </summary>
+	private void EnsureIndexIsQueryable()
+	{
+		if (this._indexState is null)
+		{
+			return;
+		}
+
+		switch (this._indexState.Status)
+		{
+			case IndexStatus.Building:
+				throw new IndexNotReadyException(
+					"The folder index is still building; no vectors are queryable yet.");
+
+			case IndexStatus.Failed:
+				throw new IndexNotReadyException(
+					$"The folder index failed to build: {this._indexState.Error?.Message}",
+					this._indexState.Error);
+
+			default:
+				return;
+		}
 	}
 
 	private static Double CosineSimilarity(IReadOnlyList<Single> left, IReadOnlyList<Single> right)

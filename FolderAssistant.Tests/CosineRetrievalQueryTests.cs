@@ -146,7 +146,8 @@ public sealed class CosineRetrievalQueryTests
 	public void A_Query_Cannot_Be_Built_Without_A_Vectorizer_Or_A_Reader()
 	{
 		FluentActions.Invoking(() => new CosineRetrievalQuery(null!)).Should().Throw<ArgumentNullException>();
-		FluentActions.Invoking(() => new CosineRetrievalQuery(new StubVectorizer([1.0f]), null!))
+		// Cast because the state argument is optional: an untyped null would pick that overload.
+		FluentActions.Invoking(() => new CosineRetrievalQuery(new StubVectorizer([1.0f]), (IVectorStoreReader)null!))
 			.Should().Throw<ArgumentNullException>();
 	}
 

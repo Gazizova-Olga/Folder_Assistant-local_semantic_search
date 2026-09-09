@@ -28,6 +28,10 @@ internal sealed class Program
 		Console.WriteLine(
 			$"Database bootstrap: {(database.Created ? "created" : "reused")} at {database.DatabasePath}");
 
+		// Retrieval consults this rather than answering from an index that is still filling up.
+		IndexState indexState = new();
+		builder.Services.AddSingleton<IIndexState>(indexState);
+
 		if (config.Indexing.Enabled)
 		{
 			// Composition root for the embedding provider: swapping the IVectorizer built here is the
@@ -35,13 +39,17 @@ internal sealed class Program
 			IVectorizer vectorizer = new ProgrammableEmbeddingVectorizer(
 				config.Indexing.ModelVersionId, config.Indexing.VectorDimension);
 
-			IndexingResult indexed = new FolderIndexingPipeline(vectorizer)
-				.Run(analyzedFolderPath, database.DatabasePath, config.Indexing);
+			FolderIndexingPipeline pipeline = new(vectorizer);
 
-			Console.WriteLine(
-				$"Indexing: scanned={indexed.FilesScanned}, indexed={indexed.FilesIndexed}, " +
-				$"unchanged={indexed.FilesUnchanged}, deleted={indexed.FilesDeleted}, " +
-				$"chunks={indexed.ChunksIndexed}, vectors={indexed.VectorsIndexed}");
+			builder.Services.AddSingleton<IHostedService>(_ => new FolderIndexingService(
+				() => pipeline.Run(analyzedFolderPath, database.DatabasePath, config.Indexing),
+				indexState));
+		}
+		else
+		{
+			// Nothing is going to build an index, so a query must not sit waiting for one. Ready with
+			// no vectors returns nothing, which is the honest answer here.
+			indexState.MarkReady(DateTime.UtcNow);
 		}
 
 		WebApplication app = builder.Build();

@@ -1,0 +1,151 @@
+using FluentAssertions;
+using FolderAssistant.Embedding;
+using FolderAssistant.Indexing;
+using FolderAssistant.Persistence;
+using FolderAssistant.Retrieval;
+using Microsoft.Extensions.Hosting;
+
+namespace FolderAssistant.Tests;
+
+/// <summary>
+/// Indexing moved off the startup path, so the guarantee "the host is up, therefore the index is
+/// populated" no longer holds. These cover what replaced it: a state a reader can consult, and a
+/// retrieval path that refuses rather than answering from an index that is not finished.
+/// </summary>
+public sealed class BackgroundIndexingTests
+{
+	[Fact]
+	public void An_Index_That_Has_Not_Run_Is_Building()
+	{
+		IndexState state = new();
+
+		state.Status.Should().Be(IndexStatus.Building);
+		state.LastIndexedUtc.Should().BeNull();
+	}
+
+	[Fact]
+	public async Task A_Completed_Pass_Makes_The_Index_Queryable()
+	{
+		IndexState state = new();
+		using FolderIndexingService service = new(() => EmptyResult, state);
+
+		await service.StartAsync(CancellationToken.None);
+		await service.ExecuteTask!;
+
+		state.Status.Should().Be(IndexStatus.Ready);
+		state.LastIndexedUtc.Should().NotBeNull();
+		state.Error.Should().BeNull();
+	}
+
+	/// <summary>
+	/// Nothing else observes a background pass. If a failure only reached a log, retrieval would go on
+	/// answering as though the folder were merely empty, so the failure has to reach the state.
+	/// </summary>
+	[Fact]
+	public async Task A_Failed_Pass_Leaves_The_Cause_On_The_State()
+	{
+		InvalidOperationException failure = new("the scan could not read the folder");
+		IndexState state = new();
+		using FolderIndexingService service = new(() => throw failure, state);
+
+		await service.StartAsync(CancellationToken.None);
+		await service.ExecuteTask!;
+
+		state.Status.Should().Be(IndexStatus.Failed);
+		state.Error.Should().BeSameAs(failure);
+	}
+
+	/// <summary>
+	/// The failure is contained. A background service whose ExecuteAsync throws would otherwise take
+	/// the host down with it, so an unreadable folder would stop the application rather than degrade
+	/// one feature of it.
+	/// </summary>
+	[Fact]
+	public async Task A_Failed_Pass_Does_Not_Fault_The_Host()
+	{
+		IndexState state = new();
+		using FolderIndexingService service = new(() => throw new IOException("locked"), state);
+
+		await service.StartAsync(CancellationToken.None);
+
+		Func<Task> run = async () => await service.ExecuteTask!;
+
+		await run.Should().NotThrowAsync();
+	}
+
+	[Fact]
+	public void Retrieval_Refuses_While_The_Index_Is_Building()
+	{
+		IndexState state = new();
+
+		Func<Object> search = () => Search(state);
+
+		search.Should().Throw<IndexNotReadyException>()
+			.WithMessage("*still building*");
+	}
+
+	/// <summary>
+	/// A failed build is reported as a failure, carrying its cause. It is not the same condition as
+	/// "still building" — one resolves by waiting and the other does not — so a caller is given the
+	/// original exception rather than a bare refusal.
+	/// </summary>
+	[Fact]
+	public void Retrieval_Refuses_After_A_Failed_Build_And_Carries_The_Cause()
+	{
+		InvalidOperationException failure = new("the embedding backend is unreachable");
+		IndexState state = new();
+		state.MarkFailed(failure);
+
+		Func<Object> search = () => Search(state);
+
+		search.Should().Throw<IndexNotReadyException>()
+			.WithMessage("*the embedding backend is unreachable*")
+			.WithInnerException<InvalidOperationException>();
+	}
+
+	[Fact]
+	public void Retrieval_Answers_Once_The_Index_Is_Ready()
+	{
+		IndexState state = new();
+		state.MarkReady(DateTime.UtcNow);
+
+		Func<Object> search = () => Search(state);
+
+		search.Should().NotThrow();
+	}
+
+	/// <summary>
+	/// With indexing switched off nothing will ever build an index, so a query must not block on one.
+	/// Program marks the state ready at startup; this pins the property that makes that safe — Ready
+	/// over an empty store answers with no hits rather than refusing.
+	/// </summary>
+	[Fact]
+	public void An_Index_Marked_Ready_With_Nothing_In_It_Returns_No_Hits()
+	{
+		IndexState state = new();
+		state.MarkReady(DateTime.UtcNow);
+
+		Search(state).Should().BeEmpty();
+	}
+
+	private static readonly IndexingResult EmptyResult = new(0, 0, 0, 0, 0, 0);
+
+	private static IReadOnlyList<RetrievalHit> Search(IIndexState state)
+	{
+		CosineRetrievalQuery query = new(
+			new ProgrammableEmbeddingVectorizer("test-v1", 16),
+			new EmptyVectorStoreReader(),
+			state);
+
+		return query.Search("unused.db", "anything", new RetrievalOptions(TopK: 5));
+	}
+
+	private sealed class EmptyVectorStoreReader : IVectorStoreReader
+	{
+		public IReadOnlyList<StoredChunkVector> ReadByModelVersion(String databasePath, String modelVersionId)
+			=> [];
+
+		public String? ReadFitArtifact(String databasePath, String modelVersionId)
+			=> null;
+	}
+}

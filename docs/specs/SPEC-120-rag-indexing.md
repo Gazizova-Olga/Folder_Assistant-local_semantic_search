@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-08 |
+| Last updated | 2026-09-09 |
 
 ## Purpose
 
@@ -19,6 +19,7 @@ as it changes.
 - File enumeration and filtering.
 - Tokenization and chunking.
 - Deciding what has changed since the last pass, and acting on it.
+- When a pass runs, and what retrieval is told while one has not finished.
 
 **Out of scope**
 
@@ -88,6 +89,40 @@ than something an ordinary edit triggers.
 **Accepted cost:** incremental updates embed against the corpus as it was when the fit was
 taken, so vocabulary and inverse document frequencies drift as the folder changes. **Drift
 detection is not implemented.**
+
+
+## Execution model
+
+Indexing runs in a background service. The web host starts immediately and does not wait for a
+pass to finish, because that wait costs whatever the analyzed folder costs — a number that has
+nothing to do with the application and no upper bound the application controls.
+
+**The database bootstrap did not move.** It stays synchronous and still completes before any
+request is handled ([SPEC-130](SPEC-130-persistence.md)). Only indexing went to the background.
+
+### Readiness
+
+Moving indexing off the startup path gives up a guarantee that used to be free: that a host
+which is answering has an index behind it. `IIndexState` is what replaces it, exposing
+`Building` / `Ready` / `Failed`.
+
+**Retrieval refuses while the index is building.** It does not answer from what has been stored
+so far. A partial index does not fail a query — it returns hits, and those hits are
+indistinguishable from the ones a complete index returns for a query it has nothing good for.
+Nothing in the scores carries "ask again shortly", so refusing is the only response that keeps
+the two apart, and it lets a caller wait or degrade on purpose instead of acting on a result
+that is quietly wrong.
+
+A failed build is reported as a failure, carrying its cause, rather than as "still building".
+One resolves by waiting and the other does not.
+
+**The failure is contained.** A background service that lets its exception escape takes the host
+down with it, which would turn an unreadable folder into a stopped application rather than one
+degraded feature.
+
+**When indexing is disabled**, the state is marked ready at startup. Nothing is going to build an
+index, so a query must not sit waiting for one; ready over an empty store returns no hits, which
+is the honest answer.
 
 ## Sharp edge — deletion is inferred from the scan
 
