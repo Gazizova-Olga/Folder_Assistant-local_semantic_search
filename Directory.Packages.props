@@ -18,8 +18,8 @@
 			Security pin, and the reason it is a direct reference rather than left transitive.
 
 			Microsoft.Data.Sqlite 10.0.9 pulls SQLitePCLRaw 2.1.11, whose bundled SQLite predates 3.50.2
-			and carries GHSA-2m69-gcr7-jv3q (high severity). NuGet audit reports it as NU1903, which the
-			repo-wide warning gate turns into a build failure, so this is enforced rather than documented.
+			and carries GHSA-2m69-gcr7-jv3q (high severity). NuGet audit reports it as NU1903, so the pin is
+			what keeps that warning off every build.
 
 			2.1.12 is the in-line patch: same 2.1.x ABI, SQLite >= 3.50.2. Referencing the bundle directly
 			from each project that touches SQLite promotes the whole 2.1.11 set. Drop this once
@@ -45,9 +45,12 @@
 
 	<ItemGroup Label="Analyzers">
 		<!--
-			Runs on every build in every project, paired with the repo-wide zero-warning gate in
-			Directory.Build.props. GlobalPackageReference rather than a per-project reference, so a new
-			project cannot be created without it.
+			Runs on every build in every project. GlobalPackageReference rather than a per-project
+			reference, so a new project cannot be created without it.
+
+			Its findings are triaged in docs/ANALYZER-WARNINGS.md against a recorded baseline. There is no
+			TreatWarningsAsErrors here yet, so the baseline is the gate: a build reporting more than it has
+			introduced something new.
 		-->
 		<GlobalPackageReference Include="SonarAnalyzer.CSharp" Version="10.8.0.113526">
 			<PrivateAssets>All</PrivateAssets>
