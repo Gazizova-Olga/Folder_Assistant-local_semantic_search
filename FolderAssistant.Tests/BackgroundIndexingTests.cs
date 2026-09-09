@@ -276,8 +276,13 @@ public sealed class BackgroundIndexingTests
 
 	private sealed class EmptyVectorStoreReader : IVectorStoreReader
 	{
-		public IReadOnlyList<StoredChunkVector> ReadByModelVersion(String databasePath, String modelVersionId)
+		public IReadOnlyList<StoredVector> ReadVectorsByModelVersion(String databasePath, String modelVersionId)
 			=> [];
+
+		public IReadOnlyDictionary<String, ChunkLocation> ReadChunkLocations(
+			String databasePath,
+			IReadOnlyList<String> chunkIds)
+			=> new Dictionary<String, ChunkLocation>();
 
 		public String? ReadFitArtifact(String databasePath, String modelVersionId)
 			=> null;

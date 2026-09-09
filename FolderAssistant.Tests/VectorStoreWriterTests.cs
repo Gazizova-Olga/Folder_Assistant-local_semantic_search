@@ -69,7 +69,7 @@ public sealed class VectorStoreWriterTests
 	}
 
 	[Fact]
-	public void The_Default_Writer_Stores_The_Vector_As_A_Json_Array()
+	public void The_Default_Writer_Stores_The_Vector_As_A_Packed_Blob()
 	{
 		using TempFolder folder = new();
 		String databasePath = BootstrapIn(folder);
@@ -83,11 +83,15 @@ public sealed class VectorStoreWriterTests
 
 		using SqliteConnection connection = Connect(databasePath);
 		using SqliteCommand command = connection.CreateCommand();
-		command.CommandText = "SELECT vector_json, vector_dimension FROM chunk_vector WHERE chunk_id = 'c1';";
+		command.CommandText = "SELECT vector, vector_dimension FROM chunk_vector WHERE chunk_id = 'c1';";
 		using SqliteDataReader reader = command.ExecuteReader();
 
 		reader.Read().Should().BeTrue();
-		JsonSerializer.Deserialize<Single[]>(reader.GetString(0)).Should().Equal(0.5f, -0.25f);
+
+		// Eight bytes for two components, not a JSON array of them.
+		Byte[] blob = (Byte[])reader.GetValue(0);
+		blob.Should().HaveCount(8);
+		VectorBlob.Unpack(blob).Should().Equal(0.5f, -0.25f);
 		reader.GetInt32(1).Should().Be(2);
 	}
 
@@ -110,6 +114,13 @@ public sealed class VectorStoreWriterTests
 			IReadOnlyList<Single> vector,
 			Int32 vectorDimension)
 			=> this.Calls.Add(new WriteCall(chunkId, modelVersionId, vectorDimension));
+
+		public void DeleteVectors(
+			SqliteConnection connection,
+			SqliteTransaction transaction,
+			IReadOnlyList<String> chunkIds)
+		{
+		}
 	}
 
 	private sealed class ThrowingVectorStoreWriter : IVectorStoreWriter
@@ -122,6 +133,13 @@ public sealed class VectorStoreWriterTests
 			IReadOnlyList<Single> vector,
 			Int32 vectorDimension)
 			=> throw new InvalidOperationException("The backend refused the vector.");
+
+		public void DeleteVectors(
+			SqliteConnection connection,
+			SqliteTransaction transaction,
+			IReadOnlyList<String> chunkIds)
+		{
+		}
 	}
 
 	private static String BootstrapIn(TempFolder folder)

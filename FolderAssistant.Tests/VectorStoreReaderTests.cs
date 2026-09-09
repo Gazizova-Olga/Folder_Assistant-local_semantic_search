@@ -15,19 +15,49 @@ namespace FolderAssistant.Tests;
 public sealed class VectorStoreReaderTests
 {
 	[Fact]
-	public void A_Stored_Vector_Resolves_Back_To_Its_File_And_Token_Window()
+	public void Scoring_Reads_Return_Vectors_And_Nothing_Else()
 	{
 		using TempFolder folder = new();
 		String databasePath = IndexOneFile(folder, "alpha beta gamma delta epsilon zeta");
 
-		IReadOnlyList<StoredChunkVector> stored =
-			new SqliteJsonVectorStoreReader().ReadByModelVersion(databasePath, "model-a");
+		IReadOnlyList<StoredVector> stored =
+			new SqliteBlobVectorStoreReader().ReadVectorsByModelVersion(databasePath, "model-a");
 
 		stored.Should().NotBeEmpty();
-		stored.Should().OnlyContain(vector => vector.FilePath == "notes.md");
 		stored.Should().OnlyContain(vector => vector.Vector.Count == 16);
-		stored.Select(static vector => vector.ChunkIndex).Should().BeEquivalentTo(Enumerable.Range(0, stored.Count));
-		stored.Should().OnlyContain(vector => vector.TokenEnd > vector.TokenStart);
+		stored.Should().OnlyContain(vector => !String.IsNullOrEmpty(vector.ChunkId));
+	}
+
+	/// <summary>
+	/// The other half of the split. A hit has to be locatable — a chunk stores no text of its own,
+	/// so retrieval carries the file and the token window that let the passage be rebuilt.
+	/// </summary>
+	[Fact]
+	public void A_Ranked_Chunk_Resolves_Back_To_Its_File_And_Token_Window()
+	{
+		using TempFolder folder = new();
+		String databasePath = IndexOneFile(folder, "alpha beta gamma delta epsilon zeta");
+
+		SqliteBlobVectorStoreReader reader = new();
+		IReadOnlyList<StoredVector> stored = reader.ReadVectorsByModelVersion(databasePath, "model-a");
+
+		IReadOnlyDictionary<String, ChunkLocation> locations =
+			reader.ReadChunkLocations(databasePath, [.. stored.Select(static v => v.ChunkId)]);
+
+		locations.Should().HaveCount(stored.Count);
+		locations.Values.Should().OnlyContain(location => location.FilePath == "notes.md");
+		locations.Values.Select(static l => l.ChunkIndex).Should().BeEquivalentTo(Enumerable.Range(0, stored.Count));
+		locations.Values.Should().OnlyContain(location => location.TokenEnd > location.TokenStart);
+	}
+
+	/// <summary>Asking for nothing does no work, rather than building an empty IN clause.</summary>
+	[Fact]
+	public void Resolving_No_Chunks_Returns_Nothing()
+	{
+		using TempFolder folder = new();
+		String databasePath = IndexOneFile(folder, "alpha beta gamma");
+
+		new SqliteBlobVectorStoreReader().ReadChunkLocations(databasePath, []).Should().BeEmpty();
 	}
 
 	[Fact]
@@ -36,7 +66,7 @@ public sealed class VectorStoreReaderTests
 		using TempFolder folder = new();
 		String databasePath = IndexOneFile(folder, "alpha beta gamma");
 
-		new SqliteJsonVectorStoreReader().ReadByModelVersion(databasePath, "never-indexed").Should().BeEmpty();
+		new SqliteBlobVectorStoreReader().ReadVectorsByModelVersion(databasePath, "never-indexed").Should().BeEmpty();
 	}
 
 	[Fact]
@@ -47,9 +77,9 @@ public sealed class VectorStoreReaderTests
 
 		new FolderIndexingPipeline().Run(folder.Path, databasePath, ConfigFor("model-b"));
 
-		SqliteJsonVectorStoreReader reader = new();
-		IReadOnlyList<StoredChunkVector> first = reader.ReadByModelVersion(databasePath, "model-a");
-		IReadOnlyList<StoredChunkVector> second = reader.ReadByModelVersion(databasePath, "model-b");
+		SqliteBlobVectorStoreReader reader = new();
+		IReadOnlyList<StoredVector> first = reader.ReadVectorsByModelVersion(databasePath, "model-a");
+		IReadOnlyList<StoredVector> second = reader.ReadVectorsByModelVersion(databasePath, "model-b");
 
 		first.Should().NotBeEmpty();
 		second.Should().NotBeEmpty();
@@ -63,7 +93,7 @@ public sealed class VectorStoreReaderTests
 		using TempFolder folder = new();
 		String databasePath = IndexOneFile(folder, "alpha beta");
 
-		new SqliteJsonVectorStoreReader().ReadFitArtifact(databasePath, "model-a").Should().BeNull();
+		new SqliteBlobVectorStoreReader().ReadFitArtifact(databasePath, "model-a").Should().BeNull();
 	}
 
 	/// <summary>End to end: index a folder, then find its content through the real reader.</summary>

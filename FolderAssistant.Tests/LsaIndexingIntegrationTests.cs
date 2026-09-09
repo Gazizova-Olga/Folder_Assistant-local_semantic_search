@@ -19,7 +19,7 @@ public sealed class LsaIndexingIntegrationTests
 		using TempFolder folder = new();
 		String databasePath = IndexWithLsa(folder);
 
-		String? artifact = new SqliteJsonVectorStoreReader().ReadFitArtifact(databasePath, "lsa-v1");
+		String? artifact = new SqliteBlobVectorStoreReader().ReadFitArtifact(databasePath, "lsa-v1");
 
 		artifact.Should().NotBeNullOrWhiteSpace();
 		artifact.Should().Contain("Projection");
@@ -35,11 +35,11 @@ public sealed class LsaIndexingIntegrationTests
 		using TempFolder folder = new();
 		String databasePath = IndexWithLsa(folder);
 
-		SqliteJsonVectorStoreReader reader = new();
+		SqliteBlobVectorStoreReader reader = new();
 		String artifact = reader.ReadFitArtifact(databasePath, "lsa-v1")!;
 		Int32 fittedDimension = LsaEmbeddingVectorizer.FromArtifact("lsa-v1", artifact).Descriptor.Dimension;
 
-		IReadOnlyList<StoredChunkVector> stored = reader.ReadByModelVersion(databasePath, "lsa-v1");
+		IReadOnlyList<StoredVector> stored = reader.ReadVectorsByModelVersion(databasePath, "lsa-v1");
 
 		stored.Should().NotBeEmpty();
 		stored.Should().OnlyContain(vector => vector.Vector.Count == fittedDimension);
@@ -55,7 +55,7 @@ public sealed class LsaIndexingIntegrationTests
 		using TempFolder folder = new();
 		String databasePath = IndexWithLsa(folder);
 
-		String artifact = new SqliteJsonVectorStoreReader().ReadFitArtifact(databasePath, "lsa-v1")!;
+		String artifact = new SqliteBlobVectorStoreReader().ReadFitArtifact(databasePath, "lsa-v1")!;
 
 		IReadOnlyList<RetrievalHit> hits = new CosineRetrievalQuery(
 				LsaEmbeddingVectorizer.FromArtifact("lsa-v1", artifact))
@@ -89,7 +89,7 @@ public sealed class LsaIndexingIntegrationTests
 		reader.GetString(0).Should().Be("programmable-lsa");
 
 		Int32 recorded = reader.GetInt32(1);
-		new SqliteJsonVectorStoreReader().ReadByModelVersion(databasePath, "lsa-v1")
+		new SqliteBlobVectorStoreReader().ReadVectorsByModelVersion(databasePath, "lsa-v1")
 			.Should().OnlyContain(vector => vector.Vector.Count == recorded);
 	}
 
@@ -106,7 +106,7 @@ public sealed class LsaIndexingIntegrationTests
 
 		new FolderIndexingPipeline().Run(folder.Path, databasePath, BaseConfig with { ModelVersionId = "plain-v1" });
 
-		new SqliteJsonVectorStoreReader().ReadFitArtifact(databasePath, "plain-v1").Should().BeNull();
+		new SqliteBlobVectorStoreReader().ReadFitArtifact(databasePath, "plain-v1").Should().BeNull();
 	}
 
 	private static readonly IndexingConfig BaseConfig = new()

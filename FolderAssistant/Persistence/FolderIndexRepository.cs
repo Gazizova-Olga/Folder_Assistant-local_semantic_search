@@ -25,7 +25,7 @@ internal sealed class FolderIndexRepository
 	private readonly IVectorStoreWriter _vectorStoreWriter;
 
 	public FolderIndexRepository()
-		: this(new SqliteJsonVectorStoreWriter())
+		: this(new SqliteBlobVectorStoreWriter())
 	{
 	}
 
@@ -69,7 +69,7 @@ internal sealed class FolderIndexRepository
 
 		// Before the upserts, matching the order the rest of the pass assumes: rows for files that are
 		// gone leave first, taking their chunks and vectors with them.
-		Int32 deletedCount = DeleteRemovedFiles(connection, transaction, files);
+		Int32 deletedCount = this.DeleteRemovedFiles(connection, transaction, files);
 
 		Int32 fileCount = 0;
 		Int32 chunkCount = 0;
@@ -83,7 +83,7 @@ internal sealed class FolderIndexRepository
 			chunksByFile.TryGetValue(file.FileId, out IReadOnlyList<TextChunk>? chunks);
 			chunks ??= [];
 
-			DeleteSupersededChunks(connection, transaction, file.FileId, chunks);
+			this.DeleteSupersededChunks(connection, transaction, file.FileId, chunks);
 
 			if (chunks.Count == 0)
 			{
@@ -122,7 +122,43 @@ internal sealed class FolderIndexRepository
 	/// was computed from, under every model version.
 	/// </para>
 	/// </summary>
-	private static void DeleteSupersededChunks(
+	/// <summary>
+	/// Deletes the vectors of every chunk the given query selects, through the store's own contract
+	/// rather than by relying on the <c>chunk_manifest</c> cascade.
+	///
+	/// <para>
+	/// The cascade does fire, so this looks redundant. It is not: the cascade is a property of the
+	/// SQLite blob backend, not of <see cref="IVectorStoreWriter"/>. A native vector extension keeps
+	/// vectors in a virtual table, and a virtual table cannot be the target of a foreign key — so a
+	/// backend that could not honour the cascade is exactly the one this seam exists to allow.
+	/// </para>
+	/// </summary>
+	private void DeleteVectorsOf(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String selectChunkIds,
+		Action<SqliteCommand> bind)
+	{
+		List<String> chunkIds = [];
+
+		using (SqliteCommand select = connection.CreateCommand())
+		{
+			select.Transaction = transaction;
+			select.CommandText = selectChunkIds;
+			bind(select);
+
+			using SqliteDataReader reader = select.ExecuteReader();
+
+			while (reader.Read())
+			{
+				chunkIds.Add(reader.GetString(0));
+			}
+		}
+
+		this._vectorStoreWriter.DeleteVectors(connection, transaction, chunkIds);
+	}
+
+	private void DeleteSupersededChunks(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
 		String fileId,
@@ -134,6 +170,10 @@ internal sealed class FolderIndexRepository
 
 		if (currentChunks.Count == 0)
 		{
+			this.DeleteVectorsOf(connection, transaction,
+				"SELECT chunk_id FROM chunk_manifest WHERE file_id = $fileId;",
+				c => c.Parameters.AddWithValue("$fileId", fileId));
+
 			command.CommandText = "DELETE FROM chunk_manifest WHERE file_id = $fileId;";
 			command.ExecuteNonQuery();
 
@@ -147,6 +187,18 @@ internal sealed class FolderIndexRepository
 			keepParameters[i] = $"$keep{i}";
 			command.Parameters.AddWithValue(keepParameters[i], currentChunks[i].ChunkId);
 		}
+
+		String doomed =
+			$"SELECT chunk_id FROM chunk_manifest WHERE file_id = $fileId AND chunk_id NOT IN ({String.Join(", ", keepParameters)});";
+
+		this.DeleteVectorsOf(connection, transaction, doomed, c =>
+		{
+			c.Parameters.AddWithValue("$fileId", fileId);
+			for (Int32 i = 0; i < currentChunks.Count; i++)
+			{
+				c.Parameters.AddWithValue(keepParameters[i], currentChunks[i].ChunkId);
+			}
+		});
 
 		command.CommandText =
 			$"DELETE FROM chunk_manifest WHERE file_id = $fileId AND chunk_id NOT IN ({String.Join(", ", keepParameters)});";
@@ -170,13 +222,15 @@ internal sealed class FolderIndexRepository
 	/// way it does for literals — it rescans the list per row. Small test folders never expose it.
 	/// </para>
 	/// </summary>
-	private static Int32 DeleteRemovedFiles(
+	private Int32 DeleteRemovedFiles(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
 		IReadOnlyList<ScannedTextFile> files)
 	{
 		if (files.Count == 0)
 		{
+			this.DeleteVectorsOf(connection, transaction, "SELECT chunk_id FROM chunk_manifest;", static _ => { });
+
 			using SqliteCommand deleteAll = connection.CreateCommand();
 			deleteAll.Transaction = transaction;
 			deleteAll.CommandText = "DELETE FROM file_manifest;";
@@ -185,6 +239,15 @@ internal sealed class FolderIndexRepository
 		}
 
 		PopulateScannedFileIds(connection, transaction, files);
+
+		this.DeleteVectorsOf(
+			connection,
+			transaction,
+			"""
+			SELECT cm.chunk_id FROM chunk_manifest cm
+			WHERE cm.file_id NOT IN (SELECT file_id FROM scanned_file_id);
+			""",
+			static _ => { });
 
 		using SqliteCommand command = connection.CreateCommand();
 		command.Transaction = transaction;

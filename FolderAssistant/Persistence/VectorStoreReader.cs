@@ -1,30 +1,47 @@
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace FolderAssistant.Persistence;
 
-/// <summary>A stored vector, joined to the manifest rows that say where its text came from.</summary>
-internal sealed record StoredChunkVector(
+/// <summary>A stored vector, carrying only what scoring needs.</summary>
+internal sealed record StoredVector(String ChunkId, IReadOnlyList<Single> Vector);
+
+/// <summary>
+/// Where a chunk's text came from. Resolved for ranked hits only, never for every candidate.
+/// </summary>
+internal sealed record ChunkLocation(
 	String ChunkId,
 	String FilePath,
 	Int32 ChunkIndex,
 	Int32 TokenStart,
-	Int32 TokenEnd,
-	IReadOnlyList<Single> Vector);
+	Int32 TokenEnd);
 
 /// <summary>
 /// The read half of the vector store, and the counterpart to <see cref="IVectorStoreWriter"/>.
 ///
 /// <para>
-/// Reads go behind a contract for the same reason writes do: it is what lets the stored
-/// representation change without a retrieval strategy knowing. Today a vector is JSON text in a
-/// column; a native vector extension would hold it as packed binary in a table of its own, and
-/// nothing above this interface should have to care which.
+/// Reads go behind a contract for the same reason writes do: it is what let the stored
+/// representation change from JSON text to packed <c>float32</c> blobs without a retrieval
+/// strategy knowing, and what would let a native vector extension's virtual table replace it in
+/// turn.
+/// </para>
+///
+/// <para>
+/// **Reading is split in two on purpose.** Scoring needs a chunk id and a vector and nothing else.
+/// The file path and token offsets matter only for the handful of chunks that actually rank, so
+/// fetching them for every candidate means joining <c>chunk_manifest</c> and <c>file_manifest</c>
+/// across the whole corpus to return five rows — metadata for candidates that are about to be
+/// discarded. Measurements are in <c>SPEC-131</c>.
 /// </para>
 /// </summary>
 internal interface IVectorStoreReader
 {
-	IReadOnlyList<StoredChunkVector> ReadByModelVersion(String databasePath, String modelVersionId);
+	/// <summary>Every vector of a model version, for scoring. No manifest joins.</summary>
+	IReadOnlyList<StoredVector> ReadVectorsByModelVersion(String databasePath, String modelVersionId);
+
+	/// <summary>Resolves source locations for chunks that have already been ranked.</summary>
+	IReadOnlyDictionary<String, ChunkLocation> ReadChunkLocations(
+		String databasePath,
+		IReadOnlyList<String> chunkIds);
 
 	/// <summary>
 	/// The persisted fit for a model version, or <c>null</c> where the implementation has none.
@@ -33,40 +50,87 @@ internal interface IVectorStoreReader
 	String? ReadFitArtifact(String databasePath, String modelVersionId);
 }
 
-/// <summary>Reads vectors stored as JSON arrays in <c>chunk_vector.vector_json</c>.</summary>
-internal sealed class SqliteJsonVectorStoreReader : IVectorStoreReader
+/// <summary>Reads vectors stored as packed <c>float32</c> blobs in <c>chunk_vector.vector</c>.</summary>
+internal sealed class SqliteBlobVectorStoreReader : IVectorStoreReader
 {
-	public IReadOnlyList<StoredChunkVector> ReadByModelVersion(String databasePath, String modelVersionId)
+	public IReadOnlyList<StoredVector> ReadVectorsByModelVersion(String databasePath, String modelVersionId)
 	{
 		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
 		using SqliteCommand command = connection.CreateCommand();
 
-		// The join is what makes a hit locatable: a vector on its own says how well something matched
-		// but not what matched, and chunks deliberately store no text of their own.
+		// No joins. This runs over every vector of the model version, so anything added here is
+		// paid for by candidates that will not be returned.
 		command.CommandText = """
-			SELECT cv.chunk_id, fm.file_path, cm.chunk_index, cm.token_start, cm.token_end, cv.vector_json
-			FROM chunk_vector cv
-			JOIN chunk_manifest cm ON cm.chunk_id = cv.chunk_id
-			JOIN file_manifest fm ON fm.file_id = cm.file_id
-			WHERE cv.model_version_id = $modelVersionId;
+			SELECT chunk_id, vector
+			FROM chunk_vector
+			WHERE model_version_id = $modelVersionId;
 			""";
 		command.Parameters.AddWithValue("$modelVersionId", modelVersionId);
 
-		List<StoredChunkVector> results = [];
+		List<StoredVector> results = [];
 
 		using SqliteDataReader reader = command.ExecuteReader();
+
 		while (reader.Read())
 		{
-			results.Add(new StoredChunkVector(
-				ChunkId: reader.GetString(0),
-				FilePath: reader.GetString(1),
-				ChunkIndex: reader.GetInt32(2),
-				TokenStart: reader.GetInt32(3),
-				TokenEnd: reader.GetInt32(4),
-				Vector: JsonSerializer.Deserialize<Single[]>(reader.GetString(5)) ?? []));
+			using Stream blob = reader.GetStream(1);
+			using MemoryStream buffer = new();
+			blob.CopyTo(buffer);
+
+			results.Add(new StoredVector(reader.GetString(0), VectorBlob.Unpack(buffer.GetBuffer().AsSpan(0, (Int32)buffer.Length))));
 		}
 
 		return results;
+	}
+
+	public IReadOnlyDictionary<String, ChunkLocation> ReadChunkLocations(
+		String databasePath,
+		IReadOnlyList<String> chunkIds)
+	{
+		ArgumentNullException.ThrowIfNull(chunkIds);
+
+		Dictionary<String, ChunkLocation> locations = new(StringComparer.Ordinal);
+
+		if (chunkIds.Count == 0)
+		{
+			return locations;
+		}
+
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
+		using SqliteCommand command = connection.CreateCommand();
+
+		// A bound parameter per id is fine here and not in DeleteRemovedFiles, because this list is
+		// TopK long — five, not twelve thousand.
+		String[] parameters = new String[chunkIds.Count];
+
+		for (Int32 i = 0; i < chunkIds.Count; i++)
+		{
+			parameters[i] = $"$id{i}";
+			command.Parameters.AddWithValue(parameters[i], chunkIds[i]);
+		}
+
+		command.CommandText = $"""
+			SELECT cm.chunk_id, fm.file_path, cm.chunk_index, cm.token_start, cm.token_end
+			FROM chunk_manifest cm
+			JOIN file_manifest fm ON fm.file_id = cm.file_id
+			WHERE cm.chunk_id IN ({String.Join(", ", parameters)});
+			""";
+
+		using SqliteDataReader reader = command.ExecuteReader();
+
+		while (reader.Read())
+		{
+			String chunkId = reader.GetString(0);
+
+			locations[chunkId] = new ChunkLocation(
+				ChunkId: chunkId,
+				FilePath: reader.GetString(1),
+				ChunkIndex: reader.GetInt32(2),
+				TokenStart: reader.GetInt32(3),
+				TokenEnd: reader.GetInt32(4));
+		}
+
+		return locations;
 	}
 
 	public String? ReadFitArtifact(String databasePath, String modelVersionId)

@@ -38,7 +38,7 @@ internal sealed class FolderIndexingPipeline
 
 	/// <summary>Composition-time override; with none, the programmable baseline is built from config.</summary>
 	internal FolderIndexingPipeline(IVectorizer? vectorizer)
-		: this(vectorizer, new SqliteFolderManifestReader(), new SqliteJsonVectorStoreReader())
+		: this(vectorizer, new SqliteFolderManifestReader(), new SqliteBlobVectorStoreReader())
 	{
 	}
 

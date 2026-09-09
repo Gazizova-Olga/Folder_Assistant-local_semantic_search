@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-09 |
 
@@ -165,6 +165,18 @@ the test's concurrency, which is the only thing making the property testable at 
 
 ## Migration
 
+**Schema version 3** stores vectors as packed little-endian `float32` in `chunk_vector.vector`,
+replacing `vector_json TEXT`. **This one is the first real migration**, because an idempotent
+`CREATE TABLE IF NOT EXISTS` cannot change a column's type: bootstrap detects the old column,
+reads the JSON vectors, rebuilds the table and writes them back packed.
+
+Vectors are **re-encoded, not discarded.** They are derived state and could be rebuilt from the
+folder, but rebuilding means re-embedding every chunk — the most expensive thing the system does
+— and it would strand the stored fit artifact, which has to stay consistent with the vectors
+produced under it. The whole migration runs inside the bootstrap transaction: a half-migrated
+`chunk_vector` is indistinguishable from a corrupt one, and there would be no way to tell which
+had happened.
+
 **Schema version 2** adds `embedding_fit_artifact`. An existing version 1 database picks the
 table up through the idempotent `CREATE`; what the version bump changes is only the value
 seeded into a database created from now on.
@@ -176,8 +188,6 @@ Recovery is currently limited to restoring the database file. Nothing automates 
 
 ## Open questions
 
-- Whether vectors should stay JSON text until a native vector extension is worth adopting,
-  or move to a packed binary representation earlier.
 - Whether the database file name should carry a hash of the folder path, so an index
   survives the folder being moved.
 

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Decided for now, open to evidence |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-09 |
 
@@ -149,37 +149,49 @@ The brute-force scan exists partly to be the thing candidates are measured again
 what it actually costs. Taken with `CorpusBenchmark` over a generated corpus of 4,000 files and
 24,000 vectors at 64 dimensions, vectors stored as JSON text.
 
-| stage | before | after |
-|---|---|---|
-| scan 4,000 files | 432 ms | 593 ms |
-| index cold — 24,000 vectors embedded | 4.7 s | 5.8 s |
-| manifest read (is this file already vectorised?) | **97,324 ms** | **731 ms** |
-| re-index pass with nothing to do | **104.3 s** | **3.4 s** |
-| read + parse 24,000 vectors, with location joins | 339 ms | 329 ms |
-| **cosine over 24,000 in-memory vectors** | **25 ms** | **24 ms** |
-| retrieval p50 | 186 ms | 281 ms |
+| stage | JSON + joins | after fixes | after blobs + split read |
+|---|---|---|---|
+| scan 4,000 files | 432 ms | 593 ms | 411 ms |
+| index cold — 24,000 vectors embedded | 4.7 s | 5.8 s | 4.4 s |
+| manifest read | **97,324 ms** | **731 ms** | 649 ms |
+| re-index pass with nothing to do | **104.3 s** | **3.4 s** | 3.0 s |
+| read + decode 24,000 vectors | 339 ms *(with joins)* | 329 ms *(with joins)* | **90 ms** *(no joins)* |
+| cosine over 24,000 in-memory vectors | 25 ms | 24 ms | 15 ms |
+| **retrieval p50** | 186 ms | 281 ms | **100 ms** |
+| database size | 27 MB | 27 MB | 24 MB |
 
-*Before* is the JSON-vector baseline with the correlated-`EXISTS` manifest read; *after* is with
-the two query-shape fixes. Nothing between them touches the read or the scoring path, so the
-last three rows are unchanged work: **the retrieval p50 moving 186 → 281 ms is run-to-run
-variance, not a regression.** That variance is worth knowing — measured on identical code this
-machine gives retrieval p50 anywhere from 186 to 281 ms, so a retrieval change has to beat about
-±50% before it means anything.
+Three trees: the JSON baseline, the two query-shape fixes, and the packed-blob storage with the
+split read contract. **Retrieval p50 varies run to run** — measured at 186 and 281 ms on identical
+JSON-baseline code, so a retrieval change has to clear roughly ±50% to mean anything. The final
+column is two samples that agreed (100 and 103 ms), which clears it.
 
 Numbers from one machine, one corpus, one embedding dimension. They are recorded because the
 *ratios* are the useful part and those are stable; the absolute milliseconds are not portable.
 
-### Similarity search is not the bottleneck
+### Similarity search is not the bottleneck — but that does not close the extension question
 
-**Cosine is 25 ms of a 186 ms query — about 13%.** The remaining 87% is reading rows, parsing
-JSON vectors component by component, and joining `chunk_manifest` and `file_manifest` to locate
-candidates, almost all of which are then discarded.
+**Cosine is about 15 ms of a 100 ms query.** It was 25 ms of 186 ms before. Both times the
+arithmetic is a small minority of the cost, and the majority is getting the vectors into memory
+at all: reading 24,000 rows and decoding them is ~90 ms of the ~100.
 
-An approximate nearest-neighbour index can only attack the 25 ms. That is the whole of what it
-would buy, and it costs per-platform native binaries and an availability matrix
-([Risks](#risks)) to buy it. **The stored representation and the read shape are the real
-targets**, and they are addressed in the two commits following the one that took these numbers.
+**A tempting inference is available here, and it is wrong.** "The arithmetic is only 15%, so a
+native nearest-neighbour index can only win 15%" assumes the read is unavoidable. It is not — an
+extension like `sqlite-vec` ranks *inside the database*, so a k-NN query never materialises the
+other 23,995 vectors in the first place. What such a backend could attack is therefore closer to
+the whole 100 ms than to the 15.
 
+So the measurement **reframes** the question rather than settling it:
+
+- It rules out the reason to adopt one that seemed obvious — that brute-force scoring is slow.
+  It is not; 24,000 cosine similarities cost 15 ms.
+- It leaves a real one standing: the read scales linearly with corpus size, and an indexed k-NN
+  read does not.
+- What it does not do is make the case, because 100 ms at 24,000 vectors is not a problem worth
+  per-platform native binaries and an availability matrix ([Risks](#risks)) to solve. The corpus
+  size where it becomes one has not been measured, and that measurement is the thing that would
+  decide it.
+
+The decision therefore stands unchanged, on narrower and better-understood grounds than before.
 ### Discovering there is no work costs more than doing all of it
 
 A pass that embeds nothing took **104 seconds**; indexing the whole corpus from scratch took
@@ -192,6 +204,13 @@ file: 731 ms, and the pass with nothing to do drops to 3.4 s. The companion fix 
 `NOT IN` over one bound parameter per scanned file with an indexed temp table, for the same
 reason — SQLite rescans a long parameter list per row rather than building a lookup for it.
 
+**And the read got cheaper too.** Vectors moved from JSON text to packed little-endian `float32`
+(schema 3): a 64-dimension vector is 256 bytes rather than ~700-800 bytes of text that has to be
+parsed one component at a time. Retrieval also stopped joining `chunk_manifest` and
+`file_manifest` for candidates it was about to discard — locations are resolved after ranking,
+for the handful of chunks that survive it. Together: read + decode 339 ms → 90 ms, retrieval p50
+into the 100 ms range.
+
 This was invisible at the size the rest of the suite works at, where folders hold three files.
 It is the argument for having a benchmark at all.
 
@@ -199,13 +218,16 @@ It is the argument for having a benchmark at all.
 
 | Path | Risk |
 |---|---|
-| Plain SQLite | **Not linear ranking** — measured at 13% of a query over 24,000 vectors. The cost is reading and parsing stored vectors and joining to locate them, which grows the same way and is not what an ANN index addresses |
+| Plain SQLite | **Not linear ranking** — measured at ~15% of a query over 24,000 vectors. The cost is reading and decoding every stored vector, which does scale with the corpus and *is* what an indexed k-NN read avoids. At this size it is 90 ms; the size at which it matters has not been measured |
 | Native extension | Per-platform binaries; availability becomes a matrix, and "unavailable" must be detected honestly rather than guessed |
 | Any service-backed store | Contradicts the product; two stores to keep consistent |
 | Any hosted store | Sends folder contents off the machine |
 
 ## What would change the decision
 
+- A corpus size at which the linear read becomes a problem. That is the open number: the read
+  scales with corpus size and an indexed k-NN read does not, but at 24,000 vectors it is 90 ms,
+  which does not justify per-platform native binaries. Nobody has measured where it would.
 - A measured query latency that the embedding call no longer dominates — and, now that the
   breakdown exists, one where the similarity arithmetic is a large enough share of it to be
   worth attacking. At 13% it is not.

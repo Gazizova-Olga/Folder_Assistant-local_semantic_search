@@ -161,6 +161,19 @@ public sealed class CosineRetrievalQueryTests
 	private static StoredChunkVector Stored(String chunkId, Single[] vector)
 		=> new(chunkId, $"{chunkId}.md", 0, 0, 1, vector);
 
+	/// <summary>
+	/// What the reader used to return in one call: a vector and its location together. Kept as a
+	/// test-side shape so these tests still read as "here is a stored chunk", while the production
+	/// contract splits the two.
+	/// </summary>
+	private sealed record StoredChunkVector(
+		String ChunkId,
+		String FilePath,
+		Int32 ChunkIndex,
+		Int32 TokenStart,
+		Int32 TokenEnd,
+		IReadOnlyList<Single> Vector);
+
 	private sealed class StubVectorizer(Single[] vector, String modelVersionId = "m1") : IVectorizer
 	{
 		public List<EmbeddingKind> Kinds { get; } = [];
@@ -185,12 +198,24 @@ public sealed class CosineRetrievalQueryTests
 	{
 		public List<String> RequestedModelVersions { get; } = [];
 
-		public IReadOnlyList<StoredChunkVector> ReadByModelVersion(String databasePath, String modelVersionId)
+		public IReadOnlyList<StoredVector> ReadVectorsByModelVersion(String databasePath, String modelVersionId)
 		{
 			this.RequestedModelVersions.Add(modelVersionId);
 
-			return modelVersionId == "m1" ? vectors : [];
+			return modelVersionId == "m1"
+				? [.. vectors.Select(v => new StoredVector(v.ChunkId, v.Vector))]
+				: [];
 		}
+
+		public IReadOnlyDictionary<String, ChunkLocation> ReadChunkLocations(
+			String databasePath,
+			IReadOnlyList<String> chunkIds)
+			=> vectors
+				.Where(v => chunkIds.Contains(v.ChunkId, StringComparer.Ordinal))
+				.ToDictionary(
+					v => v.ChunkId,
+					v => new ChunkLocation(v.ChunkId, v.FilePath, v.ChunkIndex, v.TokenStart, v.TokenEnd),
+					StringComparer.Ordinal);
 
 		public String? ReadFitArtifact(String databasePath, String modelVersionId) => null;
 	}

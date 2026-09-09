@@ -168,7 +168,7 @@ public sealed class ChangeDetectionTests
 		new FolderIndexingPipeline(LsaEmbeddingVectorizer.CreateForFitting("lsa-v1", 2))
 			.Run(folder.Path, databasePath, ConfigFor("lsa-v1"));
 
-		SqliteJsonVectorStoreReader reader = new();
+		SqliteBlobVectorStoreReader reader = new();
 		String firstArtifact = reader.ReadFitArtifact(databasePath, "lsa-v1")!;
 
 		// A new file changes the corpus. A refit would produce a different artifact; reuse must not.

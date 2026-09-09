@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | Retrieval |
 | Last updated | 2026-09-09 |
 
@@ -75,6 +75,21 @@ today, packed binary under a native extension later — without a retrieval stra
   non-zero value**, for the reason below.
 - A zero-magnitude vector scores zero rather than dividing by zero.
 
+
+
+### Ranking comes before locating
+
+Reading is split in two. Scoring needs a chunk id and a vector; the file path and token offsets
+are needed only for the chunks that actually rank.
+
+**Resolving locations for every candidate means joining the manifests across the whole corpus to
+return `TopK` rows** — metadata fetched for candidates that are about to be discarded. Measured,
+that join was most of the read: 339 ms with it, 90 ms without
+([SPEC-131](SPEC-131-database-options-analysis.md)).
+
+So `IVectorStoreReader` exposes `ReadVectorsByModelVersion` for scoring and `ReadChunkLocations`
+for the survivors, and the strategy resolves after it ranks. A chunk deleted between the two is
+dropped rather than returned with an invented path — a hit with no source is not a result.
 
 ### A score is not yet comparable across queries
 

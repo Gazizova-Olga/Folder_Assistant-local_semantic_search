@@ -86,16 +86,16 @@ public sealed class CorpusBenchmark
 		// Where does a query's time actually go? A native k-NN index only pays off if the similarity
 		// arithmetic dominates. If the cost is reading and parsing every stored vector, an approximate
 		// index fixes nothing and the stored representation is the real target.
-		IVectorStoreReader reader = new SqliteJsonVectorStoreReader();
+		IVectorStoreReader reader = new SqliteBlobVectorStoreReader();
 
 		watch.Restart();
-		IReadOnlyList<StoredChunkVector> candidates = reader.ReadByModelVersion(database.DatabasePath, modelVersionId);
+		IReadOnlyList<StoredVector> candidates = reader.ReadVectorsByModelVersion(database.DatabasePath, modelVersionId);
 		Int64 readMs = watch.ElapsedMilliseconds;
-		this.Log($"read + parse {candidates.Count} vectors (with joins): {readMs} ms");
+		this.Log($"read + parse {candidates.Count} vectors (scoring read, no joins): {readMs} ms");
 
 		// Warm read, so the number is the query and the parsing rather than the page cache.
 		watch.Restart();
-		candidates = reader.ReadByModelVersion(database.DatabasePath, modelVersionId);
+		candidates = reader.ReadVectorsByModelVersion(database.DatabasePath, modelVersionId);
 		Int64 warmReadMs = watch.ElapsedMilliseconds;
 		this.Log($"read + parse again (warm): {warmReadMs} ms");
 

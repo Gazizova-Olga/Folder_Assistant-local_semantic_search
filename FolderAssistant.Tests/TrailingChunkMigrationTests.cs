@@ -81,8 +81,8 @@ public sealed class TrailingChunkMigrationTests
 		using SqliteCommand insertVector = connection.CreateCommand();
 		insertVector.CommandText = """
 			INSERT INTO chunk_vector
-				(chunk_id, model_version_id, vector_json, vector_dimension, updated_utc)
-			VALUES ($chunkId, $modelVersionId, '[0.0]', 1, $now);
+				(chunk_id, model_version_id, vector, vector_dimension, updated_utc)
+			VALUES ($chunkId, $modelVersionId, X'00000000', 1, $now);
 			""";
 		insertVector.Parameters.AddWithValue("$chunkId", StaleChunkId);
 		insertVector.Parameters.AddWithValue("$modelVersionId", modelVersionId);

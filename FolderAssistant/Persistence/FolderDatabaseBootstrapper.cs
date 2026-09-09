@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace FolderAssistant.Persistence;
@@ -46,7 +47,7 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 	// Version 2 adds embedding_fit_artifact. An existing version 1 database picks the table up
 	// through the idempotent CREATE below; what changes here is only the value seeded into a
 	// database created from now on.
-	private const Int32 SchemaVersion = 2;
+	private const Int32 SchemaVersion = 3;
 
 	/// <summary>Ensures the metadata folder, the database and its schema exist. Idempotent.</summary>
 	public DatabaseBootstrapResult EnsureInitialized(String analyzedFolderPath, PersistenceConfig config)
@@ -131,7 +132,7 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 			CREATE TABLE IF NOT EXISTS chunk_vector (
 				chunk_id         TEXT NOT NULL,
 				model_version_id TEXT NOT NULL,
-				vector_json      TEXT NOT NULL,
+				vector           BLOB NOT NULL,
 				vector_dimension INTEGER NOT NULL,
 				updated_utc      TEXT NOT NULL,
 				PRIMARY KEY (chunk_id, model_version_id),
@@ -162,8 +163,120 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 
 		Boolean created = seed.ExecuteNonQuery() > 0;
 
+		MigrateJsonVectorsToBlobs(connection, transaction);
+
 		transaction.Commit();
 
 		return new DatabaseBootstrapResult(databasePath, created);
+	}
+
+	/// <summary>
+	/// Converts a schema-2 database, whose vectors are JSON text in a <c>vector_json</c> column, to
+	/// the schema-3 packed-blob layout.
+	///
+	/// <para>
+	/// The vectors are re-encoded rather than discarded. They are derived state and could be rebuilt
+	/// from the folder — but rebuilding means re-embedding every chunk, which for a real embedding
+	/// model is the single most expensive thing the system does. It would also strand the stored fit
+	/// artifact, which has to stay consistent with the vectors produced under it.
+	/// </para>
+	///
+	/// <para>
+	/// New tables arrive through the idempotent <c>CREATE TABLE IF NOT EXISTS</c> statements above.
+	/// A changed column *type* does not, which is why this exists at all.
+	/// </para>
+	/// </summary>
+	private static void MigrateJsonVectorsToBlobs(SqliteConnection connection, SqliteTransaction transaction)
+	{
+		if (!HasColumn(connection, transaction, "chunk_vector", "vector_json"))
+		{
+			return;
+		}
+
+		List<(String ChunkId, String ModelVersionId, Single[] Vector, Int32 Dimension, String UpdatedUtc)> rows = [];
+
+		using (SqliteCommand read = connection.CreateCommand())
+		{
+			read.Transaction = transaction;
+			read.CommandText =
+				"SELECT chunk_id, model_version_id, vector_json, vector_dimension, updated_utc FROM chunk_vector;";
+
+			using SqliteDataReader reader = read.ExecuteReader();
+
+			while (reader.Read())
+			{
+				Single[] vector = JsonSerializer.Deserialize<Single[]>(reader.GetString(2)) ?? [];
+				rows.Add((reader.GetString(0), reader.GetString(1), vector, reader.GetInt32(3), reader.GetString(4)));
+			}
+		}
+
+		// SQLite cannot change a column's type in place, so the table is rebuilt. Inside the bootstrap
+		// transaction, deliberately: a half-migrated chunk_vector is indistinguishable from a corrupt
+		// one, and there would be no way to tell which had happened.
+		using (SqliteCommand rebuild = connection.CreateCommand())
+		{
+			rebuild.Transaction = transaction;
+			rebuild.CommandText = """
+				DROP TABLE chunk_vector;
+
+				CREATE TABLE chunk_vector (
+					chunk_id         TEXT NOT NULL,
+					model_version_id TEXT NOT NULL,
+					vector           BLOB NOT NULL,
+					vector_dimension INTEGER NOT NULL,
+					updated_utc      TEXT NOT NULL,
+					PRIMARY KEY (chunk_id, model_version_id),
+					FOREIGN KEY (chunk_id) REFERENCES chunk_manifest(chunk_id) ON DELETE CASCADE,
+					FOREIGN KEY (model_version_id) REFERENCES embedding_model_registry(model_version_id)
+				);
+
+				CREATE INDEX IF NOT EXISTS idx_chunk_vector_model ON chunk_vector(model_version_id);
+				""";
+			rebuild.ExecuteNonQuery();
+		}
+
+		using (SqliteCommand insert = connection.CreateCommand())
+		{
+			insert.Transaction = transaction;
+			insert.CommandText = """
+				INSERT INTO chunk_vector (chunk_id, model_version_id, vector, vector_dimension, updated_utc)
+				VALUES ($chunkId, $modelVersionId, $vector, $dimension, $updated);
+				""";
+
+			SqliteParameter chunkId = insert.Parameters.Add("$chunkId", SqliteType.Text);
+			SqliteParameter modelVersionId = insert.Parameters.Add("$modelVersionId", SqliteType.Text);
+			SqliteParameter vector = insert.Parameters.Add("$vector", SqliteType.Blob);
+			SqliteParameter dimension = insert.Parameters.Add("$dimension", SqliteType.Integer);
+			SqliteParameter updated = insert.Parameters.Add("$updated", SqliteType.Text);
+
+			foreach ((String id, String model, Single[] values, Int32 dim, String utc) in rows)
+			{
+				chunkId.Value = id;
+				modelVersionId.Value = model;
+				vector.Value = VectorBlob.Pack(values);
+				dimension.Value = dim;
+				updated.Value = utc;
+				insert.ExecuteNonQuery();
+			}
+		}
+
+		using SqliteCommand bump = connection.CreateCommand();
+		bump.Transaction = transaction;
+		bump.CommandText = $"UPDATE schema_version SET version = {SchemaVersion} WHERE id = 1;";
+		bump.ExecuteNonQuery();
+	}
+
+	private static Boolean HasColumn(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String table,
+		String column)
+	{
+		using SqliteCommand command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $column;";
+		command.Parameters.AddWithValue("$column", column);
+
+		return (Int64)(command.ExecuteScalar() ?? 0L) > 0;
 	}
 }

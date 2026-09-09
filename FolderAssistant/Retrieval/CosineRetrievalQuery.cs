@@ -20,7 +20,7 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 	private readonly IIndexState? _indexState;
 
 	public CosineRetrievalQuery(IVectorizer vectorizer, IIndexState? indexState = null)
-		: this(vectorizer, new SqliteJsonVectorStoreReader(), indexState)
+		: this(vectorizer, new SqliteBlobVectorStoreReader(), indexState)
 	{
 	}
 
@@ -57,12 +57,12 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 		// Scoped to the active model version. Vectors from a different model occupy a different space,
 		// so a similarity computed across them is a number with no meaning. A model version that was
 		// never indexed returns nothing rather than falling back to another model's vectors.
-		IReadOnlyList<StoredChunkVector> candidates =
-			this._vectorStoreReader.ReadByModelVersion(databasePath, descriptor.ModelVersionId);
+		IReadOnlyList<StoredVector> candidates =
+			this._vectorStoreReader.ReadVectorsByModelVersion(databasePath, descriptor.ModelVersionId);
 
-		List<RetrievalHit> hits = new(candidates.Count);
+		List<(String ChunkId, Double Score)> scored = new(candidates.Count);
 
-		foreach (StoredChunkVector candidate in candidates)
+		foreach (StoredVector candidate in candidates)
 		{
 			if (candidate.Vector.Count != queryVector.Count)
 			{
@@ -77,28 +77,52 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 
 			Double score = CosineSimilarity(queryVector, candidate.Vector);
 
-			if (score < options.MinScore)
+			if (score >= options.MinScore)
 			{
-				continue;
+				scored.Add((candidate.ChunkId, score));
 			}
-
-			hits.Add(new RetrievalHit(
-				candidate.ChunkId,
-				candidate.FilePath,
-				candidate.ChunkIndex,
-				candidate.TokenStart,
-				candidate.TokenEnd,
-				score));
 		}
 
 		// Ties broken by chunk id so the order is total and repeatable. Without it, two chunks scoring
 		// identically could swap places between runs, and a comparison against another backend would
 		// report a difference that is not one.
-		return hits
+		(String ChunkId, Double Score)[] ranked = [.. scored
 			.OrderByDescending(static hit => hit.Score)
 			.ThenBy(static hit => hit.ChunkId, StringComparer.Ordinal)
-			.Take(options.TopK)
-			.ToArray();
+			.Take(options.TopK)];
+
+		if (ranked.Length == 0)
+		{
+			return [];
+		}
+
+		// Locations are resolved only for what actually ranked. Joining the manifests for every
+		// candidate instead spends the whole read fetching file paths and token offsets for rows that
+		// are about to be discarded — see SPEC-131.
+		IReadOnlyDictionary<String, ChunkLocation> locations =
+			this._vectorStoreReader.ReadChunkLocations(databasePath, [.. ranked.Select(static hit => hit.ChunkId)]);
+
+		List<RetrievalHit> hits = new(ranked.Length);
+
+		foreach ((String chunkId, Double score) in ranked)
+		{
+			if (!locations.TryGetValue(chunkId, out ChunkLocation? location))
+			{
+				// The chunk was deleted between scoring and resolving. Dropping it is right: a hit
+				// with no source is not a result, and the alternative is inventing a path.
+				continue;
+			}
+
+			hits.Add(new RetrievalHit(
+				chunkId,
+				location.FilePath,
+				location.ChunkIndex,
+				location.TokenStart,
+				location.TokenEnd,
+				score));
+		}
+
+		return hits;
 	}
 
 	/// <summary>

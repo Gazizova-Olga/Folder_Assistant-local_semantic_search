@@ -68,7 +68,7 @@ public sealed class FolderDatabaseBootstrapperTests
 		BootstrapIn(folder.Path);
 
 		ReadScalar(result.DatabasePath, "SELECT COUNT(*) FROM schema_version;").Should().Be(1L);
-		ReadScalar(result.DatabasePath, "SELECT version FROM schema_version;").Should().Be(2L);
+		ReadScalar(result.DatabasePath, "SELECT version FROM schema_version;").Should().Be(3L);
 	}
 
 	/// <summary>
@@ -142,9 +142,9 @@ public sealed class FolderDatabaseBootstrapperTests
 			VALUES ('m1', 'local', 'first', 3, '2026-01-01T00:00:00Z'),
 			       ('m2', 'local', 'second', 3, '2026-01-01T00:00:00Z');
 
-			INSERT INTO chunk_vector (chunk_id, model_version_id, vector_json, vector_dimension, updated_utc)
-			VALUES ('c1', 'm1', '[1,0,0]', 3, '2026-01-01T00:00:00Z'),
-			       ('c1', 'm2', '[0,1,0]', 3, '2026-01-01T00:00:00Z');
+			INSERT INTO chunk_vector (chunk_id, model_version_id, vector, vector_dimension, updated_utc)
+			VALUES ('c1', 'm1', X'0000803F0000000000000000', 3, '2026-01-01T00:00:00Z'),
+			       ('c1', 'm2', X'000000000000803F00000000', 3, '2026-01-01T00:00:00Z');
 			""");
 
 		Scalar(connection, "SELECT COUNT(*) FROM chunk_vector WHERE chunk_id = 'c1';").Should().Be(2L);
@@ -168,8 +168,8 @@ public sealed class FolderDatabaseBootstrapperTests
 				(model_version_id, provider_type, model_name, vector_dimension, activated_utc)
 			VALUES ('m1', 'local', 'first', 3, '2026-01-01T00:00:00Z');
 
-			INSERT INTO chunk_vector (chunk_id, model_version_id, vector_json, vector_dimension, updated_utc)
-			VALUES ('c1', 'm1', '[1,0,0]', 3, '2026-01-01T00:00:00Z');
+			INSERT INTO chunk_vector (chunk_id, model_version_id, vector, vector_dimension, updated_utc)
+			VALUES ('c1', 'm1', X'0000803F0000000000000000', 3, '2026-01-01T00:00:00Z');
 			""");
 
 		Execute(connection, "DELETE FROM file_manifest WHERE file_id = 'f1';");
