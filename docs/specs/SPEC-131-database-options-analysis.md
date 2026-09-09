@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Decided for now, open to evidence |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-09 |
 
@@ -149,15 +149,22 @@ The brute-force scan exists partly to be the thing candidates are measured again
 what it actually costs. Taken with `CorpusBenchmark` over a generated corpus of 4,000 files and
 24,000 vectors at 64 dimensions, vectors stored as JSON text.
 
-| stage | measured |
-|---|---|
-| scan 4,000 files | 432 ms |
-| index cold — 24,000 vectors embedded | 4.7 s |
-| manifest read (is this file already vectorised?) | **97,324 ms** |
-| re-index pass with nothing to do | **104.3 s** |
-| read + parse 24,000 vectors, with location joins | 339 ms |
-| **cosine over 24,000 in-memory vectors** | **25 ms** |
-| retrieval p50 | 186 ms |
+| stage | before | after |
+|---|---|---|
+| scan 4,000 files | 432 ms | 593 ms |
+| index cold — 24,000 vectors embedded | 4.7 s | 5.8 s |
+| manifest read (is this file already vectorised?) | **97,324 ms** | **731 ms** |
+| re-index pass with nothing to do | **104.3 s** | **3.4 s** |
+| read + parse 24,000 vectors, with location joins | 339 ms | 329 ms |
+| **cosine over 24,000 in-memory vectors** | **25 ms** | **24 ms** |
+| retrieval p50 | 186 ms | 281 ms |
+
+*Before* is the JSON-vector baseline with the correlated-`EXISTS` manifest read; *after* is with
+the two query-shape fixes. Nothing between them touches the read or the scoring path, so the
+last three rows are unchanged work: **the retrieval p50 moving 186 → 281 ms is run-to-run
+variance, not a regression.** That variance is worth knowing — measured on identical code this
+machine gives retrieval p50 anywhere from 186 to 281 ms, so a retrieval change has to beat about
+±50% before it means anything.
 
 Numbers from one machine, one corpus, one embedding dimension. They are recorded because the
 *ratios* are the useful part and those are stable; the absolute milliseconds are not portable.
@@ -175,12 +182,18 @@ targets**, and they are addressed in the two commits following the one that took
 
 ### Discovering there is no work costs more than doing all of it
 
-A pass that embeds nothing takes **104 seconds**; indexing the whole corpus from scratch takes
+A pass that embeds nothing took **104 seconds**; indexing the whole corpus from scratch took
 **4.7**. Twenty-two times more expensive to conclude that nothing changed than to redo
 everything — essentially all of it in the manifest read, which asks "does this file already have
 vectors for the active model?" once per file with a correlated subquery.
 
-This is invisible at the size the rest of the suite works at, where folders hold three files.
+**Fixed.** The vector-bearing file set is now materialised once and joined, instead of asked per
+file: 731 ms, and the pass with nothing to do drops to 3.4 s. The companion fix replaced a
+`NOT IN` over one bound parameter per scanned file with an indexed temp table, for the same
+reason — SQLite rescans a long parameter list per row rather than building a lookup for it.
+
+This was invisible at the size the rest of the suite works at, where folders hold three files.
+It is the argument for having a benchmark at all.
 
 ## Risks
 

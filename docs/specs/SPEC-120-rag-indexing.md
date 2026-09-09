@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.8.0 |
+| Version | 0.9.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-09 |
 
@@ -194,10 +194,10 @@ what it had — breaks this without any test necessarily noticing.
 
 - **Reliability** — re-indexing an unchanged folder writes no new vectors and loses nothing.
 - **Performance** — **embedding** cost scales with what changed rather than with corpus size.
-  The cost of a *pass* does not, and measured, that dominates: a pass with nothing to do took
-  104 s against 4.7 s to index the same corpus from scratch, essentially all of it in the
-  manifest read. Recorded in [SPEC-131](SPEC-131-database-options-analysis.md); the NFR as it
-  stood promised something the system does not currently deliver.
+  The cost of a *pass* is dominated by working out what changed, which is why that query shape
+  is load-bearing: a pass with nothing to do took 104 s before the manifest read was
+  materialised rather than asked per file, and 3.4 s after. Measurements in
+  [SPEC-131](SPEC-131-database-options-analysis.md).
 - **Operability** — a pass reports scanned, indexed, unchanged and deleted counts, so "nothing
   happened" and "nothing needed to happen" are distinguishable.
 

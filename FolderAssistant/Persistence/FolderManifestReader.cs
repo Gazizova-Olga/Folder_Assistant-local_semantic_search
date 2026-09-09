@@ -31,17 +31,26 @@ internal sealed class SqliteFolderManifestReader : IFolderManifestReader
 		// The vector-existence check is per model version, not merely per file. A file whose content
 		// has not changed still needs embedding when the active model has never seen it — which is
 		// exactly the state after switching embedding implementation.
+		//
+		// The set of files that already have vectors is built ONCE and joined. Asking the question
+		// per file instead — with a correlated EXISTS — plans catastrophically: with no table
+		// statistics SQLite drives the inner query off the model-version index, so every outer file
+		// row walks every vector of that model before filtering by file id. That is O(files x
+		// vectors), and measured on this code it took 97 seconds for 4,000 files against 24,000
+		// vectors. Small folders hide it completely, because the plan only turns pathological once
+		// chunk_vector is large.
 		command.CommandText = """
 			SELECT
 				fm.file_id,
 				fm.file_hash,
-				EXISTS (
-					SELECT 1
-					FROM chunk_manifest cm
-					JOIN chunk_vector cv ON cv.chunk_id = cm.chunk_id AND cv.model_version_id = $modelVersionId
-					WHERE cm.file_id = fm.file_id
-				) AS has_vectors
-			FROM file_manifest fm;
+				CASE WHEN v.file_id IS NULL THEN 0 ELSE 1 END AS has_vectors
+			FROM file_manifest fm
+			LEFT JOIN (
+				SELECT DISTINCT cm.file_id AS file_id
+				FROM chunk_vector cv
+				JOIN chunk_manifest cm ON cm.chunk_id = cv.chunk_id
+				WHERE cv.model_version_id = $modelVersionId
+			) v ON v.file_id = fm.file_id;
 			""";
 		command.Parameters.AddWithValue("$modelVersionId", modelVersionId);
 

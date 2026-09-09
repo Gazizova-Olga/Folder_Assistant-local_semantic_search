@@ -163,34 +163,70 @@ internal sealed class FolderIndexRepository
 	/// scanner throws on a bad path rather than returning an empty result, which is what makes this
 	/// sound.
 	/// </para>
+	/// <para>
+	/// The surviving file ids go into an indexed temp table rather than a <c>NOT IN (...)</c>
+	/// parameter list. A folder of twelve thousand files would otherwise bind twelve thousand
+	/// parameters, and SQLite does not build a lookup structure for a long list of *parameters* the
+	/// way it does for literals — it rescans the list per row. Small test folders never expose it.
+	/// </para>
 	/// </summary>
 	private static Int32 DeleteRemovedFiles(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
 		IReadOnlyList<ScannedTextFile> files)
 	{
-		using SqliteCommand command = connection.CreateCommand();
-		command.Transaction = transaction;
-
 		if (files.Count == 0)
 		{
-			command.CommandText = "DELETE FROM file_manifest;";
+			using SqliteCommand deleteAll = connection.CreateCommand();
+			deleteAll.Transaction = transaction;
+			deleteAll.CommandText = "DELETE FROM file_manifest;";
 
-			return command.ExecuteNonQuery();
+			return deleteAll.ExecuteNonQuery();
 		}
 
-		String[] keepParameters = new String[files.Count];
+		PopulateScannedFileIds(connection, transaction, files);
 
-		for (Int32 i = 0; i < files.Count; i++)
-		{
-			keepParameters[i] = $"$keep{i}";
-			command.Parameters.AddWithValue(keepParameters[i], files[i].FileId);
-		}
-
-		command.CommandText =
-			$"DELETE FROM file_manifest WHERE file_id NOT IN ({String.Join(", ", keepParameters)});";
+		using SqliteCommand command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = """
+			DELETE FROM file_manifest
+			WHERE file_id NOT IN (SELECT file_id FROM scanned_file_id);
+			""";
 
 		return command.ExecuteNonQuery();
+	}
+
+	/// <summary>
+	/// Fills a temp table with the ids the current scan found. Recreated per call rather than
+	/// cleared: the table is scoped to the connection, and a stale row here would spare a file that
+	/// has actually been deleted.
+	/// </summary>
+	private static void PopulateScannedFileIds(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		IReadOnlyList<ScannedTextFile> files)
+	{
+		using (SqliteCommand create = connection.CreateCommand())
+		{
+			create.Transaction = transaction;
+			create.CommandText = """
+				DROP TABLE IF EXISTS temp.scanned_file_id;
+				CREATE TEMP TABLE scanned_file_id (file_id TEXT PRIMARY KEY);
+				""";
+			create.ExecuteNonQuery();
+		}
+
+		using SqliteCommand insert = connection.CreateCommand();
+		insert.Transaction = transaction;
+		insert.CommandText = "INSERT OR IGNORE INTO scanned_file_id (file_id) VALUES ($fileId);";
+
+		SqliteParameter fileId = insert.Parameters.Add("$fileId", SqliteType.Text);
+
+		foreach (ScannedTextFile file in files)
+		{
+			fileId.Value = file.FileId;
+			insert.ExecuteNonQuery();
+		}
 	}
 
 	private static void UpsertModel(
