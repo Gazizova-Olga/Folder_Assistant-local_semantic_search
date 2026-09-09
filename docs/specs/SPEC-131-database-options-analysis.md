@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Decided for now, open to evidence |
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Owner | Persistence |
-| Last updated | 2026-06-27 |
+| Last updated | 2026-09-09 |
 
 ## Purpose
 
@@ -143,18 +143,59 @@ Two things to watch:
   database. On a file-backed one it makes connections in a process share a cache, which
   turns contention into a failure the usual busy handling does not cover.
 
+## Measured baseline
+
+The brute-force scan exists partly to be the thing candidates are measured against, so here is
+what it actually costs. Taken with `CorpusBenchmark` over a generated corpus of 4,000 files and
+24,000 vectors at 64 dimensions, vectors stored as JSON text.
+
+| stage | measured |
+|---|---|
+| scan 4,000 files | 432 ms |
+| index cold — 24,000 vectors embedded | 4.7 s |
+| manifest read (is this file already vectorised?) | **97,324 ms** |
+| re-index pass with nothing to do | **104.3 s** |
+| read + parse 24,000 vectors, with location joins | 339 ms |
+| **cosine over 24,000 in-memory vectors** | **25 ms** |
+| retrieval p50 | 186 ms |
+
+Numbers from one machine, one corpus, one embedding dimension. They are recorded because the
+*ratios* are the useful part and those are stable; the absolute milliseconds are not portable.
+
+### Similarity search is not the bottleneck
+
+**Cosine is 25 ms of a 186 ms query — about 13%.** The remaining 87% is reading rows, parsing
+JSON vectors component by component, and joining `chunk_manifest` and `file_manifest` to locate
+candidates, almost all of which are then discarded.
+
+An approximate nearest-neighbour index can only attack the 25 ms. That is the whole of what it
+would buy, and it costs per-platform native binaries and an availability matrix
+([Risks](#risks)) to buy it. **The stored representation and the read shape are the real
+targets**, and they are addressed in the two commits following the one that took these numbers.
+
+### Discovering there is no work costs more than doing all of it
+
+A pass that embeds nothing takes **104 seconds**; indexing the whole corpus from scratch takes
+**4.7**. Twenty-two times more expensive to conclude that nothing changed than to redo
+everything — essentially all of it in the manifest read, which asks "does this file already have
+vectors for the active model?" once per file with a correlated subquery.
+
+This is invisible at the size the rest of the suite works at, where folders hold three files.
+
 ## Risks
 
 | Path | Risk |
 |---|---|
-| Plain SQLite | Linear ranking becomes the bottleneck at a corpus size not yet reached |
+| Plain SQLite | **Not linear ranking** — measured at 13% of a query over 24,000 vectors. The cost is reading and parsing stored vectors and joining to locate them, which grows the same way and is not what an ANN index addresses |
 | Native extension | Per-platform binaries; availability becomes a matrix, and "unavailable" must be detected honestly rather than guessed |
 | Any service-backed store | Contradicts the product; two stores to keep consistent |
 | Any hosted store | Sends folder contents off the machine |
 
 ## What would change the decision
 
-- A measured query latency that the embedding call no longer dominates.
+- A measured query latency that the embedding call no longer dominates — and, now that the
+  breakdown exists, one where the similarity arithmetic is a large enough share of it to be
+  worth attacking. At 13% it is not.
 - A native extension whose platform coverage is known and whose unavailability can be
   detected reliably, beating the brute-force baseline on the same vectors and the same
   metric — including agreeing with it on ranking, up to ties.

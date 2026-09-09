@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-09 |
 
@@ -193,7 +193,11 @@ what it had — breaks this without any test necessarily noticing.
 ## Non-functional requirements
 
 - **Reliability** — re-indexing an unchanged folder writes no new vectors and loses nothing.
-- **Performance** — cost scales with what changed, not with corpus size, for the embedding stage.
+- **Performance** — **embedding** cost scales with what changed rather than with corpus size.
+  The cost of a *pass* does not, and measured, that dominates: a pass with nothing to do took
+  104 s against 4.7 s to index the same corpus from scratch, essentially all of it in the
+  manifest read. Recorded in [SPEC-131](SPEC-131-database-options-analysis.md); the NFR as it
+  stood promised something the system does not currently deliver.
 - **Operability** — a pass reports scanned, indexed, unchanged and deleted counts, so "nothing
   happened" and "nothing needed to happen" are distinguishable.
 
@@ -248,7 +252,10 @@ trust.
 - **Configuration** — defaults match this document, and the analyzed folder falls back to the
   working directory and always resolves to an absolute path.
 
-Not covered: performance. Nothing here measures throughput or latency.
+- **Scale (measured, not asserted)** — `CorpusBenchmark` reports stage timings over a generated
+  corpus large enough for query shape to matter. It is opt-in and asserts nothing: a benchmark
+  that fails a build on a timing threshold turns machine variance into a red suite. The numbers
+  it produced are in [SPEC-131](SPEC-131-database-options-analysis.md).
 
 ## Open questions
 

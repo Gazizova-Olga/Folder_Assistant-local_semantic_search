@@ -12,7 +12,7 @@ place, before and after.
 This file is the baseline. **The count is the contract**: a build reporting more than this has
 introduced something new, and it gets triaged rather than added to the pile.
 
-- **Baseline: 8 warnings.** Verified 2026-09-09, .NET 10 SDK.
+- **Baseline: 9 warnings.** Verified 2026-09-09, .NET 10 SDK.
 - Recheck with:
 
   ```bash
@@ -25,7 +25,7 @@ introduced something new, and it gets triaged rather than added to the pile.
   still, because a project that did not recompile reports nothing. Know which build you are
   reading before treating a number as a regression.
 
-## Deliberate — do not "fix" these (3)
+## Deliberate — do not "fix" these (4)
 
 These fire on code that is correct as written. Changing the code to satisfy the analyzer would
 break it. They are the reason this file exists rather than a blanket `TreatWarningsAsErrors`.
@@ -35,6 +35,7 @@ break it. They are the reason this file exists rather than a blanket `TreatWarni
 | `S1215` (`GC.Collect`) | `PersistenceConcurrencyTests.cs(54)` | The collect is what makes the test detect anything. The fault it guards against is a database handle finalized while another connection is inside `sqlite3_prepare_v2`, so collections have to land *during* the concurrent work. Removing it leaves the same 60 iterations passing even with the shared cache restored — the test silently stops guarding. |
 | `xUnit1031` (blocking wait) | `PersistenceConcurrencyTests.cs(47)` | Same test. It deliberately drives eight threads at one bootstrap and joins them; that is the scenario under test, not an accident. |
 | `S1144` (unused constructor) | `Program.cs(107)` | False positive. `StartupDependencies`' constructor is invoked by the container, and **that invocation is the mechanism** ordering the database bootstrap before the server listens (`SPEC-130`). It looks unused precisely because nothing calls it explicitly. |
+| `S2699` (test without assertions) | `CorpusBenchmark.cs(34)` | It is a measuring instrument, not a test, and it says so. It asserts nothing on purpose: a benchmark that fails a build on a timing threshold turns machine variance into a red suite. It lives under `[Fact]` because that is the runner already present, and it returns immediately unless an environment variable asks for it. |
 
 ## Noise — worth clearing, no behaviour at stake (5)
 
