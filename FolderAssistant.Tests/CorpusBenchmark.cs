@@ -63,6 +63,31 @@ public sealed class CorpusBenchmark
 		IReadOnlyList<ScannedTextFile> scanned = new LocalTextFileScanner().Scan(corpus, config.MaxTextFileSizeBytes);
 		this.Log($"scan: {scanned.Count} files in {watch.ElapsedMilliseconds} ms");
 
+		// Retained, not churned: a full collect first, so what is left is what the stage is still
+		// holding on to. Retention is what drives working set; garbage the collector can reclaim does
+		// not, however much of it there is.
+		this.Log($"  retained after scan (file contents): {LiveBytes() / 1024 / 1024} MB");
+
+		// The tokenise-and-chunk stage, reproduced here rather than measured inside the pipeline,
+		// where its allocation is indistinguishable from the embedding's and the write's.
+		SimpleTokenizer tokenizer = new();
+		TextChunker chunker = new();
+		Dictionary<String, IReadOnlyList<TextChunk>> chunksByFile = new(StringComparer.OrdinalIgnoreCase);
+		Int64 allocatedBeforeChunking = GC.GetTotalAllocatedBytes();
+
+		foreach (ScannedTextFile file in scanned)
+		{
+			TokenizedText tokens = tokenizer.Tokenize(file.Content);
+
+			chunksByFile[file.FileId] = chunker.Chunk(
+				file.FileId, tokens, config.ChunkSizeTokens, config.ChunkOverlapTokens);
+		}
+
+		Int64 chunkingChurn = (GC.GetTotalAllocatedBytes() - allocatedBeforeChunking) / 1024 / 1024;
+		this.Log($"  retained after chunking (+ chunk contents): {LiveBytes() / 1024 / 1024} MB");
+		this.Log($"  allocated while chunking (churn): {chunkingChurn} MB");
+		chunksByFile.Clear();
+
 		FolderIndexingPipeline pipeline = new(vectorizer);
 
 		watch.Restart();
@@ -132,6 +157,9 @@ public sealed class CorpusBenchmark
 		this.Log($"database size: {new FileInfo(database.DatabasePath).Length / 1024 / 1024} MB");
 		this.Log($"peak working set: {Process.GetCurrentProcess().PeakWorkingSet64 / 1024 / 1024} MB");
 	}
+
+	/// <summary>Live bytes after a full collect — what the run is holding, not what it has churned.</summary>
+	private static Int64 LiveBytes() => GC.GetTotalMemory(forceFullCollection: true);
 
 	/// <summary>
 	/// Prose-shaped filler with a stable per-file vocabulary. The content only has to chunk and embed

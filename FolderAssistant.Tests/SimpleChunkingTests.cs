@@ -15,7 +15,7 @@ public sealed class SimpleChunkingTests
 	{
 		TokenizedText tokenized = new SimpleTokenizer().Tokenize("alpha  beta\tgamma\r\ndelta");
 
-		tokenized.Tokens.Should().Equal("alpha", "beta", "gamma", "delta");
+		tokenized.ToStrings().Should().Equal("alpha", "beta", "gamma", "delta");
 	}
 
 	[Theory]
@@ -134,8 +134,8 @@ public sealed class SimpleChunkingTests
 		TextChunker chunker = new();
 		IReadOnlyList<String> tokens = Tokens(4);
 
-		String a = chunker.Chunk("file-a", tokens, 4, 0).Single().ChunkId;
-		String b = chunker.Chunk("file-b", tokens, 4, 0).Single().ChunkId;
+		String a = chunker.Chunk("file-a", TokenizedText.FromTokens(tokens), 4, 0).Single().ChunkId;
+		String b = chunker.Chunk("file-b", TokenizedText.FromTokens(tokens), 4, 0).Single().ChunkId;
 
 		a.Should().NotBe(b);
 	}
@@ -165,9 +165,59 @@ public sealed class SimpleChunkingTests
 		chunk.Should().Throw<ArgumentOutOfRangeException>();
 	}
 
+	/// <summary>
+	/// Chunk text is single-space-joined rather than sliced verbatim out of the source, and these
+	/// ids pin that. They are not arbitrary: a chunk id is the hash of the chunk's text, so joining
+	/// tokens even slightly differently renames every chunk in every folder already indexed — and
+	/// the next pass would then delete the stored chunks while the unchanged-file check declined to
+	/// re-embed their replacements, emptying the index without failing.
+	///
+	/// <para>
+	/// The input carries a double space, a tab and a CRLF on purpose: those are the separators a
+	/// verbatim slice would preserve and a normalised join collapses.
+	/// </para>
+	/// </summary>
+	[Fact]
+	public void Chunk_Ids_Are_Unchanged_By_How_The_Tokens_Are_Held()
+	{
+		const String prose = "The quick brown fox jumps over the lazy dog.\tSecond  line here\r\nthird line of prose";
+
+		IReadOnlyList<TextChunk> chunks =
+			new TextChunker().Chunk("golden-file", new SimpleTokenizer().Tokenize(prose), 6, 2);
+
+		chunks.Select(chunk => chunk.Content).Should().Equal(
+			"The quick brown fox jumps over",
+			"jumps over the lazy dog. Second",
+			"dog. Second line here third line",
+			"third line of prose");
+
+		chunks.Select(chunk => chunk.ChunkId).Should().Equal(
+			"505dab920c7165bd74a9422bc29fd12e1d90a10d884a9bc9df156533b6d70017",
+			"f610d565ac7f835da3b8f52dc447286a76e4f828f6dc776efcf3721d574e0d76",
+			"2f5df5d73b64f0742aee9663956142d3b93626233335739a9ed1f901a362f7c1",
+			"1f32a8a09be420b8c5e65dc24601b2cf281e776c0dc39e656297bc59f06db3ba");
+	}
+
+	/// <summary>
+	/// The tokenizer's own output has to agree with the layout <see cref="TokenizedText.FromTokens"/>
+	/// assumes, or every test built on that helper is exercising a shape the index never produces.
+	/// </summary>
+	[Fact]
+	public void Tokenizing_And_Laying_Tokens_Back_Out_Agree_On_Chunk_Text()
+	{
+		const String prose = "one two three four five six seven";
+
+		IReadOnlyList<TextChunk> fromSource = new TextChunker()
+			.Chunk("file-1", new SimpleTokenizer().Tokenize(prose), 3, 1);
+		IReadOnlyList<TextChunk> fromTokens = new TextChunker()
+			.Chunk("file-1", TokenizedText.FromTokens(prose.Split(' ')), 3, 1);
+
+		fromTokens.Select(chunk => chunk.ChunkId).Should().Equal(fromSource.Select(chunk => chunk.ChunkId));
+	}
+
 	private static IReadOnlyList<String> Tokens(Int32 count)
 		=> Enumerable.Range(0, count).Select(i => $"t{i}").ToArray();
 
 	private static IReadOnlyList<TextChunk> Chunk(IReadOnlyList<String> tokens, Int32 chunkSize, Int32 overlap)
-		=> new TextChunker().Chunk("file-1", tokens, chunkSize, overlap);
+		=> new TextChunker().Chunk("file-1", TokenizedText.FromTokens(tokens), chunkSize, overlap);
 }

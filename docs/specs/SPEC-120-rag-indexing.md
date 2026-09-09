@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.9.0 |
+| Version | 0.10.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-09 |
 
@@ -47,6 +47,18 @@ land there — seven tokens at size 4 and overlap 2 would otherwise end with a c
 the seventh token. Emitting it costs an embedding and lets the same text come back twice in one
 result set. Only the final window can be redundant this way, because windows advance
 monotonically, and dropping it never drops a token.
+
+**A token is a range into the file's text, not a string cut out of it.** Chunk text is assembled
+from those ranges. Tokens exist only to be joined back into chunk text, out of the very string
+they came from, so materialising each one costs an object per token — tens of millions of them
+over a corpus — for no information that the offsets do not already carry.
+
+**Chunk text is single-space-joined, and that normalisation is fixed.** It is not a verbatim
+slice of the source: runs of whitespace, tabs and line breaks between tokens all become one
+space. The joined text feeds the chunk hash and so the content-addressed chunk id, which means
+joining differently renames every chunk in every folder already indexed — and the next pass would
+then delete the stored chunks while the unchanged-file check declined to re-embed their
+replacements, emptying the index without failing.
 
 ## Delta handling
 
@@ -198,6 +210,15 @@ what it had — breaks this without any test necessarily noticing.
   is load-bearing: a pass with nothing to do took 104 s before the manifest read was
   materialised rather than asked per file, and 3.4 s after. Measurements in
   [SPEC-131](SPEC-131-database-options-analysis.md).
+- **Memory** — measured with `CorpusBenchmark` over a generated corpus of 12,000 files
+  (208 MB of text). Holding tokens as ranges rather than strings cut the allocation of the
+  tokenise-and-chunk stage from **4,281 MB to 906 MB**, and 4,000 files show the same ratio
+  (1,427 MB to 302 MB). **Peak working set did not move** — 1,061 MB against 1,067 MB — so the
+  churn was garbage the collector was already absorbing, and reducing it is not on its own a
+  reduction in footprint. What the stage *retains* is untouched at **460 MB**, and that is the
+  measured constraint on how large a folder can be indexed: the scan holds every file's text and
+  chunking adds every chunk's text on top, both for the whole corpus at once, while nothing that
+  carries text is persisted at all.
 - **Operability** — a pass reports scanned, indexed, unchanged and deleted counts, so "nothing
   happened" and "nothing needed to happen" are distinguishable.
 

@@ -4,8 +4,55 @@ using System.Text.RegularExpressions;
 
 namespace FolderAssistant.Indexing;
 
-/// <summary>The tokens a file was split into.</summary>
-internal sealed record TokenizedText(IReadOnlyList<String> Tokens);
+/// <summary>A token as a range into the text it came from, rather than a string cut out of it.</summary>
+internal readonly record struct TokenSpan(Int32 Start, Int32 Length);
+
+/// <summary>
+/// The tokens a file was split into, held as offsets into the file's own text.
+///
+/// <para>
+/// Cutting each token out as its own <see cref="String"/> is what this avoids, and the reason is
+/// scale rather than tidiness: a token is a handful of characters, but an object each, and a corpus
+/// runs to tens of millions of them. They existed only to be joined back together into chunk text,
+/// out of the very string they were cut from.
+/// </para>
+/// </summary>
+internal sealed record TokenizedText(String Source, IReadOnlyList<TokenSpan> Tokens)
+{
+	/// <summary>
+	/// Lays token strings out single-space-separated, which is exactly how <see cref="TextChunker"/>
+	/// reassembles chunk text. A test written against this drives the same code path the tokenizer
+	/// feeds, rather than a parallel one that could agree with the wrong thing.
+	/// </summary>
+	public static TokenizedText FromTokens(IReadOnlyList<String> tokens)
+	{
+		ArgumentNullException.ThrowIfNull(tokens);
+
+		List<TokenSpan> spans = new(tokens.Count);
+		Int32 offset = 0;
+
+		for (Int32 i = 0; i < tokens.Count; i++)
+		{
+			spans.Add(new TokenSpan(offset, tokens[i].Length));
+			offset += tokens[i].Length + 1; // the separating space
+		}
+
+		return new TokenizedText(String.Join(" ", tokens), spans);
+	}
+
+	/// <summary>Materialises the tokens as strings — for tests and diagnostics, never on the index path.</summary>
+	public IReadOnlyList<String> ToStrings()
+	{
+		String[] result = new String[this.Tokens.Count];
+
+		for (Int32 i = 0; i < this.Tokens.Count; i++)
+		{
+			result[i] = this.Source.Substring(this.Tokens[i].Start, this.Tokens[i].Length);
+		}
+
+		return result;
+	}
+}
 
 /// <summary>Splits text on whitespace. A token here is a run of non-space characters, nothing more.</summary>
 internal sealed partial class SimpleTokenizer
@@ -17,10 +64,19 @@ internal sealed partial class SimpleTokenizer
 	{
 		if (String.IsNullOrWhiteSpace(content))
 		{
-			return new TokenizedText([]);
+			return new TokenizedText(content ?? String.Empty, []);
 		}
 
-		return new TokenizedText(TokenPattern().Matches(content).Select(static match => match.Value).ToArray());
+		// EnumerateMatches hands back each match's bounds without constructing a Match to carry them.
+		// The pattern is the same one, so what counts as a token has not moved.
+		List<TokenSpan> tokens = [];
+
+		foreach (ValueMatch match in TokenPattern().EnumerateMatches(content))
+		{
+			tokens.Add(new TokenSpan(match.Index, match.Length));
+		}
+
+		return new TokenizedText(content, tokens);
 	}
 }
 
@@ -36,11 +92,11 @@ internal sealed class TextChunker
 {
 	public IReadOnlyList<TextChunk> Chunk(
 		String fileId,
-		IReadOnlyList<String> tokens,
+		TokenizedText tokenized,
 		Int32 chunkSizeTokens,
 		Int32 chunkOverlapTokens)
 	{
-		ArgumentNullException.ThrowIfNull(tokens);
+		ArgumentNullException.ThrowIfNull(tokenized);
 
 		if (chunkSizeTokens <= 0)
 		{
@@ -53,6 +109,8 @@ internal sealed class TextChunker
 				nameof(chunkOverlapTokens), "Chunk overlap must be at least zero and less than the chunk size.");
 		}
 
+		IReadOnlyList<TokenSpan> tokens = tokenized.Tokens;
+
 		if (tokens.Count == 0)
 		{
 			return [];
@@ -60,6 +118,7 @@ internal sealed class TextChunker
 
 		Int32 step = chunkSizeTokens - chunkOverlapTokens;
 		List<TextChunk> chunks = [];
+		StringBuilder builder = new();
 
 		for (Int32 start = 0, index = 0; start < tokens.Count; start += step, index++)
 		{
@@ -75,7 +134,24 @@ internal sealed class TextChunker
 				break;
 			}
 
-			String content = String.Join(" ", tokens.Skip(start).Take(endExclusive - start));
+			// Single-space-joined, character for character as before. The chunk text is normalised
+			// rather than a verbatim slice of the source, and it has to stay that way: it feeds the
+			// chunk hash, which feeds the content-addressed chunk id. Joining differently would give
+			// every chunk in every indexed folder a new id, and the next pass would delete the stored
+			// ones while the unchanged-file check declined to re-embed their replacements.
+			builder.Clear();
+
+			for (Int32 i = start; i < endExclusive; i++)
+			{
+				if (i > start)
+				{
+					builder.Append(' ');
+				}
+
+				builder.Append(tokenized.Source.AsSpan(tokens[i].Start, tokens[i].Length));
+			}
+
+			String content = builder.ToString();
 			String chunkHash = Sha256(content);
 
 			chunks.Add(new TextChunk(

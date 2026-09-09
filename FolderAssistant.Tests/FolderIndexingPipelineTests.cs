@@ -60,7 +60,7 @@ public sealed class FolderIndexingPipelineTests
 		IReadOnlyList<String> tokens = ["a", "b", "c", "d", "e", "f"];
 
 		IReadOnlyList<TextChunk> chunks = new TextChunker()
-			.Chunk("file-1", tokens, chunkSizeTokens: 4, chunkOverlapTokens: 1);
+			.Chunk("file-1", TokenizedText.FromTokens(tokens), chunkSizeTokens: 4, chunkOverlapTokens: 1);
 
 		chunks[0].Content.Should().Be("a b c d");
 		chunks[1].TokenStart.Should().Be(3, "a step of size minus overlap re-reads the last token");

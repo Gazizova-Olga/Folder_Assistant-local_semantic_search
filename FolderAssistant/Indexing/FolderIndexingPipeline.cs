@@ -75,7 +75,7 @@ internal sealed class FolderIndexingPipeline
 			TokenizedText tokens = this._tokenizer.Tokenize(file.Content);
 
 			chunksByFile[file.FileId] = this._chunker.Chunk(
-				file.FileId, tokens.Tokens, config.ChunkSizeTokens, config.ChunkOverlapTokens);
+				file.FileId, tokens, config.ChunkSizeTokens, config.ChunkOverlapTokens);
 		}
 
 		ModelDescriptor descriptor = this.PrepareVectorizer(
