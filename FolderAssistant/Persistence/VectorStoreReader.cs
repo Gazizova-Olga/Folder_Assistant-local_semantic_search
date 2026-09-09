@@ -38,6 +38,19 @@ internal interface IVectorStoreReader
 	/// <summary>Every vector of a model version, for scoring. No manifest joins.</summary>
 	IReadOnlyList<StoredVector> ReadVectorsByModelVersion(String databasePath, String modelVersionId);
 
+	/// <summary>
+	/// The files that already have at least one vector under this model version.
+	///
+	/// <para>
+	/// This has to come from the store rather than from a query the manifest reader writes for itself,
+	/// because only the store knows where its vectors live. A backend that keeps them in a virtual
+	/// table leaves <c>chunk_vector</c> empty, so a hardcoded lookup there would report that no file
+	/// has ever been embedded — and every file would then be re-embedded on every run, silently, with
+	/// the index still looking entirely correct.
+	/// </para>
+	/// </summary>
+	IReadOnlySet<String> ReadFileIdsWithVectors(String databasePath, String modelVersionId);
+
 	/// <summary>Resolves source locations for chunks that have already been ranked.</summary>
 	IReadOnlyDictionary<String, ChunkLocation> ReadChunkLocations(
 		String databasePath,
@@ -53,6 +66,30 @@ internal interface IVectorStoreReader
 /// <summary>Reads vectors stored as packed <c>float32</c> blobs in <c>chunk_vector.vector</c>.</summary>
 internal sealed class SqliteBlobVectorStoreReader : IVectorStoreReader
 {
+	public IReadOnlySet<String> ReadFileIdsWithVectors(String databasePath, String modelVersionId)
+	{
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
+
+		using SqliteCommand command = connection.CreateCommand();
+		command.CommandText = """"""
+			SELECT DISTINCT cm.file_id
+			FROM chunk_vector cv
+			JOIN chunk_manifest cm ON cm.chunk_id = cv.chunk_id
+			WHERE cv.model_version_id = $modelVersionId;
+			"""""";
+		command.Parameters.AddWithValue("$modelVersionId", modelVersionId);
+
+		HashSet<String> fileIds = new(StringComparer.OrdinalIgnoreCase);
+
+		using SqliteDataReader reader = command.ExecuteReader();
+		while (reader.Read())
+		{
+			fileIds.Add(reader.GetString(0));
+		}
+
+		return fileIds;
+	}
+
 	public IReadOnlyList<StoredVector> ReadVectorsByModelVersion(String databasePath, String modelVersionId)
 	{
 		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);

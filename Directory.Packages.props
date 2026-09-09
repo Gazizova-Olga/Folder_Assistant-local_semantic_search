@@ -26,6 +26,11 @@
 			Microsoft.Data.Sqlite ships a fixed transitive pin of its own.
 		-->
 		<PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+		<!--
+			Native SQLite vector extension, evaluated as an alternative vector backend (SPEC-131). Alpha, and
+			it ships per-RID native binaries, so it is a candidate under measurement rather than a default.
+		-->
+		<PackageVersion Include="sqlite-vec" Version="0.1.7-alpha.2.1" />
 	</ItemGroup>
 
 	<ItemGroup Label="Tests">

@@ -17,6 +17,7 @@
 		<PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
 		<PackageReference Include="Microsoft.Data.Sqlite" />
 		<PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+		<PackageReference Include="sqlite-vec" />
 		<PackageReference Include="XUnit" />
 		<PackageReference Include="XUnit.Runner.VisualStudio" />
 		<PackageReference Include="FluentAssertions" />

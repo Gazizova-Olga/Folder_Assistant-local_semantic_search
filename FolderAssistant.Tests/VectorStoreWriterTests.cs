@@ -106,6 +106,16 @@ public sealed class VectorStoreWriterTests
 	{
 		public List<WriteCall> Calls { get; } = [];
 
+		public Boolean RequiresVectorExtension => false;
+
+		public void EnsureSchema(
+			SqliteConnection connection,
+			SqliteTransaction transaction,
+			String modelVersionId,
+			Int32 vectorDimension)
+		{
+		}
+
 		public void UpsertVector(
 			SqliteConnection connection,
 			SqliteTransaction transaction,
@@ -125,6 +135,16 @@ public sealed class VectorStoreWriterTests
 
 	private sealed class ThrowingVectorStoreWriter : IVectorStoreWriter
 	{
+		public Boolean RequiresVectorExtension => false;
+
+		public void EnsureSchema(
+			SqliteConnection connection,
+			SqliteTransaction transaction,
+			String modelVersionId,
+			Int32 vectorDimension)
+		{
+		}
+
 		public void UpsertVector(
 			SqliteConnection connection,
 			SqliteTransaction transaction,

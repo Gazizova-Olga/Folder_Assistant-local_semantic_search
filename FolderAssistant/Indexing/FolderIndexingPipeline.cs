@@ -26,7 +26,7 @@ internal sealed class FolderIndexingPipeline
 	private readonly LocalTextFileScanner _scanner = new();
 	private readonly SimpleTokenizer _tokenizer = new();
 	private readonly TextChunker _chunker = new();
-	private readonly FolderIndexRepository _repository = new();
+	private readonly FolderIndexRepository _repository;
 	private readonly IVectorizer? _vectorizer;
 	private readonly IFolderManifestReader _manifestReader;
 	private readonly IVectorStoreReader _vectorStoreReader;
@@ -38,21 +38,41 @@ internal sealed class FolderIndexingPipeline
 
 	/// <summary>Composition-time override; with none, the programmable baseline is built from config.</summary>
 	internal FolderIndexingPipeline(IVectorizer? vectorizer)
-		: this(vectorizer, new SqliteFolderManifestReader(), new SqliteBlobVectorStoreReader())
+		: this(vectorizer, new SqliteBlobVectorStoreWriter(), new SqliteBlobVectorStoreReader())
+	{
+	}
+
+	/// <summary>
+	/// The vector store is supplied as a matched writer/reader pair, and they have to agree.
+	///
+	/// <para>
+	/// A reader looking in <c>chunk_vector</c> while the writer fills a <c>vec0</c> virtual table would
+	/// report that nothing has ever been embedded, so every file would be re-embedded on every run —
+	/// with the index still looking correct from the outside.
+	/// </para>
+	/// </summary>
+	internal FolderIndexingPipeline(
+		IVectorizer? vectorizer,
+		IVectorStoreWriter vectorStoreWriter,
+		IVectorStoreReader vectorStoreReader)
+		: this(vectorizer, new SqliteFolderManifestReader(vectorStoreReader), vectorStoreWriter, vectorStoreReader)
 	{
 	}
 
 	internal FolderIndexingPipeline(
 		IVectorizer? vectorizer,
 		IFolderManifestReader manifestReader,
+		IVectorStoreWriter vectorStoreWriter,
 		IVectorStoreReader vectorStoreReader)
 	{
 		ArgumentNullException.ThrowIfNull(manifestReader);
+		ArgumentNullException.ThrowIfNull(vectorStoreWriter);
 		ArgumentNullException.ThrowIfNull(vectorStoreReader);
 
 		this._vectorizer = vectorizer;
 		this._manifestReader = manifestReader;
 		this._vectorStoreReader = vectorStoreReader;
+		this._repository = new FolderIndexRepository(vectorStoreWriter);
 	}
 
 	/// <summary>

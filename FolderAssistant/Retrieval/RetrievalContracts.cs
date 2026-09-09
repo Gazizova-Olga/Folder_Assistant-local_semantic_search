@@ -1,3 +1,5 @@
+using FolderAssistant.Indexing;
+
 namespace FolderAssistant.Retrieval;
 
 /// <summary>One chunk that matched, and where to find its text.</summary>
@@ -44,4 +46,48 @@ internal sealed class IndexNotReadyException : InvalidOperationException
 internal interface IRetrievalQuery
 {
 	IReadOnlyList<RetrievalHit> Search(String databasePath, String queryText, RetrievalOptions options);
+}
+
+/// <summary>
+/// The index-state check every retrieval implementation owes its caller.
+///
+/// <para>
+/// Shared rather than reimplemented per backend. An implementation that quietly forgot it would
+/// answer from a half-built index, and results from a half-built index are indistinguishable from
+/// genuinely poor ones — the failure would look like bad relevance, not like a missing check.
+/// </para>
+///
+/// <para>
+/// The check is skipped when no state was supplied, which is how a test or a caller that builds its
+/// own store on the spot searches without standing up an indexing pass to satisfy.
+/// </para>
+/// </summary>
+internal static class RetrievalGuard
+{
+	/// <summary>
+	/// A background refresh leaves the index queryable — results are merely stale — so only Building
+	/// and Failed block a query.
+	/// </summary>
+	public static void EnsureQueryable(IIndexState? indexState)
+	{
+		if (indexState is null)
+		{
+			return;
+		}
+
+		switch (indexState.Status)
+		{
+			case IndexStatus.Building:
+				throw new IndexNotReadyException(
+					"The folder index is still building; no vectors are queryable yet.");
+
+			case IndexStatus.Failed:
+				throw new IndexNotReadyException(
+					$"The folder index failed to build: {indexState.Error?.Message}",
+					indexState.Error);
+
+			default:
+				return;
+		}
+	}
 }

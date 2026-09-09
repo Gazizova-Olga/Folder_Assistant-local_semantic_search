@@ -108,6 +108,16 @@ public sealed class VectorDeletionTests
 
 		public List<String> Deleted { get; } = [];
 
+		public Boolean RequiresVectorExtension => false;
+
+		public void EnsureSchema(
+			SqliteConnection connection,
+			SqliteTransaction transaction,
+			String modelVersionId,
+			Int32 vectorDimension)
+		{
+		}
+
 		public void UpsertVector(
 			SqliteConnection connection,
 			SqliteTransaction transaction,

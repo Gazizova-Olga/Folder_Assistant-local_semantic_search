@@ -20,39 +20,47 @@ internal interface IFolderManifestReader
 
 internal sealed class SqliteFolderManifestReader : IFolderManifestReader
 {
+	private readonly IVectorStoreReader _vectorStoreReader;
+
+	public SqliteFolderManifestReader()
+		: this(new SqliteBlobVectorStoreReader())
+	{
+	}
+
+	internal SqliteFolderManifestReader(IVectorStoreReader vectorStoreReader)
+	{
+		ArgumentNullException.ThrowIfNull(vectorStoreReader);
+
+		this._vectorStoreReader = vectorStoreReader;
+	}
+
 	public IReadOnlyDictionary<String, IndexedFileState> ReadFileStates(String databasePath, String modelVersionId)
 	{
+		// The vector-existence check is per model version, not merely per file. A file whose content
+		// has not changed still needs embedding when the active model has never seen it — which is
+		// exactly the state after switching embedding implementation.
+		//
+		// It is asked of the vector store rather than answered here, because only the store knows
+		// where its vectors live. A backend keeping them in a virtual table leaves chunk_vector empty,
+		// so a query written here against that table would report that nothing has ever been embedded
+		// — and every file would be re-embedded on every run, silently, with the index still looking
+		// entirely correct.
+		//
+		// The set is fetched once and joined in memory. Asking the question per file instead — with a
+		// correlated EXISTS — plans catastrophically: with no table statistics SQLite drives the inner
+		// query off the model-version index, so every outer file row walks every vector of that model
+		// before filtering by file id. That is O(files x vectors), and measured on this code it took
+		// 97 seconds for 4,000 files against 24,000 vectors. Small folders hide it completely, because
+		// the plan only turns pathological once the vector table is large.
+		IReadOnlySet<String> filesWithVectors =
+			this._vectorStoreReader.ReadFileIdsWithVectors(databasePath, modelVersionId);
+
 		Dictionary<String, IndexedFileState> states = new(StringComparer.OrdinalIgnoreCase);
 
 		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
 
 		using SqliteCommand command = connection.CreateCommand();
-
-		// The vector-existence check is per model version, not merely per file. A file whose content
-		// has not changed still needs embedding when the active model has never seen it — which is
-		// exactly the state after switching embedding implementation.
-		//
-		// The set of files that already have vectors is built ONCE and joined. Asking the question
-		// per file instead — with a correlated EXISTS — plans catastrophically: with no table
-		// statistics SQLite drives the inner query off the model-version index, so every outer file
-		// row walks every vector of that model before filtering by file id. That is O(files x
-		// vectors), and measured on this code it took 97 seconds for 4,000 files against 24,000
-		// vectors. Small folders hide it completely, because the plan only turns pathological once
-		// chunk_vector is large.
-		command.CommandText = """
-			SELECT
-				fm.file_id,
-				fm.file_hash,
-				CASE WHEN v.file_id IS NULL THEN 0 ELSE 1 END AS has_vectors
-			FROM file_manifest fm
-			LEFT JOIN (
-				SELECT DISTINCT cm.file_id AS file_id
-				FROM chunk_vector cv
-				JOIN chunk_manifest cm ON cm.chunk_id = cv.chunk_id
-				WHERE cv.model_version_id = $modelVersionId
-			) v ON v.file_id = fm.file_id;
-			""";
-		command.Parameters.AddWithValue("$modelVersionId", modelVersionId);
+		command.CommandText = "SELECT file_id, file_hash FROM file_manifest;";
 
 		using SqliteDataReader reader = command.ExecuteReader();
 
@@ -63,7 +71,7 @@ internal sealed class SqliteFolderManifestReader : IFolderManifestReader
 			states[fileId] = new IndexedFileState(
 				FileId: fileId,
 				FileHash: reader.GetString(1),
-				HasVectorsForModel: reader.GetInt32(2) != 0);
+				HasVectorsForModel: filesWithVectors.Contains(fileId));
 		}
 
 		return states;

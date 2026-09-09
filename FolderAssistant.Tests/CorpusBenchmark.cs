@@ -147,6 +147,51 @@ public sealed class CorpusBenchmark
 			$"(min {timings[0]}, max {timings[^1]})");
 		this.Log($"database size: {new FileInfo(database.DatabasePath).Length / 1024 / 1024} MB");
 		this.Log($"peak working set: {Process.GetCurrentProcess().PeakWorkingSet64 / 1024 / 1024} MB");
+
+		// The candidate backend, over the same corpus, into its own database file inside the same
+		// metadata folder. Same vectors, same metric, same queries — the only difference is where the
+		// vectors live and who does the ranking, which is the only way the comparison says anything.
+		if (!SqliteVecExtension.IsAvailable)
+		{
+			this.Log("sqlite-vec: no native binary for this platform; skipping the comparison");
+
+			return;
+		}
+
+		ProgrammableEmbeddingVectorizer vecVectorizer = new("bench-v1", config.VectorDimension);
+
+		DatabaseBootstrapResult vecDatabase = new FolderDatabaseBootstrapper()
+			.EnsureInitialized(corpus, new PersistenceConfig { DatabaseFileName = "manifest-vec.db" });
+
+		FolderIndexingPipeline vecPipeline = new(
+			vecVectorizer, new SqliteVecVectorStoreWriter(), new SqliteVecVectorStoreReader());
+
+		watch.Restart();
+		IndexingResult vecFirst = vecPipeline.Run(corpus, vecDatabase.DatabasePath, config);
+		this.Log(
+			$"vec index (cold): {vecFirst.FilesIndexed} embedded, {vecFirst.VectorsIndexed} vectors " +
+			$"in {watch.Elapsed.TotalSeconds:F1} s");
+
+		watch.Restart();
+		IndexingResult vecSecond = vecPipeline.Run(corpus, vecDatabase.DatabasePath, config);
+		this.Log($"vec index (warm, nothing to do): {vecSecond.FilesUnchanged} unchanged in {watch.Elapsed.TotalSeconds:F1} s");
+
+		SqliteVecRetrievalQuery vecRetrieval = new(vecVectorizer);
+		vecRetrieval.Search(vecDatabase.DatabasePath, "alpha beta gamma", options);
+
+		List<Int64> vecTimings = [];
+		for (Int32 i = 0; i < 5; i++)
+		{
+			watch.Restart();
+			vecRetrieval.Search(vecDatabase.DatabasePath, $"query number {i} about content", options);
+			vecTimings.Add(watch.ElapsedMilliseconds);
+		}
+
+		vecTimings.Sort();
+		this.Log($"vec retrieval: p50 {vecTimings[vecTimings.Count / 2]} ms " +
+			$"(min {vecTimings[0]}, max {vecTimings[^1]})");
+		this.Log($"vec database size: {new FileInfo(vecDatabase.DatabasePath).Length / 1024 / 1024} MB");
+		this.Log($"peak working set (after both backends): {Process.GetCurrentProcess().PeakWorkingSet64 / 1024 / 1024} MB");
 	}
 
 	/// <summary>Live bytes after a full collect — what the run is holding, not what it has churned.</summary>

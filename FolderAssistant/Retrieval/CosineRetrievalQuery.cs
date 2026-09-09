@@ -46,7 +46,7 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 			throw new ArgumentOutOfRangeException(nameof(options), "TopK must be greater than zero.");
 		}
 
-		this.EnsureIndexIsQueryable();
+		RetrievalGuard.EnsureQueryable(this._indexState);
 
 		ModelDescriptor descriptor = this._vectorizer.Descriptor;
 
@@ -123,37 +123,6 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 		}
 
 		return hits;
-	}
-
-	/// <summary>
-	/// Refuses the query outright unless the index is in a state that can answer it.
-	///
-	/// <para>
-	/// The check is skipped when no state was supplied, which is how a test or a caller that builds
-	/// its own store on the spot searches without standing up an indexing pass to satisfy.
-	/// </para>
-	/// </summary>
-	private void EnsureIndexIsQueryable()
-	{
-		if (this._indexState is null)
-		{
-			return;
-		}
-
-		switch (this._indexState.Status)
-		{
-			case IndexStatus.Building:
-				throw new IndexNotReadyException(
-					"The folder index is still building; no vectors are queryable yet.");
-
-			case IndexStatus.Failed:
-				throw new IndexNotReadyException(
-					$"The folder index failed to build: {this._indexState.Error?.Message}",
-					this._indexState.Error);
-
-			default:
-				return;
-		}
 	}
 
 	private static Double CosineSimilarity(IReadOnlyList<Single> left, IReadOnlyList<Single> right)

@@ -207,6 +207,9 @@ public sealed class CosineRetrievalQueryTests
 				: [];
 		}
 
+		public IReadOnlySet<String> ReadFileIdsWithVectors(String databasePath, String modelVersionId)
+			=> new HashSet<String>(StringComparer.OrdinalIgnoreCase);
+
 		public IReadOnlyDictionary<String, ChunkLocation> ReadChunkLocations(
 			String databasePath,
 			IReadOnlyList<String> chunkIds)

@@ -15,6 +15,27 @@ namespace FolderAssistant.Persistence;
 /// </summary>
 internal interface IVectorStoreWriter
 {
+	/// <summary>
+	/// True when this store's tables can only be read or written on a connection carrying the native
+	/// sqlite-vec extension. The repository asks before it opens, so no caller has to know.
+	/// </summary>
+	Boolean RequiresVectorExtension { get; }
+
+	/// <summary>
+	/// Creates whatever tables this store needs, if they are not already there.
+	///
+	/// <para>
+	/// The store owns its storage schema rather than the bootstrapper, because a native backend's
+	/// tables are virtual tables whose shape — including a vector dimension fixed at creation — only
+	/// the backend knows.
+	/// </para>
+	/// </summary>
+	void EnsureSchema(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String modelVersionId,
+		Int32 vectorDimension);
+
 	void UpsertVector(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
@@ -43,6 +64,20 @@ internal interface IVectorStoreWriter
 /// <summary>Stores a vector as a packed <c>float32</c> blob in <c>chunk_vector.vector</c>.</summary>
 internal sealed class SqliteBlobVectorStoreWriter : IVectorStoreWriter
 {
+	/// <summary><c>chunk_vector</c> is ordinary SQLite; no extension is involved.</summary>
+	public Boolean RequiresVectorExtension => false;
+
+	/// <summary>
+	/// Nothing to do: <c>chunk_vector</c> is created by the bootstrapper, with the rest of the schema.
+	/// </summary>
+	public void EnsureSchema(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String modelVersionId,
+		Int32 vectorDimension)
+	{
+	}
+
 	public void UpsertVector(
 		SqliteConnection connection,
 		SqliteTransaction transaction,

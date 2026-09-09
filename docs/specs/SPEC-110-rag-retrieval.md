@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | Retrieval |
 | Last updated | 2026-09-09 |
 
@@ -44,8 +44,23 @@ That difference is what leaves room for an implementation backed by a native nea
 index to push ranking down into the query engine without any caller changing. A contract that
 handed back every candidate would make such an implementation impossible to express.
 
+That is no longer a hypothetical justification for a shape. `SqliteVecRetrievalQuery` is that
+implementation — it ranks inside the query engine through `sqlite-vec`, satisfies this contract
+unchanged, and is 15–26x faster on retrieval than the brute-force baseline (`SPEC-131`). It is a
+comparison candidate rather than the default, and it is selected explicitly.
+
+**Model scoping is structural in that backend, not checked.** A `vec0` table fixes its vector
+dimension at creation, so each model version gets its own table. Searching one cannot reach
+another's vectors, which makes "never score across embedding spaces" impossible to violate rather
+than merely forbidden.
+
 Reads sit behind `IVectorStoreReader`, so the stored representation can change — JSON text
-today, packed binary under a native extension later — without a retrieval strategy knowing.
+yesterday, packed binary today, a native extension's virtual table alongside it — without a
+retrieval strategy knowing. One read is on that interface for a reason worth stating: which files
+already have vectors can only be answered by the store that holds them. A backend keeping vectors
+in a virtual table leaves `chunk_vector` empty, so a lookup written against that table would
+report that nothing has ever been embedded — and every file would be re-embedded on every run,
+silently, with the index still looking correct.
 
 ## Requirements
 

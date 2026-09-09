@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Status | Decided for now, open to evidence |
-| Version | 0.4.0 |
+| Status | Reversed on evidence; see the verdict section |
+| Version | 0.5.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-09 |
 
@@ -191,7 +191,55 @@ So the measurement **reframes** the question rather than settling it:
   size where it becomes one has not been measured, and that measurement is the thing that would
   decide it.
 
-The decision therefore stands unchanged, on narrower and better-understood grounds than before.
+The decision to build it therefore changed, and the reasoning is recorded below rather than
+quietly replaced.
+
+### The verdict reversed, and the earlier inference was the thing that was wrong
+
+0.4.0 left exactly one thing outstanding: *"the corpus size where it becomes one has not been
+measured, and that measurement is the thing that would decide it."* It has now been measured, by
+building the backend and running both over the same corpus.
+
+| | 24,000 vectors | 72,000 vectors |
+|---|---|---|
+| brute-force cosine, retrieval p50 | 106 ms | 325 ms |
+| `sqlite-vec` k-NN, retrieval p50 | **4 ms** | **21 ms** |
+| cold index | 5.2 s | 14.8 s |
+| cold index, `sqlite-vec` | 5.4 s | 16.3 s |
+| database size | 24 MB | 74 MB |
+| database size, `sqlite-vec` | 23 MB | 69 MB |
+
+**The measurement behind the earlier verdict was right; the inference from it was not.** Cosine
+arithmetic really is a small minority of a query — 15 ms of 106, 49 ms of 325. The error was
+reading that as a ceiling on what a native backend could win. `vec0`'s `k =` search is itself an
+exact linear scan, so it performs the same comparisons; what it removes is *marshalling every
+vector across the managed/native boundary* — a row, a `Byte[]` and a `Single[]` each, built only
+to produce one number and be discarded. That was the read cost, and no storage format could have
+removed it. **Reasoning about the algorithm predicted the wrong answer, and building both and
+measuring gave the right one.**
+
+That is the argument for implementation comparability being a product goal in its own right, which
+is the reason for the modular monolith. Had this stayed rejected on paper, the 15x would never
+have been found.
+
+### What did *not* reproduce, recorded so it is not repeated
+
+Indexing is **not** faster through this backend here — 16.3 s against 14.8 at 72,000 vectors, and
+5.4 against 5.2 at 24,000. It is consistently a little slower. Only the retrieval side wins, and
+only the retrieval claim is made.
+
+### Adoption is a separate gate from existing
+
+Passing a performance bar is what it takes to become the **default**. It is not what it takes to
+**exist as a comparable implementation**, which needs no bar at all — it needs only to be
+honestly measurable against the other one.
+
+`sqlite-vec` is not the default, and speed is no longer the reason. It depends on an alpha native
+extension shipping binaries for five RIDs only: there is no `win-arm64` build and no musl build,
+so the backend does not exist everywhere the managed code runs. `SqliteVecExtension.IsAvailable`
+reports that rather than failing at the first query. **Adoption now turns on dependency risk, not
+on speed** — which is a different question from the one 0.4.0 was answering, and a better one to
+be left with.
 ### Discovering there is no work costs more than doing all of it
 
 A pass that embeds nothing took **104 seconds**; indexing the whole corpus from scratch took

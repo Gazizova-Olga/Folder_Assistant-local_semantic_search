@@ -64,11 +64,18 @@ internal sealed class FolderIndexRepository
 		// foreign_keys is per connection in SQLite, not per database, so what the bootstrap set does
 		// not carry here — and the deletions below rely on the cascade. The connection factory sets
 		// it, along with the busy timeout this call site never had.
-		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(databasePath);
+		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(
+			databasePath,
+			withVectorExtension: this._vectorStoreWriter.RequiresVectorExtension);
 
 		using SqliteTransaction transaction = connection.BeginTransaction();
 
 		UpsertModel(connection, transaction, descriptor);
+
+		// The vector store creates its own tables. A native backend's are virtual tables whose shape —
+		// down to a vector dimension fixed at creation — only the backend knows, so the bootstrapper
+		// cannot create them on its behalf.
+		this._vectorStoreWriter.EnsureSchema(connection, transaction, modelVersionId, descriptor.Dimension);
 
 		// Written in the same transaction as the vectors it produced. An artifact that disagrees with
 		// the stored vectors corrupts every query embedded against it, and nothing would report that.
