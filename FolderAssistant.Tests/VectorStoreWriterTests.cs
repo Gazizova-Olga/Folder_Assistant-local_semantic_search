@@ -25,7 +25,7 @@ public sealed class VectorStoreWriterTests
 		IndexWriteSummary summary = new FolderIndexRepository(writer).Upsert(
 			databasePath,
 			[OneFile()],
-			new Dictionary<String, IReadOnlyList<TextChunk>> { ["f1"] = [Chunk("c1", 0), Chunk("c2", 1)] },
+			new Dictionary<String, IReadOnlyList<ChunkMetadata>> { ["f1"] = [Chunk("c1", 0), Chunk("c2", 1)] },
 			new Dictionary<String, EmbeddingResult>
 			{
 				["c1"] = Embedding([1.0f, 0.0f, 0.0f]),
@@ -58,7 +58,7 @@ public sealed class VectorStoreWriterTests
 		FluentActions.Invoking(() => new FolderIndexRepository(writer).Upsert(
 				databasePath,
 				[OneFile()],
-				new Dictionary<String, IReadOnlyList<TextChunk>> { ["f1"] = [Chunk("c1", 0)] },
+				new Dictionary<String, IReadOnlyList<ChunkMetadata>> { ["f1"] = [Chunk("c1", 0)] },
 				new Dictionary<String, EmbeddingResult> { ["c1"] = Embedding([1.0f]) },
 				Descriptor(1)))
 			.Should().Throw<InvalidOperationException>();
@@ -77,7 +77,7 @@ public sealed class VectorStoreWriterTests
 		new FolderIndexRepository().Upsert(
 			databasePath,
 			[OneFile()],
-			new Dictionary<String, IReadOnlyList<TextChunk>> { ["f1"] = [Chunk("c1", 0)] },
+			new Dictionary<String, IReadOnlyList<ChunkMetadata>> { ["f1"] = [Chunk("c1", 0)] },
 			new Dictionary<String, EmbeddingResult> { ["c1"] = Embedding([0.5f, -0.25f]) },
 			Descriptor(2));
 
@@ -145,19 +145,18 @@ public sealed class VectorStoreWriterTests
 	private static String BootstrapIn(TempFolder folder)
 		=> new FolderDatabaseBootstrapper().EnsureInitialized(folder.Path, new PersistenceConfig()).DatabasePath;
 
-	private static ScannedTextFile OneFile()
+	// The repository takes metadata, not text: what it stores is ids, offsets and hashes.
+	private static ScannedFile OneFile()
 		=> new(
 			FileId: "f1",
-			FullPath: "/tmp/a.md",
 			RelativePath: "a.md",
 			FileHash: "filehash",
 			SizeBytes: 10,
 			ModifiedUtc: new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-			Content: "alpha beta",
 			FileType: ".md");
 
-	private static TextChunk Chunk(String chunkId, Int32 index)
-		=> new(chunkId, index, index, index + 1, $"hash-{chunkId}", $"content {chunkId}");
+	private static ChunkMetadata Chunk(String chunkId, Int32 index)
+		=> new(chunkId, index, index, index + 1, $"hash-{chunkId}");
 
 	private static ModelDescriptor Descriptor(Int32 dimension)
 		=> new("programmable-v1", "programmable", "programmable-embedding", dimension);

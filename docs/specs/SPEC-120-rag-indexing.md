@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.10.0 |
+| Version | 0.11.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-09 |
 
@@ -59,6 +59,28 @@ space. The joined text feeds the chunk hash and so the content-addressed chunk i
 joining differently renames every chunk in every folder already indexed — and the next pass would
 then delete the stored chunks while the unchanged-file check declined to re-embed their
 replacements, emptying the index without failing.
+
+### The pipeline streams text, and must keep doing so
+
+The scanner yields files **lazily**, reading each one's text only as it is pulled. The pipeline
+chunks a file, embeds it if it changed, and drops its text before pulling the next.
+
+**Nothing that carries text may be accumulated across files.** A file's text exists to be chunked
+and a chunk's text to be embedded; neither is ever stored — `chunk_manifest` holds ids, offsets
+and hashes and no content at all. What accumulates for the write is metadata and vectors.
+
+This is enforced by types rather than by discipline: `ScannedFile` and `ChunkMetadata` are the
+text-free halves of `ScannedTextFile` and `TextChunk`, and the repository's write method takes
+only those. A signature that demanded text the write does not store would oblige the pipeline to
+hold the corpus purely to satisfy it, and there would be nothing but a comment to stop it.
+
+**The one exception is a corpus-fitted vectorizer with no fit yet.** It cannot embed anything
+until it has seen every chunk, so that path alone keeps chunk text alive until the fit is
+computed. It is bounded to the first index under a new model version, since an existing fit is
+loaded and reused rather than recomputed.
+
+The write remains a **single transaction**. Streaming changed what is held in memory, not the
+atomicity of what is stored.
 
 ## Delta handling
 
@@ -210,15 +232,15 @@ what it had — breaks this without any test necessarily noticing.
   is load-bearing: a pass with nothing to do took 104 s before the manifest read was
   materialised rather than asked per file, and 3.4 s after. Measurements in
   [SPEC-131](SPEC-131-database-options-analysis.md).
-- **Memory** — measured with `CorpusBenchmark` over a generated corpus of 12,000 files
-  (208 MB of text). Holding tokens as ranges rather than strings cut the allocation of the
-  tokenise-and-chunk stage from **4,281 MB to 906 MB**, and 4,000 files show the same ratio
-  (1,427 MB to 302 MB). **Peak working set did not move** — 1,061 MB against 1,067 MB — so the
-  churn was garbage the collector was already absorbing, and reducing it is not on its own a
-  reduction in footprint. What the stage *retains* is untouched at **460 MB**, and that is the
-  measured constraint on how large a folder can be indexed: the scan holds every file's text and
-  chunking adds every chunk's text on top, both for the whole corpus at once, while nothing that
-  carries text is persisted at all.
+- **Memory** — measured with `CorpusBenchmark` over generated corpora of 4,000 and 12,000 files
+  (the latter 208 MB of text). Two separate properties, and conflating them misreads both.
+  *Allocation*: holding tokens as ranges rather than strings cut the tokenise-and-chunk stage from
+  **4,281 MB to 906 MB** at 12,000 files (1,427 → 302 at 4,000). That did **not** move peak working
+  set — 1,061 MB against 1,067 — because it was garbage the collector was already absorbing.
+  *Retention*: streaming the text cut peak working set from **794 MB to 289 MB** at 12,000 files
+  and **413 MB to 153 MB** at 4,000, while leaving allocation untouched (2,130 MB against 2,135).
+  So allocation and footprint are moved by different changes, and only the second one sets the
+  ceiling on how large a folder can be indexed.
 - **Operability** — a pass reports scanned, indexed, unchanged and deleted counts, so "nothing
   happened" and "nothing needed to happen" are distinguishable.
 

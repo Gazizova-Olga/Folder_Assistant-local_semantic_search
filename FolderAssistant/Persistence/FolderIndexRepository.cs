@@ -36,10 +36,20 @@ internal sealed class FolderIndexRepository
 		this._vectorStoreWriter = vectorStoreWriter;
 	}
 
+	/// <summary>
+	/// Writes the index. Takes metadata, not text.
+	///
+	/// <para>
+	/// <c>chunk_manifest</c> holds chunk ids, offsets and hashes and no content at all, so a
+	/// signature demanding text the write does not store would oblige the pipeline to keep the whole
+	/// corpus in memory purely to satisfy it. The narrower types are the guard: there is no field
+	/// here to put a corpus in.
+	/// </para>
+	/// </summary>
 	public IndexWriteSummary Upsert(
 		String databasePath,
-		IReadOnlyList<ScannedTextFile> files,
-		IReadOnlyDictionary<String, IReadOnlyList<TextChunk>> chunksByFile,
+		IReadOnlyList<ScannedFile> files,
+		IReadOnlyDictionary<String, IReadOnlyList<ChunkMetadata>> chunksByFile,
 		IReadOnlyDictionary<String, EmbeddingResult> embeddingsByChunk,
 		ModelDescriptor descriptor,
 		String? fitArtifactJson = null)
@@ -75,12 +85,12 @@ internal sealed class FolderIndexRepository
 		Int32 chunkCount = 0;
 		Int32 vectorCount = 0;
 
-		foreach (ScannedTextFile file in files)
+		foreach (ScannedFile file in files)
 		{
 			UpsertFile(connection, transaction, file);
 			fileCount++;
 
-			chunksByFile.TryGetValue(file.FileId, out IReadOnlyList<TextChunk>? chunks);
+			chunksByFile.TryGetValue(file.FileId, out IReadOnlyList<ChunkMetadata>? chunks);
 			chunks ??= [];
 
 			this.DeleteSupersededChunks(connection, transaction, file.FileId, chunks);
@@ -90,7 +100,7 @@ internal sealed class FolderIndexRepository
 				continue;
 			}
 
-			foreach (TextChunk chunk in chunks)
+			foreach (ChunkMetadata chunk in chunks)
 			{
 				UpsertChunk(connection, transaction, file.FileId, chunk, modelVersionId);
 				chunkCount++;
@@ -162,7 +172,7 @@ internal sealed class FolderIndexRepository
 		SqliteConnection connection,
 		SqliteTransaction transaction,
 		String fileId,
-		IReadOnlyList<TextChunk> currentChunks)
+		IReadOnlyList<ChunkMetadata> currentChunks)
 	{
 		using SqliteCommand command = connection.CreateCommand();
 		command.Transaction = transaction;
@@ -225,7 +235,7 @@ internal sealed class FolderIndexRepository
 	private Int32 DeleteRemovedFiles(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
-		IReadOnlyList<ScannedTextFile> files)
+		IReadOnlyList<ScannedFile> files)
 	{
 		if (files.Count == 0)
 		{
@@ -267,7 +277,7 @@ internal sealed class FolderIndexRepository
 	private static void PopulateScannedFileIds(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
-		IReadOnlyList<ScannedTextFile> files)
+		IReadOnlyList<ScannedFile> files)
 	{
 		using (SqliteCommand create = connection.CreateCommand())
 		{
@@ -285,7 +295,7 @@ internal sealed class FolderIndexRepository
 
 		SqliteParameter fileId = insert.Parameters.Add("$fileId", SqliteType.Text);
 
-		foreach (ScannedTextFile file in files)
+		foreach (ScannedFile file in files)
 		{
 			fileId.Value = file.FileId;
 			insert.ExecuteNonQuery();
@@ -354,7 +364,7 @@ internal sealed class FolderIndexRepository
 		command.ExecuteNonQuery();
 	}
 
-	private static void UpsertFile(SqliteConnection connection, SqliteTransaction transaction, ScannedTextFile file)
+	private static void UpsertFile(SqliteConnection connection, SqliteTransaction transaction, ScannedFile file)
 	{
 		using SqliteCommand command = connection.CreateCommand();
 		command.Transaction = transaction;
@@ -383,7 +393,7 @@ internal sealed class FolderIndexRepository
 		SqliteConnection connection,
 		SqliteTransaction transaction,
 		String fileId,
-		TextChunk chunk,
+		ChunkMetadata chunk,
 		String modelVersionId)
 	{
 		using SqliteCommand command = connection.CreateCommand();

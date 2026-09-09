@@ -25,8 +25,22 @@ internal sealed class LocalTextFileScanner
 		".git", ".vs", "bin", "obj", "node_modules", ".folderassistant",
 	};
 
-	/// <summary>Scans <paramref name="rootPath"/> for indexable text files.</summary>
-	public IReadOnlyList<ScannedTextFile> Scan(String rootPath, Int64 maxTextFileSizeBytes)
+	/// <summary>
+	/// Yields indexable files one at a time, reading each one's text only as it is pulled.
+	///
+	/// <para>
+	/// Deliberately lazy. Materialising the folder first makes every file's text resident at once,
+	/// and .NET strings are UTF-16 so it costs roughly double the bytes on disk — even though a
+	/// file's text is dead the moment it has been chunked. A caller that streams holds one file.
+	/// </para>
+	///
+	/// <para>
+	/// The argument check runs eagerly rather than on the first <c>MoveNext</c>. A bad root path is a
+	/// programming error, and deferring it would surface it inside whatever loop happens to consume
+	/// this, a long way from the call that got it wrong.
+	/// </para>
+	/// </summary>
+	public IEnumerable<ScannedTextFile> Enumerate(String rootPath, Int64 maxTextFileSizeBytes)
 	{
 		if (String.IsNullOrWhiteSpace(rootPath))
 		{
@@ -34,18 +48,21 @@ internal sealed class LocalTextFileScanner
 		}
 
 		String fullRoot = Path.GetFullPath(rootPath);
-		List<ScannedTextFile> found = [];
 
-		Enumerate(fullRoot, fullRoot, maxTextFileSizeBytes, found);
-
-		return found;
+		return Walk(fullRoot, fullRoot, maxTextFileSizeBytes);
 	}
 
-	private static void Enumerate(
+	/// <summary>
+	/// Materialises the whole scan. The pipeline does not use this — it streams — but a caller that
+	/// genuinely wants the full list gets it here rather than by writing the walk again.
+	/// </summary>
+	public IReadOnlyList<ScannedTextFile> Scan(String rootPath, Int64 maxTextFileSizeBytes)
+		=> this.Enumerate(rootPath, maxTextFileSizeBytes).ToArray();
+
+	private static IEnumerable<ScannedTextFile> Walk(
 		String rootPath,
 		String directoryPath,
-		Int64 maxTextFileSizeBytes,
-		List<ScannedTextFile> output)
+		Int64 maxTextFileSizeBytes)
 	{
 		foreach (String subDirectory in Directory.EnumerateDirectories(directoryPath))
 		{
@@ -54,7 +71,10 @@ internal sealed class LocalTextFileScanner
 				continue;
 			}
 
-			Enumerate(rootPath, subDirectory, maxTextFileSizeBytes, output);
+			foreach (ScannedTextFile nested in Walk(rootPath, subDirectory, maxTextFileSizeBytes))
+			{
+				yield return nested;
+			}
 		}
 
 		foreach (String filePath in Directory.EnumerateFiles(directoryPath))
@@ -93,7 +113,7 @@ internal sealed class LocalTextFileScanner
 
 			String relativePath = Path.GetRelativePath(rootPath, filePath).Replace('\\', '/');
 
-			output.Add(new ScannedTextFile(
+			yield return new ScannedTextFile(
 				FileId: Sha256($"file::{relativePath}"),
 				FullPath: filePath,
 				RelativePath: relativePath,
@@ -101,7 +121,7 @@ internal sealed class LocalTextFileScanner
 				SizeBytes: info.Length,
 				ModifiedUtc: info.LastWriteTimeUtc,
 				Content: content,
-				FileType: extension.TrimStart('.').ToLowerInvariant()));
+				FileType: extension.TrimStart('.').ToLowerInvariant());
 		}
 	}
 

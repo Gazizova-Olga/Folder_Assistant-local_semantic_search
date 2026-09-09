@@ -55,6 +55,23 @@ internal sealed class FolderIndexingPipeline
 		this._vectorStoreReader = vectorStoreReader;
 	}
 
+	/// <summary>
+	/// Streams the folder: each file is read, chunked, embedded if it changed, and its text then
+	/// dropped before the next one is pulled.
+	///
+	/// <para>
+	/// What accumulates is only what the write needs — file metadata, chunk metadata and vectors.
+	/// Text is never held across files. Buffering every file's content and every chunk's content for
+	/// the whole corpus, as this did before, is what set the practical ceiling on folder size: the
+	/// text alone doubles in memory because .NET strings are UTF-16, and chunk overlap duplicates
+	/// part of it again (<c>SPEC-120</c>).
+	/// </para>
+	///
+	/// <para>
+	/// The write is still a single transaction. Streaming changed what is held in memory, not the
+	/// atomicity of what is stored.
+	/// </para>
+	/// </summary>
 	public IndexingResult Run(String analyzedFolderPath, String databasePath, IndexingConfig config)
 	{
 		ArgumentNullException.ThrowIfNull(config);
@@ -62,58 +79,98 @@ internal sealed class FolderIndexingPipeline
 		IVectorizer vectorizer = this._vectorizer
 			?? new ProgrammableEmbeddingVectorizer(config.ModelVersionId, config.VectorDimension);
 
-		IReadOnlyList<ScannedTextFile> files = this._scanner.Scan(analyzedFolderPath, config.MaxTextFileSizeBytes);
+		// Resolving the fit first is what decides whether text can be streamed at all. A
+		// corpus-fitted vectorizer with no fit yet cannot embed anything until it has seen every
+		// chunk, so that one case has to keep chunk text alive across the loop.
+		Boolean mustFit = this.ResolveFit(vectorizer, databasePath);
 
-		// Everything is chunked, every pass. The scanner has already read the content, chunking is
-		// cheap, and a corpus-fitted vectorizer needs the full chunk set regardless. Embedding is the
-		// expensive stage and the only one skipped — which is what makes a restart over an unchanged
-		// folder cheap.
-		Dictionary<String, IReadOnlyList<TextChunk>> chunksByFile = new(StringComparer.OrdinalIgnoreCase);
-
-		foreach (ScannedTextFile file in files)
-		{
-			TokenizedText tokens = this._tokenizer.Tokenize(file.Content);
-
-			chunksByFile[file.FileId] = this._chunker.Chunk(
-				file.FileId, tokens, config.ChunkSizeTokens, config.ChunkOverlapTokens);
-		}
-
-		ModelDescriptor descriptor = this.PrepareVectorizer(
-			vectorizer, files, chunksByFile, databasePath, out String? fitArtifactJson);
-
+		// Read against the model version, which a fit does not change — only the dimension moves,
+		// and that is read back afterwards.
 		IReadOnlyDictionary<String, IndexedFileState> knownFiles =
-			this._manifestReader.ReadFileStates(databasePath, descriptor.ModelVersionId);
+			this._manifestReader.ReadFileStates(databasePath, vectorizer.Descriptor.ModelVersionId);
 
+		List<ScannedFile> files = [];
+		Dictionary<String, IReadOnlyList<ChunkMetadata>> chunksByFile = new(StringComparer.OrdinalIgnoreCase);
 		Dictionary<String, EmbeddingResult> embeddingsByChunk = new(StringComparer.OrdinalIgnoreCase);
+
+		// Non-null only while a fit is owed. Otherwise chunk text dies with each iteration.
+		List<(IReadOnlyList<TextChunk> Chunks, Boolean Changed)>? awaitingFit = mustFit ? [] : null;
+
+		Int32 scanned = 0;
 		Int32 unchanged = 0;
 		Int32 indexed = 0;
 
-		foreach (ScannedTextFile file in files)
+		foreach (ScannedTextFile file in this._scanner.Enumerate(analyzedFolderPath, config.MaxTextFileSizeBytes))
 		{
-			IReadOnlyList<TextChunk> chunks = chunksByFile[file.FileId];
+			scanned++;
+
+			// Every file is chunked, every pass. The scanner has already read it and chunking is
+			// cheap; embedding is the expensive stage and the only one worth skipping.
+			TokenizedText tokens = this._tokenizer.Tokenize(file.Content);
+
+			IReadOnlyList<TextChunk> chunks = this._chunker.Chunk(
+				file.FileId, tokens, config.ChunkSizeTokens, config.ChunkOverlapTokens);
+
+			files.Add(file.ToMetadata());
+			chunksByFile[file.FileId] = chunks.Select(static chunk => chunk.ToMetadata()).ToArray();
 
 			if (chunks.Count == 0)
 			{
 				continue;
 			}
 
-			if (IsUnchanged(file, knownFiles))
+			Boolean changed = !IsUnchanged(file, knownFiles);
+			if (!changed)
 			{
 				unchanged++;
+			}
+
+			if (mustFit)
+			{
+				// The fit needs every chunk, changed or not, so this text has to outlive the loop.
+				awaitingFit!.Add((chunks, changed));
+
 				continue;
 			}
 
-			IReadOnlyList<EmbeddingResult> vectors = vectorizer.Vectorize(
-				chunks.Select(static chunk => chunk.Content).ToArray(),
-				EmbeddingKind.Document);
-
-			for (Int32 i = 0; i < chunks.Count; i++)
+			if (changed)
 			{
-				embeddingsByChunk[chunks[i].ChunkId] = vectors[i];
+				Embed(embeddingsByChunk, vectorizer, chunks);
+				indexed++;
 			}
 
-			indexed++;
+			// Nothing above still references file.Content or the chunk text: both are collectable
+			// before the next file is pulled, which is the whole point of the loop's shape.
 		}
+
+		String? fitArtifactJson = null;
+
+		if (awaitingFit is { Count: > 0 })
+		{
+			String[] corpus = awaitingFit
+				.SelectMany(static entry => entry.Chunks)
+				.Select(static chunk => chunk.Content)
+				.ToArray();
+
+			fitArtifactJson = ((IFittableVectorizer)vectorizer).Fit(corpus);
+
+			foreach ((IReadOnlyList<TextChunk> chunks, Boolean changed) in awaitingFit)
+			{
+				if (!changed)
+				{
+					continue;
+				}
+
+				Embed(embeddingsByChunk, vectorizer, chunks);
+				indexed++;
+			}
+
+			awaitingFit.Clear();
+		}
+
+		// Read after fitting: the descriptor's dimension is the rank actually reached, not the one
+		// that was requested.
+		ModelDescriptor descriptor = vectorizer.Descriptor;
 
 		IndexWriteSummary summary = this._repository.Upsert(
 			databasePath,
@@ -124,12 +181,30 @@ internal sealed class FolderIndexingPipeline
 			fitArtifactJson);
 
 		return new IndexingResult(
-			FilesScanned: files.Count,
+			FilesScanned: scanned,
 			FilesIndexed: indexed,
 			ChunksIndexed: summary.ChunksUpserted,
 			VectorsIndexed: summary.VectorsUpserted,
 			FilesUnchanged: unchanged,
 			FilesDeleted: summary.FilesDeleted);
+	}
+
+	private static void Embed(
+		Dictionary<String, EmbeddingResult> target,
+		IVectorizer vectorizer,
+		IReadOnlyList<TextChunk> chunks)
+	{
+		String[] texts = new String[chunks.Count];
+		for (Int32 i = 0; i < chunks.Count; i++)
+		{
+			texts[i] = chunks[i].Content;
+		}
+
+		IReadOnlyList<EmbeddingResult> vectors = vectorizer.Vectorize(texts, EmbeddingKind.Document);
+		for (Int32 i = 0; i < chunks.Count; i++)
+		{
+			target[chunks[i].ChunkId] = vectors[i];
+		}
 	}
 
 	/// <summary>
@@ -150,7 +225,7 @@ internal sealed class FolderIndexingPipeline
 			&& String.Equals(known.FileHash, file.FileHash, StringComparison.Ordinal);
 
 	/// <summary>
-	/// Resolves the fit for a corpus-fitted vectorizer.
+	/// Resolves the fit for a corpus-fitted vectorizer, and reports whether one is still owed.
 	///
 	/// <para>
 	/// An existing artifact is <b>reused, not recomputed</b>. Refitting changes the projection and
@@ -164,44 +239,23 @@ internal sealed class FolderIndexingPipeline
 	/// detects that drift.
 	/// </para>
 	/// </summary>
-	private ModelDescriptor PrepareVectorizer(
-		IVectorizer vectorizer,
-		IReadOnlyList<ScannedTextFile> files,
-		IReadOnlyDictionary<String, IReadOnlyList<TextChunk>> chunksByFile,
-		String databasePath,
-		out String? fitArtifactJson)
+	private Boolean ResolveFit(IVectorizer vectorizer, String databasePath)
 	{
-		fitArtifactJson = null;
-
 		if (vectorizer is not IFittableVectorizer fittable)
 		{
-			return vectorizer.Descriptor;
+			return false;
 		}
 
 		String? existing = this._vectorStoreReader.ReadFitArtifact(
 			databasePath, vectorizer.Descriptor.ModelVersionId);
 
-		if (existing is not null)
+		if (existing is null)
 		{
-			fittable.LoadFit(existing);
-
-			return vectorizer.Descriptor;
+			return true;
 		}
 
-		String[] corpus = files
-			.SelectMany(file => chunksByFile[file.FileId])
-			.Select(static chunk => chunk.Content)
-			.ToArray();
+		fittable.LoadFit(existing);
 
-		if (corpus.Length == 0)
-		{
-			return vectorizer.Descriptor;
-		}
-
-		fitArtifactJson = fittable.Fit(corpus);
-
-		// Read after fitting: the descriptor's dimension is the rank actually reached, not the one
-		// that was requested.
-		return vectorizer.Descriptor;
+		return false;
 	}
 }

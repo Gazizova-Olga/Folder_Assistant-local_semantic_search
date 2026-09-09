@@ -60,41 +60,32 @@ public sealed class CorpusBenchmark
 
 		Stopwatch watch = Stopwatch.StartNew();
 
-		IReadOnlyList<ScannedTextFile> scanned = new LocalTextFileScanner().Scan(corpus, config.MaxTextFileSizeBytes);
-		this.Log($"scan: {scanned.Count} files in {watch.ElapsedMilliseconds} ms");
-
-		// Retained, not churned: a full collect first, so what is left is what the stage is still
-		// holding on to. Retention is what drives working set; garbage the collector can reclaim does
-		// not, however much of it there is.
-		this.Log($"  retained after scan (file contents): {LiveBytes() / 1024 / 1024} MB");
-
-		// The tokenise-and-chunk stage, reproduced here rather than measured inside the pipeline,
-		// where its allocation is indistinguishable from the embedding's and the write's.
-		SimpleTokenizer tokenizer = new();
-		TextChunker chunker = new();
-		Dictionary<String, IReadOnlyList<TextChunk>> chunksByFile = new(StringComparer.OrdinalIgnoreCase);
-		Int64 allocatedBeforeChunking = GC.GetTotalAllocatedBytes();
-
-		foreach (ScannedTextFile file in scanned)
-		{
-			TokenizedText tokens = tokenizer.Tokenize(file.Content);
-
-			chunksByFile[file.FileId] = chunker.Chunk(
-				file.FileId, tokens, config.ChunkSizeTokens, config.ChunkOverlapTokens);
-		}
-
-		Int64 chunkingChurn = (GC.GetTotalAllocatedBytes() - allocatedBeforeChunking) / 1024 / 1024;
-		this.Log($"  retained after chunking (+ chunk contents): {LiveBytes() / 1024 / 1024} MB");
-		this.Log($"  allocated while chunking (churn): {chunkingChurn} MB");
-		chunksByFile.Clear();
+		// Counted through the streaming enumerator on purpose: materialising the scan here would hold
+		// every file's text alive for the rest of the run and swamp the figures below.
+		Int32 scannedCount = new LocalTextFileScanner().Enumerate(corpus, config.MaxTextFileSizeBytes).Count();
+		this.Log($"scan: {scannedCount} files in {watch.ElapsedMilliseconds} ms");
 
 		FolderIndexingPipeline pipeline = new(vectorizer);
 
+		// The pipeline streams, so it should retain only metadata and vectors — never file or chunk
+		// text. Measure both what the run churns and what it is still holding when it returns; a full
+		// collect first, so retention is what the run is actually keeping rather than what the
+		// collector has yet to sweep.
+		Int64 liveBeforeIndex = LiveBytes();
+		Int64 allocatedBeforeIndex = GC.GetTotalAllocatedBytes();
+
 		watch.Restart();
 		IndexingResult first = pipeline.Run(corpus, database.DatabasePath, config);
+		Double coldSeconds = watch.Elapsed.TotalSeconds;
+
+		Int64 indexChurn = (GC.GetTotalAllocatedBytes() - allocatedBeforeIndex) / 1024 / 1024;
+		Int64 indexRetained = (LiveBytes() - liveBeforeIndex) / 1024 / 1024;
+
 		this.Log(
 			$"index (cold): {first.FilesIndexed} embedded, {first.ChunksIndexed} chunks, " +
-			$"{first.VectorsIndexed} vectors in {watch.Elapsed.TotalSeconds:F1} s");
+			$"{first.VectorsIndexed} vectors in {coldSeconds:F1} s");
+		this.Log($"  retained by the index run (metadata + vectors only): {indexRetained} MB");
+		this.Log($"  allocated during the index run (churn): {indexChurn} MB");
 
 		// The pass that matters for steady state. Nothing changed, so nothing is embedded — every
 		// millisecond here is the cost of working out that there is nothing to do.

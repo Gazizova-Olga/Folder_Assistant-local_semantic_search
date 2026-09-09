@@ -37,7 +37,7 @@ public sealed class VectorDeletionTests
 		repository.Upsert(
 			databasePath,
 			[],
-			new Dictionary<String, IReadOnlyList<TextChunk>>(),
+			new Dictionary<String, IReadOnlyList<ChunkMetadata>>(),
 			new Dictionary<String, EmbeddingResult>(),
 			Descriptor());
 
@@ -85,10 +85,10 @@ public sealed class VectorDeletionTests
 		=> repository.Upsert(
 			databasePath,
 			[new ScannedTextFile(fileId, $"/tmp/{fileId}.md", $"{fileId}.md", $"hash-{chunkId}", 10,
-				DateTime.UtcNow, "alpha beta", "md")],
-			new Dictionary<String, IReadOnlyList<TextChunk>>
+				DateTime.UtcNow, "alpha beta", "md").ToMetadata()],
+			new Dictionary<String, IReadOnlyList<ChunkMetadata>>
 			{
-				[fileId] = [new TextChunk(chunkId, 0, 0, 2, $"chash-{chunkId}", "alpha beta")],
+				[fileId] = [new TextChunk(chunkId, 0, 0, 2, $"chash-{chunkId}", "alpha beta").ToMetadata()],
 			},
 			new Dictionary<String, EmbeddingResult>
 			{

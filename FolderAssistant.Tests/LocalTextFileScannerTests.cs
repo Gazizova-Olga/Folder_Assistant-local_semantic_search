@@ -139,6 +139,67 @@ public sealed class LocalTextFileScannerTests
 		scan.Should().Throw<ArgumentException>();
 	}
 
+	/// <summary>
+	/// The walk is lazy, and that is a memory property rather than a stylistic one: a materialised
+	/// scan holds every file's text at once, which is what set the ceiling on how large a folder
+	/// could be indexed.
+	///
+	/// <para>
+	/// Laziness is hard to observe directly, so this observes it through the filesystem. Pull one
+	/// file, then delete everything still on disk. A lazy walk has not read the rest yet and finds
+	/// them gone; an eager one read all three before the first was handed over and would yield them
+	/// regardless. Nothing else in the suite distinguishes the two.
+	/// </para>
+	/// </summary>
+	[Fact]
+	public void Enumerating_Reads_Each_File_As_It_Is_Pulled_Rather_Than_All_Of_Them_Up_Front()
+	{
+		using TempFolder folder = new();
+		File.WriteAllText(folder.Combine("a.md"), "alpha alpha");
+		File.WriteAllText(folder.Combine("b.md"), "beta beta");
+		File.WriteAllText(folder.Combine("c.md"), "gamma gamma");
+
+		using IEnumerator<ScannedTextFile> files =
+			new LocalTextFileScanner().Enumerate(folder.Path, MaxBytes).GetEnumerator();
+
+		files.MoveNext().Should().BeTrue("the folder holds three indexable files");
+
+		foreach (String path in Directory.GetFiles(folder.Path))
+		{
+			File.Delete(path);
+		}
+
+		List<ScannedTextFile> remaining = [];
+		while (files.MoveNext())
+		{
+			remaining.Add(files.Current);
+		}
+
+		remaining.Should().BeEmpty("a lazy walk reads a file only when it is pulled, so deleted files are never read");
+	}
+
+	/// <summary>
+	/// <c>Scan</c> is the materialising convenience over the same walk, so the two must not disagree
+	/// about what counts as indexable — a second walk that drifted from this one would show up as
+	/// files silently missing from the index.
+	/// </summary>
+	[Fact]
+	public void Scanning_Returns_Exactly_What_Enumerating_Yields()
+	{
+		using TempFolder folder = new();
+		File.WriteAllText(folder.Combine("a.md"), "alpha");
+		File.WriteAllText(folder.Combine("b.md"), "beta");
+		Directory.CreateDirectory(folder.Combine("sub"));
+		File.WriteAllText(folder.Combine("sub", "c.md"), "gamma");
+		File.WriteAllText(folder.Combine("skipped.bin"), "not indexable");
+
+		LocalTextFileScanner scanner = new();
+
+		scanner.Scan(folder.Path, MaxBytes).Select(static file => file.RelativePath)
+			.Should().BeEquivalentTo(
+				scanner.Enumerate(folder.Path, MaxBytes).Select(static file => file.RelativePath));
+	}
+
 	private static IReadOnlyList<ScannedTextFile> Scan(TempFolder folder)
 		=> new LocalTextFileScanner().Scan(folder.Path, MaxBytes);
 }
