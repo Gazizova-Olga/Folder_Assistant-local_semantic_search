@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Owner | Retrieval |
-| Last updated | 2026-09-08 |
+| Last updated | 2026-09-09 |
 
 ## Purpose
 
@@ -71,8 +71,32 @@ today, packed binary under a native extension later — without a retrieval stra
   scoring identically could swap places between runs, and a comparison against a second
   backend would report a difference that is not one.
 - `MinScore` drops weak matches before `TopK` is applied, so a low threshold and a high limit
-  do not conspire to pad the result with noise.
+  do not conspire to pad the result with noise. **It cannot currently be set to a useful
+  non-zero value**, for the reason below.
 - A zero-magnitude vector scores zero rather than dividing by zero.
+
+
+### A score is not yet comparable across queries
+
+Measured over the programmable vectorizer at dimension 64
+([DOCUMENTATION-ADJUSTMENTS-2026-09-09](../DOCUMENTATION-ADJUSTMENTS-2026-09-09.md)):
+
+| | measured |
+|---|---|
+| cosine between **unrelated** documents | 0.7767 – 0.9342 |
+| cosine for a **correct** query-to-document match | 0.7450 – 0.8933 |
+
+The ranges overlap almost entirely — a correct match scored 0.745 while two unrelated documents
+scored 0.934 against each other. The letter-frequency profile of English prose is nearly the
+same whatever the prose is about, so everything is similar to everything.
+
+**So no constant separates relevant from irrelevant, and `MinScore` cannot act as an absolute
+relevance floor today.** It is left at `0.0`. Any cut-off that is going to work has to be
+relative to the scores a given query actually produced.
+
+This is a property of the vectorizer, not of cosine or of the retrieval strategy — both of which
+are sound. It is the strongest argument for promoting a corpus-fitted embedder, and the reason
+an absolute threshold should not be tuned before then: it would be tuned against noise.
 
 ### Locatability
 
@@ -108,7 +132,8 @@ possible.
 - Where context assembly belongs: inside a retrieval strategy, or as a stage above it that any
   strategy feeds.
 - Whether `MinScore` should be absolute, or relative to the best hit for a given query. An
-  absolute floor is easy to reason about and hard to choose well.
+  absolute floor is easy to reason about and hard to choose well — and, as measured above,
+  impossible to choose at all while the active vectorizer scores everything alike.
 
 ## References
 

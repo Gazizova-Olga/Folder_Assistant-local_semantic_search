@@ -5,9 +5,19 @@ is in it. Everything runs in one process, against one folder, with no service to
 
 ## Status
 
-Early. This repository currently holds the solution skeleton: project layout, centralised
-package management, analyzer configuration and editor settings. The application itself is
-built up from here.
+**The write side works end to end; the read side is built but not yet connected.**
+
+What runs today: the application indexes a folder — scanning it, chunking the text, embedding
+the chunks and storing the vectors in a folder-scoped SQLite database — off the startup path,
+and keeps the index current from a filesystem watcher. Cosine retrieval over those vectors is
+implemented and tested, with two interchangeable embedding implementations behind one seam.
+
+What does not run yet: **nothing calls retrieval at runtime.** There is no agent, no tools and
+no chat surface, so the vectors are written and never read outside the test suite. That is the
+next substantial piece of work, not an oversight —
+[docs/DOCUMENTATION-ADJUSTMENTS-2026-09-09.md](docs/DOCUMENTATION-ADJUSTMENTS-2026-09-09.md)
+records it, and [docs/diagrams/implementation-status.md](docs/diagrams/implementation-status.md)
+shows what is live, what is built but unreachable, and what is not built.
 
 ## Requirements
 
@@ -52,11 +62,25 @@ cp FolderAssistant/appsettings.Development.template.json FolderAssistant/appsett
 dotnet run --project FolderAssistant
 ```
 
+**This writes to the folder it is pointed at.** It creates a `.folderassistant/` directory
+holding a SQLite database, indexes every text file it finds, and then keeps watching the folder
+and re-indexing when anything changes — until you stop it. With no configuration that folder is
+the working directory, so run it from somewhere you meant.
+
+The database is derived state: deleting `.folderassistant/` and running again rebuilds it.
+
+Set `FolderAssistant:Indexing:Enabled` to `false` to start the host without any of that.
+
 ## Layout
 
 ```
 FolderAssistant/            the application
-FolderAssistant.Tests/      its tests
+  Indexing/                 scan, chunk, watch, and the readiness gate
+  Embedding/                the vectorizer seam and its two implementations
+  Persistence/              SQLite bootstrap, connections, and the stores
+  Retrieval/                cosine search over the stored vectors
+FolderAssistant.Tests/      tests for both halves
+docs/                       specifications, diagrams and archived designs
 Directory.Packages.props    centrally managed package versions
 ```
 
@@ -78,7 +102,8 @@ reports more than it did yesterday has introduced something.
 - [`docs/specs/`](docs/specs/) — one specification per module. Most are placeholders for
   now and say so; they exist as a set so a module being built has somewhere to record its
   decisions at the time they are taken, rather than somewhere to write them up afterwards.
-- [`docs/diagrams/`](docs/diagrams/) — the architecture as it is meant to hold together.
+- [`docs/diagrams/`](docs/diagrams/) — the architecture as it is meant to hold together, and
+  [implementation-status.md](docs/diagrams/implementation-status.md) for how much of it exists.
 - [`docs/archive/`](docs/archive/) — designs that were considered and not built, kept for
   the reasoning that rejected them.
 

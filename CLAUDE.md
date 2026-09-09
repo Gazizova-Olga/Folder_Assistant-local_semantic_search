@@ -34,7 +34,7 @@ next or what to leave out — it is the authority on scope, not this file.
 
 ## Commands
 
-Once the solution lands, from the repository root:
+From the repository root:
 
 ```bash
 dotnet build                                  # build the solution
