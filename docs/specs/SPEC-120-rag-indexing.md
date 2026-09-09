@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-09 |
 
@@ -40,6 +40,13 @@ as it changes.
 
 Overlapping windows of a fixed token count, with a configured overlap. Chunk identity is
 content-addressed, derived from the file, the window index and the content hash.
+
+**A trailing window whose tokens the previous chunk already covers in full is dropped rather
+than emitted.** It is a suffix of its predecessor, produced only because the step happened to
+land there — seven tokens at size 4 and overlap 2 would otherwise end with a chunk holding just
+the seventh token. Emitting it costs an embedding and lets the same text come back twice in one
+result set. Only the final window can be redundant this way, because windows advance
+monotonically, and dropping it never drops a token.
 
 ## Delta handling
 
@@ -190,6 +197,22 @@ what it had — breaks this without any test necessarily noticing.
 - **Operability** — a pass reports scanned, indexed, unchanged and deleted counts, so "nothing
   happened" and "nothing needed to happen" are distinguishable.
 
+## Rollout
+
+The index is derived state: deleting the folder database and re-running rebuilds it. Two
+properties make that a fallback rather than the plan.
+
+**A folder indexed before trailing windows were dropped self-heals on the next pass.** Chunking
+runs for every scanned file, including unchanged ones, so the now-absent chunk is reconciled out
+of `chunk_manifest` and its vector cascades away. The surviving chunks keep their `chunk_id`s and
+their vectors, so nothing is re-embedded — the file does not even have to have changed. This is
+covered by a test that plants exactly such a stale chunk, rather than left as a claim: a chunk
+that survived would go on returning duplicate text from retrieval indefinitely, on precisely the
+databases nobody thinks to rebuild.
+
+**Reverting the pipeline restores full re-embedding**, since change detection is transparent to
+the schema.
+
 ## Test strategy
 
 What is actually pinned, so that a claim here can be checked against a test rather than taken on
@@ -216,7 +239,9 @@ trust.
   scanned, nested or otherwise; an extension outside the allowlist is excluded; empty and
   whitespace-only files are skipped; the file id tracks the path while the hash tracks the
   content; an unreadable root throws rather than reporting an empty folder.
-- **Chunk window arithmetic** — consecutive chunks overlap by exactly the configured count; zero
+- **Chunk window arithmetic** — consecutive chunks overlap by exactly the configured count; a
+  trailing window already covered by the previous chunk is dropped, and dropping it loses no
+  token across a sweep of token counts against six size/overlap combinations; zero
   overlap partitions without repeating; the final window is truncated rather than padded;
   identical content at the same index yields the same `chunk_id` and different files do not; a
   chunk size of zero or an overlap outside `[0, size)` is rejected.
@@ -235,11 +260,6 @@ Not covered: performance. Nothing here measures throughput or latency.
   to narrow the rescan once a corpus is large enough for that to matter?
 - Should retrieval say so while a refresh is in flight, or is silent staleness acceptable? Today a
   query during a refresh is answered from the previous pass with nothing marking it as such.
-- When the last chunking window is wholly contained in the previous chunk's overlap — seven tokens
-  at size 4 and overlap 2 leaves a final chunk of just the seventh token — it is still embedded and
-  stored as a chunk of its own. It costs an embedding and lets the same text surface twice in one
-  result set. Should the chunker drop a trailing window that adds no new tokens? Behaviour is
-  pinned by a test as it stands, so changing it is deliberate rather than incidental.
 
 ## References
 

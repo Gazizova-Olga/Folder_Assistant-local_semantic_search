@@ -64,6 +64,17 @@ internal sealed class TextChunker
 		for (Int32 start = 0, index = 0; start < tokens.Count; start += step, index++)
 		{
 			Int32 endExclusive = Math.Min(tokens.Count, start + chunkSizeTokens);
+
+			// A trailing window whose tokens the previous chunk already covers in full carries no
+			// content of its own — it is a suffix of its predecessor, produced only because the step
+			// happened to land there. Emitting it costs an embedding and lets the same text come back
+			// twice in one result set. Only the final window can be redundant this way, because the
+			// windows advance monotonically, so stopping here cannot skip a later one that is not.
+			if (chunks.Count > 0 && endExclusive <= chunks[^1].TokenEnd)
+			{
+				break;
+			}
+
 			String content = String.Join(" ", tokens.Skip(start).Take(endExclusive - start));
 			String chunkHash = Sha256(content);
 

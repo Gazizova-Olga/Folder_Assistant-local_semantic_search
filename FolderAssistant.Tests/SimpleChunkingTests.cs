@@ -64,22 +64,52 @@ public sealed class SimpleChunkingTests
 	}
 
 	/// <summary>
-	/// Documented rather than asserted-as-desirable. With seven tokens at size 4 and overlap 2, the
-	/// last window is a single token the previous chunk already contains in full — and it still
-	/// becomes its own chunk, costing an embedding and letting the same text surface twice in one
-	/// result set. Recorded as an open question in SPEC-120; this pins the behaviour as it is, so
-	/// that changing it is a deliberate act with a failing test attached.
+	/// <summary>
+	/// The redundant trailing window. With seven tokens at size 4 and overlap 2, the step lands at
+	/// token 6 and produces a window holding only the seventh token — which the previous chunk
+	/// already contains in full. It is a suffix of its predecessor, not a passage, so it is dropped
+	/// rather than embedded and stored.
 	/// </summary>
 	[Fact]
-	public void A_Trailing_Window_Already_Covered_By_The_Overlap_Still_Becomes_Its_Own_Chunk()
+	public void A_Trailing_Window_Already_Covered_By_The_Previous_Chunk_Is_Dropped()
 	{
 		IReadOnlyList<TextChunk> chunks = Chunk(Tokens(7), chunkSize: 4, overlap: 2);
 
-		chunks[^1].TokenStart.Should().Be(6);
+		chunks.Should().HaveCount(3);
+		chunks[^1].TokenStart.Should().Be(4);
 		chunks[^1].TokenEnd.Should().Be(7);
-		chunks[^2].TokenStart.Should().Be(4);
-		chunks[^2].TokenEnd.Should().Be(7);
 	}
+
+	/// <summary>
+	/// Dropping it must never drop a token. Swept rather than spot-checked, because the case only
+	/// arises at particular alignments of token count against size and overlap — a single example
+	/// proves nothing about the ones next to it.
+	/// </summary>
+	[Theory]
+	[InlineData(4, 2)]
+	[InlineData(4, 1)]
+	[InlineData(4, 3)]
+	[InlineData(3, 1)]
+	[InlineData(5, 2)]
+	[InlineData(8, 4)]
+	public void Dropping_A_Trailing_Window_Never_Loses_A_Token(Int32 chunkSize, Int32 overlap)
+	{
+		for (Int32 count = 1; count <= 40; count++)
+		{
+			IReadOnlyList<TextChunk> chunks = Chunk(Tokens(count), chunkSize, overlap);
+
+			chunks.Should().NotBeEmpty($"{count} tokens must produce at least one chunk");
+			chunks[0].TokenStart.Should().Be(0);
+			chunks[^1].TokenEnd.Should().Be(count, $"every token must be covered at {count} tokens");
+
+			// No gap between one window and the next.
+			chunks.Zip(chunks.Skip(1))
+				.Should().OnlyContain(
+					pair => pair.Second.TokenStart <= pair.First.TokenEnd,
+					$"windows must not leave a gap at {count} tokens");
+		}
+	}
+
 
 	[Fact]
 	public void An_Empty_Token_List_Produces_No_Chunks()
