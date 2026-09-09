@@ -94,13 +94,26 @@ internal sealed class IndexState : IIndexState
 		}
 	}
 
-	/// <summary>Records that the index could not be built, keeping the cause for the reader to report.</summary>
+	/// <summary>
+	/// Records that a pass failed, keeping the cause for the reader to report.
+	///
+	/// <para>
+	/// Only a build that has never succeeded can move the index to <see cref="IndexStatus.Failed"/>. Once
+	/// a pass has completed, a later one failing means the stored vectors are going stale, not that they
+	/// have gone away — and a folder that is briefly unreadable would otherwise take a working index out
+	/// of service and refuse queries it could still answer.
+	/// </para>
+	/// </summary>
 	public void MarkFailed(Exception error)
 	{
 		lock (this._gate)
 		{
-			this._status = IndexStatus.Failed;
 			this._error = error;
+
+			if (this._status != IndexStatus.Ready)
+			{
+				this._status = IndexStatus.Failed;
+			}
 		}
 	}
 }

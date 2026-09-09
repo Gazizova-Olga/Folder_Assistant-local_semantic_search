@@ -117,4 +117,20 @@ internal record IndexingConfig
 
 	/// <summary>Deterministic model version identifier used for persisted vectors.</summary>
 	public String ModelVersionId { get; init; } = "programmable-v1";
+
+	/// <summary>Watch the analyzed folder and re-index when it changes.</summary>
+	public Boolean WatchEnabled { get; init; } = true;
+
+	/// <summary>
+	/// Quiet period after a file event before a pass runs, so a burst of edits costs one pass rather
+	/// than one per event.
+	/// </summary>
+	public Int32 DebounceMilliseconds { get; init; } = 750;
+
+	/// <summary>
+	/// Periodic full rescan, as a safety net for changes the watcher never reports — events dropped
+	/// when its buffer overflows, and edits that arrive in a shape it does not recognise. Zero
+	/// disables it.
+	/// </summary>
+	public Int32 ReconciliationIntervalSeconds { get; init; } = 300;
 }

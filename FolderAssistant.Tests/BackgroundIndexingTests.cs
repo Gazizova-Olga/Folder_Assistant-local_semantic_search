@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using FluentAssertions;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
@@ -27,7 +28,7 @@ public sealed class BackgroundIndexingTests
 	public async Task A_Completed_Pass_Makes_The_Index_Queryable()
 	{
 		IndexState state = new();
-		using FolderIndexingService service = new(() => EmptyResult, state);
+		using FolderIndexingService service = new(() => EmptyResult, changeFeed: null, state);
 
 		await service.StartAsync(CancellationToken.None);
 		await service.ExecuteTask!;
@@ -46,7 +47,7 @@ public sealed class BackgroundIndexingTests
 	{
 		InvalidOperationException failure = new("the scan could not read the folder");
 		IndexState state = new();
-		using FolderIndexingService service = new(() => throw failure, state);
+		using FolderIndexingService service = new(() => throw failure, changeFeed: null, state);
 
 		await service.StartAsync(CancellationToken.None);
 		await service.ExecuteTask!;
@@ -64,7 +65,7 @@ public sealed class BackgroundIndexingTests
 	public async Task A_Failed_Pass_Does_Not_Fault_The_Host()
 	{
 		IndexState state = new();
-		using FolderIndexingService service = new(() => throw new IOException("locked"), state);
+		using FolderIndexingService service = new(() => throw new IOException("locked"), changeFeed: null, state);
 
 		await service.StartAsync(CancellationToken.None);
 
@@ -126,6 +127,123 @@ public sealed class BackgroundIndexingTests
 		state.MarkReady(DateTime.UtcNow);
 
 		Search(state).Should().BeEmpty();
+	}
+
+	/// <summary>
+	/// A signal from the feed runs another pass. Without this the index is correct exactly once, at
+	/// startup, and drifts from the folder from the first edit onwards.
+	/// </summary>
+	[Fact]
+	public async Task A_Change_Signal_Runs_Another_Pass()
+	{
+		using StubChangeFeed feed = new();
+		IndexState state = new();
+		Int32 passes = 0;
+
+		using FolderIndexingService service = new(
+			() =>
+			{
+				Interlocked.Increment(ref passes);
+				return EmptyResult;
+			},
+			feed,
+			state);
+
+		await service.StartAsync(CancellationToken.None);
+		await feed.Started;
+
+		feed.Signal("a file changed");
+
+		await WaitUntil(() => Volatile.Read(ref passes) >= 2);
+
+		Volatile.Read(ref passes).Should().BeGreaterThanOrEqualTo(2);
+	}
+
+	/// <summary>
+	/// A refresh that fails leaves the index serving. The stored vectors are going stale, not
+	/// missing, and refusing every query because the folder was briefly unreadable takes a working
+	/// feature out of service for a condition the next pass will clear on its own.
+	/// </summary>
+	[Fact]
+	public async Task A_Failed_Refresh_Keeps_The_Existing_Index_Queryable()
+	{
+		using StubChangeFeed feed = new();
+		IndexState state = new();
+		Int32 passes = 0;
+
+		using FolderIndexingService service = new(
+			() => Interlocked.Increment(ref passes) > 1
+				? throw new IOException("the folder went away")
+				: EmptyResult,
+			feed,
+			state);
+
+		await service.StartAsync(CancellationToken.None);
+		await WaitUntil(() => state.Status == IndexStatus.Ready);
+
+		await feed.Started;
+		feed.Signal("a file changed");
+
+		await WaitUntil(() => Volatile.Read(ref passes) >= 2);
+
+		state.Status.Should().Be(IndexStatus.Ready);
+	}
+
+	/// <summary>The same property from the caller's side: the refusal does not come back.</summary>
+	[Fact]
+	public void Retrieval_Still_Answers_After_A_Refresh_Fails()
+	{
+		IndexState state = new();
+		state.MarkReady(DateTime.UtcNow);
+		state.MarkFailed(new IOException("the folder went away"));
+
+		Func<Object> search = () => Search(state);
+
+		search.Should().NotThrow();
+	}
+
+	/// <summary>
+	/// The distinction only runs one way. A build that has never succeeded stays failed, because
+	/// there is nothing stored to keep serving.
+	/// </summary>
+	[Fact]
+	public void A_Failure_Before_Any_Successful_Pass_Leaves_The_Index_Failed()
+	{
+		IndexState state = new();
+
+		state.MarkFailed(new IOException("the folder went away"));
+
+		state.Status.Should().Be(IndexStatus.Failed);
+	}
+
+	private static async Task WaitUntil(Func<Boolean> condition)
+	{
+		DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+
+		while (!condition() && DateTime.UtcNow < deadline)
+		{
+			await Task.Delay(10);
+		}
+	}
+
+	/// <summary>A feed the test drives directly, so no filesystem timing is involved.</summary>
+	private sealed class StubChangeFeed : IFileChangeFeed
+	{
+		private readonly Channel<FolderChangeSignal> _channel = Channel.CreateUnbounded<FolderChangeSignal>();
+		private readonly TaskCompletionSource _started =
+			new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+		/// <summary>Completes when the service has started the feed, which it does after its first pass.</summary>
+		public Task Started => this._started.Task;
+
+		public void Start() => this._started.TrySetResult();
+
+		public void Signal(String reason) => this._channel.Writer.TryWrite(new FolderChangeSignal(reason));
+
+		public IAsyncEnumerable<FolderChangeSignal> ReadAllAsync(CancellationToken cancellationToken)
+			=> this._channel.Reader.ReadAllAsync(cancellationToken);
+
+		public void Dispose() => this._channel.Writer.TryComplete();
 	}
 
 	private static readonly IndexingResult EmptyResult = new(0, 0, 0, 0, 0, 0);

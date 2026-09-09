@@ -13,25 +13,57 @@ namespace FolderAssistant.Indexing;
 /// guarantee that the index is populated when the host starts answering, which is what
 /// <see cref="IndexState"/> exists to give back.
 /// </para>
+///
+/// <para>
+/// After the first pass it keeps indexing from the change feed. Passes are serialized by the loop
+/// itself: the next signal is not read until the current pass returns, so two passes cannot write
+/// over each other however quickly the folder is being edited.
+/// </para>
 /// </summary>
 internal sealed class FolderIndexingService : BackgroundService
 {
 	private readonly Func<IndexingResult> _runIndex;
+	private readonly IFileChangeFeed? _changeFeed;
 	private readonly IndexState _state;
 
-	public FolderIndexingService(Func<IndexingResult> runIndex, IndexState state)
+	public FolderIndexingService(Func<IndexingResult> runIndex, IFileChangeFeed? changeFeed, IndexState state)
 	{
 		ArgumentNullException.ThrowIfNull(runIndex);
 		ArgumentNullException.ThrowIfNull(state);
 
 		this._runIndex = runIndex;
+		this._changeFeed = changeFeed;
 		this._state = state;
 	}
 
-	protected override Task ExecuteAsync(CancellationToken stoppingToken)
-		=> this.IndexAsync("startup", stoppingToken);
+	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+	{
+		await this.IndexAsync(isInitial: true, "startup", stoppingToken).ConfigureAwait(false);
 
-	private async Task IndexAsync(String reason, CancellationToken cancellationToken)
+		if (this._changeFeed is null)
+		{
+			return;
+		}
+
+		// Started after the first pass, not before it: signals raised while that pass was running
+		// would describe a folder it has already read.
+		this._changeFeed.Start();
+
+		try
+		{
+			await foreach (FolderChangeSignal signal in
+				this._changeFeed.ReadAllAsync(stoppingToken).ConfigureAwait(false))
+			{
+				await this.IndexAsync(isInitial: false, signal.Reason, stoppingToken).ConfigureAwait(false);
+			}
+		}
+		catch (OperationCanceledException)
+		{
+			// The host is shutting down.
+		}
+	}
+
+	private async Task IndexAsync(Boolean isInitial, String reason, CancellationToken cancellationToken)
 	{
 		try
 		{
@@ -59,6 +91,13 @@ internal sealed class FolderIndexingService : BackgroundService
 			this._state.MarkFailed(ex);
 
 			Console.WriteLine($"Indexing ({reason}) failed: {ex.Message}");
+
+			// A refresh that fails must not tear down an index that is already serving queries; only
+			// the initial build can leave the state unusable.
+			if (isInitial)
+			{
+				return;
+			}
 		}
 	}
 }

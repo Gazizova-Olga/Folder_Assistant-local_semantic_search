@@ -41,8 +41,17 @@ internal sealed class Program
 
 			FolderIndexingPipeline pipeline = new(vectorizer);
 
+			IFileChangeFeed? changeFeed = config.Indexing.WatchEnabled
+				? new FileSystemWatcherChangeFeed(
+					analyzedFolderPath,
+					config.Persistence.MetadataFolderName,
+					TimeSpan.FromMilliseconds(config.Indexing.DebounceMilliseconds),
+					TimeSpan.FromSeconds(config.Indexing.ReconciliationIntervalSeconds))
+				: null;
+
 			builder.Services.AddSingleton<IHostedService>(_ => new FolderIndexingService(
 				() => pipeline.Run(analyzedFolderPath, database.DatabasePath, config.Indexing),
+				changeFeed,
 				indexState));
 		}
 		else

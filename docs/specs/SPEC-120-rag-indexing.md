@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-09 |
 
@@ -19,7 +19,8 @@ as it changes.
 - File enumeration and filtering.
 - Tokenization and chunking.
 - Deciding what has changed since the last pass, and acting on it.
-- When a pass runs, and what retrieval is told while one has not finished.
+- When a pass runs, what triggers the next one, and what retrieval is told while one has not
+  finished.
 
 **Out of scope**
 
@@ -124,6 +125,52 @@ degraded feature.
 index, so a query must not sit waiting for one; ready over an empty store returns no hits, which
 is the honest answer.
 
+
+### Keeping up with the folder
+
+After the first pass, a change feed drives the rest. `IFileChangeFeed` emits
+`FolderChangeSignal(Reason)`.
+
+**The signal is deliberately coarse.** It names no file, and a consumer cannot learn from it what
+was edited. A pass rescans and diffs by content hash regardless, so per-file detail would be
+gathered, carried and then ignored — while making the feed answerable for being complete and
+correct about a set of events that cannot be obtained reliably in the first place.
+
+That is what makes the feed survivable on top of a filesystem watcher, which is unreliable in two
+specific ways:
+
+- its internal buffer overflows under a burst and the events in it are lost, so an overflow is
+  reported as "assume everything changed" rather than as an attempt to reconstruct what went
+  missing;
+- an editor saving atomically writes a temporary file and renames it over the original, which
+  arrives as delete-then-create rather than as a change — so a feed describing the edit would
+  describe the wrong thing, while a feed that only says "look again" is right either way.
+
+**A burst collapses into one pass.** Signals are debounced, and the pending signal is held in a
+one-slot channel that drops writes when full: ten edits cost one pass, not ten identical ones.
+
+**A periodic rescan backstops the watcher**, for anything it never reported at all.
+
+**Passes are serialized.** The next signal is not read until the current pass returns, so two
+passes cannot write over each other however quickly the folder is being edited.
+
+### The watcher must ignore the metadata folder
+
+The folder database lives inside the analyzed folder, so every pass writes files the watcher can
+see. Unfiltered, each pass would trigger the next one and the folder would index for as long as
+the process ran. Build and VCS directories (`bin`, `obj`, `.git`, `.vs`, `node_modules`) are
+ignored as well.
+
+The configured metadata folder name is passed to the feed rather than assumed, so changing it
+does not quietly reopen the loop.
+
+### Configuration
+
+- `LlmAgent:Indexing:WatchEnabled` (default `true`) — watch the folder and re-index on change.
+- `LlmAgent:Indexing:DebounceMilliseconds` (default `750`) — quiet period after a file event.
+- `LlmAgent:Indexing:ReconciliationIntervalSeconds` (default `300`) — periodic full rescan. Zero
+  disables it.
+
 ## Sharp edge — deletion is inferred from the scan
 
 The scanned file list is treated as the authoritative current state of the folder. **A scan that
@@ -146,6 +193,11 @@ what it had — breaks this without any test necessarily noticing.
 - Whether fit drift should be detected, and what the signal would be.
 - Whether a partial scan should be distinguishable from a complete one, so deletion can be made
   conditional on the scan being known-complete.
+- Every signal triggers a rescan of the whole folder. That is cheap next to embedding, since
+  unchanged files are skipped, but it is O(folder) per edit. Should the signal carry enough detail
+  to narrow the rescan once a corpus is large enough for that to matter?
+- Should retrieval say so while a refresh is in flight, or is silent staleness acceptable? Today a
+  query during a refresh is answered from the previous pass with nothing marking it as such.
 
 ## References
 
