@@ -148,6 +148,23 @@ public sealed class FileChangeFeedTests
 		signal!.Reason.Should().Be("periodic reconciliation");
 	}
 
+	/// <summary>
+	/// A zero interval turns the safety net off rather than meaning "immediately". Every other test
+	/// in this class relies on that, so it is worth asserting once directly.
+	/// </summary>
+	[Fact]
+	public async Task A_Zero_Reconciliation_Interval_Disables_The_Periodic_Rescan()
+	{
+		using TempFolder folder = new();
+		using FileSystemWatcherChangeFeed feed = new(folder.Path, ".folderassistant", Debounce, NoReconciliation);
+
+		feed.Start();
+
+		FolderChangeSignal? signal = await NextSignal(feed, TimeSpan.FromMilliseconds(600));
+
+		signal.Should().BeNull();
+	}
+
 	/// <summary>Reads the next signal, or returns null if none arrives before the wait expires.</summary>
 	private static async Task<FolderChangeSignal?> NextSignal(IFileChangeFeed feed, TimeSpan? within = null)
 	{

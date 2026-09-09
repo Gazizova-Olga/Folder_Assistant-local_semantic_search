@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-09 |
 
@@ -188,6 +188,41 @@ what it had — breaks this without any test necessarily noticing.
 - **Operability** — a pass reports scanned, indexed, unchanged and deleted counts, so "nothing
   happened" and "nothing needed to happen" are distinguishable.
 
+## Test strategy
+
+What is actually pinned, so that a claim here can be checked against a test rather than taken on
+trust.
+
+- **Delta correctness** — re-indexing an unchanged folder embeds nothing; only a changed file is
+  re-embedded; a deleted file's chunks and vectors go; switching model version re-embeds
+  everything despite unchanged content.
+- **Idempotency** — re-indexing changed content supersedes rather than collides, and a file that
+  shrank leaves no orphaned chunks.
+- **Fit reuse** — editing a file does not silently refit an existing corpus-fitted model.
+- **Readiness** — retrieval refuses while the first index builds and after a failed build; a
+  failed refresh leaves a ready index serving, and unmarked.
+- **Background service** — the initial pass moves `Building` to `Ready`; a change signal runs
+  another pass; a failed pass does not fault the host.
+- **Change feed** — an edit produces a signal; writes inside the metadata folder produce none, for
+  the default name *and* a configured one; build output is ignored; a burst collapses into one
+  signal; the periodic tick fires with no file event, and a zero interval disables it.
+- **The watcher end to end** — a real filesystem event reaching a real re-index, asserting that
+  indexing *stops*. Asserting on file counts alone does not catch a self-triggering loop: it
+  re-indexes the same files and leaves the counts and the status looking correct.
+- **Scanner filters** — a file over `MaxTextFileSizeBytes` is excluded and one exactly on the
+  limit is kept; `bin`, `obj`, `.git`, `.vs`, `node_modules` and the metadata folder are not
+  scanned, nested or otherwise; an extension outside the allowlist is excluded; empty and
+  whitespace-only files are skipped; the file id tracks the path while the hash tracks the
+  content; an unreadable root throws rather than reporting an empty folder.
+- **Chunk window arithmetic** — consecutive chunks overlap by exactly the configured count; zero
+  overlap partitions without repeating; the final window is truncated rather than padded;
+  identical content at the same index yields the same `chunk_id` and different files do not; a
+  chunk size of zero or an overlap outside `[0, size)` is rejected.
+- **Configuration** — defaults match this document, and the analyzed folder falls back to the
+  working directory and always resolves to an absolute path.
+
+Not covered: performance. Nothing here measures throughput or latency.
+
 ## Open questions
 
 - Whether fit drift should be detected, and what the signal would be.
@@ -198,6 +233,11 @@ what it had — breaks this without any test necessarily noticing.
   to narrow the rescan once a corpus is large enough for that to matter?
 - Should retrieval say so while a refresh is in flight, or is silent staleness acceptable? Today a
   query during a refresh is answered from the previous pass with nothing marking it as such.
+- When the last chunking window is wholly contained in the previous chunk's overlap — seven tokens
+  at size 4 and overlap 2 leaves a final chunk of just the seventh token — it is still embedded and
+  stored as a chunk of its own. It costs an embedding and lets the same text surface twice in one
+  result set. Should the chunker drop a trailing window that adds no new tokens? Behaviour is
+  pinned by a test as it stands, so changing it is deliberate rather than incidental.
 
 ## References
 
