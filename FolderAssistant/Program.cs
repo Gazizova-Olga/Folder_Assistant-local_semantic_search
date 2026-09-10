@@ -53,6 +53,10 @@ internal sealed class Program
 			sp.GetRequiredService<ModuleSet>().CreateVectorizer(sp.GetRequiredService<AgentConfig>().Indexing),
 			sp.GetRequiredService<IEmbeddingTelemetry>()));
 
+		// The context-assembly stage. Composed but not yet called: the consumer that would run it over
+		// retrieval output is a search tool, which belongs to the agent work.
+		builder.Services.AddSingleton<IContextReduction, TokenBudgetContextReducer>();
+
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreWriter());
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreReader());
 

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Retrieval |
-| Last updated | 2026-09-09 |
+| Last updated | 2026-09-10 |
 
 ## Purpose
 
@@ -18,17 +18,22 @@ Embeds a query, ranks stored vectors against it, and returns the chunks that mat
 - Query embedding and semantic search.
 - The retrieval query contract, and the read contract it sits on.
 - Ranking, score thresholds and result limits.
+- Rerank, diversity, and assembly under a token budget — as a stage **over** the retrieval
+  contract's output, not inside it.
 
 **Out of scope**
 
 - How vectors were produced ([SPEC-160](SPEC-160-embedding-module.md)).
 - How they are stored ([SPEC-130](SPEC-130-persistence.md)).
-- Rerank, diversity and assembly under a token budget — not yet written.
 
 ## Implementation status
 
-Brute-force cosine search is implemented over the JSON vector store. Context assembly under a
-token budget is **not**; a caller gets ranked hits and decides for itself what to do with them.
+Both retrieval backends are implemented, and context assembly now exists as a separate stage
+(`IContextReduction`, default `TokenBudgetContextReducer`).
+
+**Nothing calls the reducer yet.** It is composed and resolvable, in the same position retrieval
+itself occupied before the composition root registered it: the stage a consumer will run, with no
+consumer built. A semantic-search tool is what will use it, and that belongs to the agent work.
 
 ## Contracts
 
@@ -157,10 +162,39 @@ to detect. It is the thing a candidate backend must beat, on the same vectors an
 metric, **agreeing with it on ranking up to ties**. Keeping it is what makes that comparison
 possible.
 
+## Rerank and budget policy
+
+Raw top-k is not context. The k best passages by score are often near-duplicates — the same
+paragraph chunked twice, or one idea stated twice in a file — so handing all of them to a model
+spends the budget restating one thing while the answer sits in the passage that ranked ninth.
+
+- **Relevance is blended**: `(1 - lexicalWeight) * semantic + lexicalWeight * coverage`, where
+  coverage is the fraction of the query's distinct terms the passage contains. `lexicalWeight`
+  defaults to `0.3`, so semantics lead but a passage carrying the exact keyword can overtake a
+  near-tied paraphrase.
+- **Selection is greedy MMR**, with diversity measured as Jaccard over passage word sets rather
+  than over vectors. That keeps vectors out of the reduction contract entirely, and costs nothing
+  on the query path.
+- **Selection stops at the token budget**, and at `MaxPassages`, whichever binds first.
+- **The best passage is always returned**, even when it alone exceeds the budget. Some context
+  beats none, and an empty result is indistinguishable from having found nothing.
+- **A passage skipped for size does not end the scan.** A smaller one after it can still fit;
+  stopping at the first overflow would make the result depend on candidate order.
+
+The reported score is the blended relevance, not the raw retrieval score — reporting the latter
+would explain a different ordering than the one produced.
+
+**Deferred, deliberately:** per-call budget configuration (the defaults are code constants),
+vector-based MMR, and a stopword list. The lexical signal is coarse and carries a minority share
+of the ranking, so stopwords would be tuning a weight that mostly is not deciding anything.
+
 ## Open questions
 
-- Where context assembly belongs: inside a retrieval strategy, or as a stage above it that any
-  strategy feeds.
+- ~~Where context assembly belongs: inside a retrieval strategy, or as a stage above it.~~
+  **Resolved: a stage above it.** Ranking and budgeting answer different questions — what matches,
+  and what is worth spending the context on — and keeping them apart means the retrieval contract
+  stays a pure top-k similarity search. A native k-NN backend needs no rerank logic pushed into it,
+  and the reducer works the same whichever backend produced the candidates.
 - Whether `MinScore` should be absolute, or relative to the best hit for a given query. An
   absolute floor is easy to reason about and hard to choose well — and, as measured above,
   impossible to choose at all while the active vectorizer scores everything alike.

@@ -22,6 +22,7 @@ flowchart LR
     subgraph built["Built but unreachable — no runtime caller"]
         direction TB
         query["IRetrievalQuery x2<br/>composed, never called"]
+        reducer["TokenBudgetContextReducer<br/>composed, never called"]
     end
 
     subgraph notbuilt["Not built"]
@@ -42,7 +43,7 @@ flowchart LR
     classDef gapCls fill:#37474f,stroke:#b0bec5,color:#ffffff
 
     class scan,chunk,embed,store,watch,state liveCls
-    class query builtCls
+    class query,reducer builtCls
     class tools,agent,chatui gapCls
 ```
 
@@ -52,6 +53,9 @@ flowchart LR
 resolves one of two implementations, and either can be pulled out of the container. What is
 still missing is a caller: nothing on the request path asks it anything, so every pass writes
 vectors the running application never reads.
+
+The context-assembly stage (`TokenBudgetContextReducer`) has just joined it in the same position:
+built, tested, composed, and with nothing calling it.
 
 That narrows the gap to one edge rather than two. Composition was the prerequisite and it is
 done; the remaining work is a runtime caller, which in the plan means the filesystem tools and
