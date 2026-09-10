@@ -110,6 +110,55 @@ public sealed class OllamaEmbeddingVectorizerTests
 		generator.Calls.Should().Be(0);
 	}
 
+	/// <summary>
+	/// The probe's happy path: a backend that answers is reported usable, in one attempt.
+	/// </summary>
+	[Fact]
+	public async Task A_Reachable_Backend_Passes_The_Health_Check_First_Time()
+	{
+		FakeEmbeddingGenerator generator = new(Dimension);
+		using OllamaEmbeddingVectorizer vectorizer = new(generator, Model, ModelVersionId, Dimension);
+
+		await vectorizer.CheckAsync();
+
+		generator.Calls.Should().Be(1, "a backend that answers should not be probed again");
+	}
+
+	/// <summary>
+	/// A server still paging the model in can refuse the first probe, so the check retries. What it must
+	/// not do is mistake that for an absent server on the first refusal.
+	/// </summary>
+	[Fact]
+	public async Task An_Unreachable_Backend_Is_Retried_Before_Being_Declared_Unusable()
+	{
+		FakeEmbeddingGenerator generator = new(Dimension) { ThrowWith = () => new HttpRequestException("refused") };
+		using OllamaEmbeddingVectorizer vectorizer = new(generator, Model, ModelVersionId, Dimension);
+
+		Func<Task> check = async () => await vectorizer.CheckAsync();
+
+		(await check.Should().ThrowAsync<InvalidOperationException>())
+			.Which.Message.Should().Contain(Model);
+
+		generator.Calls.Should().Be(3, "a slow start deserves more than one chance");
+	}
+
+	/// <summary>
+	/// The counter-case, and the reason the retry is not blanket. A width mismatch is a configuration
+	/// error: it will fail identically three times, so retrying only delays the same answer.
+	/// </summary>
+	[Fact]
+	public async Task A_Width_Mismatch_Fails_The_Health_Check_Without_Retrying()
+	{
+		FakeEmbeddingGenerator generator = new(width: Dimension + 1);
+		using OllamaEmbeddingVectorizer vectorizer = new(generator, Model, ModelVersionId, Dimension);
+
+		Func<Task> check = async () => await vectorizer.CheckAsync();
+
+		await check.Should().ThrowAsync<InvalidOperationException>();
+
+		generator.Calls.Should().Be(1, "a configuration error is not transient");
+	}
+
 	/// <summary>Records what it was asked, and returns vectors of a width the test chooses.</summary>
 	private sealed class FakeEmbeddingGenerator(Int32 width) : IEmbeddingGenerator<String, Embedding<Single>>
 	{
@@ -120,6 +169,9 @@ public sealed class OllamaEmbeddingVectorizerTests
 		/// <summary>Caps how many embeddings come back, to stage a count mismatch.</summary>
 		public Int32? EmitAtMost { get; init; }
 
+		/// <summary>Stages a transport failure: an unreachable server, or one without the model.</summary>
+		public Func<Exception>? ThrowWith { get; init; }
+
 		public Task<GeneratedEmbeddings<Embedding<Single>>> GenerateAsync(
 			IEnumerable<String> values,
 			EmbeddingGenerationOptions? options = null,
@@ -127,6 +179,11 @@ public sealed class OllamaEmbeddingVectorizerTests
 		{
 			this.Calls++;
 			this.LastInputs = [.. values];
+
+			if (this.ThrowWith is not null)
+			{
+				throw this.ThrowWith();
+			}
 
 			Int32 count = Math.Min(this.LastInputs.Count, this.EmitAtMost ?? this.LastInputs.Count);
 

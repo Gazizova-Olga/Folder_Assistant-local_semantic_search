@@ -82,6 +82,32 @@ internal interface IFittableVectorizer : IVectorizer
 	void LoadFit(String artifactJson);
 }
 
+/// <summary>
+/// An optional capability a vectorizer may implement to be probed <em>before</em> the first index runs.
+///
+/// <para>
+/// Only a network-bound embedder needs it: an in-process one cannot be unreachable, so it does not
+/// implement the seam and the probe is skipped for it entirely. That is why this is a separate
+/// interface rather than a method on <see cref="IVectorizer"/> returning "healthy" — most
+/// implementations have nothing to answer.
+/// </para>
+///
+/// <para>
+/// The indexing service checks for it and, when present, awaits <see cref="CheckAsync"/> at the top of
+/// the first pass. A throw becomes a failed index carrying that message, which is one clear failure
+/// instead of a wall of per-file delivery errors that each describe a symptom rather than the cause.
+/// </para>
+/// </summary>
+internal interface IEmbeddingHealthCheck
+{
+	/// <summary>
+	/// Verifies the backend is reachable and the model usable, throwing an
+	/// <see cref="InvalidOperationException"/> with an actionable message when it is not. Returns
+	/// normally when the backend answered a probe.
+	/// </summary>
+	ValueTask CheckAsync(CancellationToken cancellationToken = default);
+}
+
 internal static class VectorizerExtensions
 {
 	/// <summary>

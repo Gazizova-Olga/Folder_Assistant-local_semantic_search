@@ -27,7 +27,7 @@ namespace FolderAssistant.Embedding;
 /// carry is what this one trades for real semantics.
 /// </para>
 /// </summary>
-internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IDisposable
+internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthCheck, IDisposable
 {
 	/// <summary>
 	/// Qwen3-Embedding applies an instruction to the query side only; documents are embedded verbatim.
@@ -36,6 +36,15 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IDisposable
 	/// </summary>
 	private const String QueryInstructionPrefix =
 		"Instruct: Given a search query, retrieve relevant passages that answer the query\nQuery: ";
+
+	/// <summary>
+	/// A slow-starting server — the model paging in on first use — can refuse the first probe. A few
+	/// quick retries separate "not up yet" from "not there at all", without turning a genuine outage
+	/// into a long stall at startup.
+	/// </summary>
+	private const Int32 HealthCheckAttempts = 3;
+
+	private static readonly TimeSpan HealthCheckRetryDelay = TimeSpan.FromSeconds(1);
 
 	private readonly IEmbeddingGenerator<String, Embedding<Single>> _generator;
 
@@ -112,6 +121,49 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IDisposable
 		}
 
 		return results;
+	}
+
+	/// <summary>
+	/// The pre-index probe. Embeds one throwaway document, which exercises the whole path at once:
+	/// transport reachability, model presence, and output width.
+	///
+	/// <para>
+	/// A width mismatch is passed straight through without retrying. It is a configuration error, not a
+	/// transient one, and retrying it three times only delays the same answer.
+	/// </para>
+	/// </summary>
+	public async ValueTask CheckAsync(CancellationToken cancellationToken = default)
+	{
+		for (Int32 attempt = 1; attempt <= HealthCheckAttempts; attempt++)
+		{
+			try
+			{
+				// Document, not Query: the probe should not prepend the model's retrieval instruction.
+				_ = await this.VectorizeAsync(["health check"], EmbeddingKind.Document, cancellationToken)
+					.ConfigureAwait(false);
+
+				return;
+			}
+			catch (InvalidOperationException)
+			{
+				// The vectorizer's own width or count validation. Non-transient — surface it as-is.
+				throw;
+			}
+			catch (Exception ex) when (ex is not OperationCanceledException)
+			{
+				if (attempt >= HealthCheckAttempts)
+				{
+					throw new InvalidOperationException(
+						$"The Ollama embedding backend is not usable: a probe embed with model "
+						+ $"'{this.Descriptor.ModelName}' failed {HealthCheckAttempts} times. Check that Ollama is "
+						+ "running at the configured endpoint and that the model has been pulled. "
+						+ $"Underlying error: {ex.Message}",
+						ex);
+				}
+
+				await Task.Delay(HealthCheckRetryDelay, cancellationToken).ConfigureAwait(false);
+			}
+		}
 	}
 
 	public void Dispose() => (this._generator as IDisposable)?.Dispose();

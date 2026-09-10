@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — core implemented and live-verified |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Owner | Embedding |
 | Last updated | 2026-09-10 |
 
@@ -89,9 +89,8 @@ implementation able to reach a *remote* service must not be a profile in this as
 - **Performance** — measured on the development machine, a single short document embeds in roughly
   200 ms against an already-loaded model. Not benchmarked at corpus scale; that measurement belongs
   with the indexing path that will drive it.
-- **Operability** — failure is currently only visible per call. There is no startup probe, so an
-  operator who has not started Ollama learns about it when indexing fails rather than at boot. See
-  Pending.
+- **Operability** — a misconfigured or absent backend is reported once, at startup, by the health
+  check, instead of only per call after indexing has begun.
 
 ## Implementation status
 
@@ -105,11 +104,16 @@ implementation able to reach a *remote* service must not be a profile in this as
   machine: the model emits **1024** dimensions, matching the configured default, and a query
   retrieves the passage answering it while sharing none of its words — where the placeholder
   embedder, on the same corpus and query, does not.
+- **A proactive startup health check** (`IEmbeddingHealthCheck`). The indexing service probes the
+  backend once, before the first pass, when the composed vectorizer implements the seam. In-process
+  embedders do not implement it and are not probed — they cannot be unreachable. A failed probe
+  becomes a failed index carrying an actionable message, rather than a wall of per-file delivery
+  errors that each describe a symptom. The probe retries three times, one second apart, so a server
+  still paging the model in is not mistaken for an absent one; a width mismatch is passed straight
+  through without retrying, because it is a configuration error that will fail identically each time.
 
 **Pending:**
 
-- **A proactive startup health check.** Nothing probes endpoint-and-model before indexing begins, so
-  the failure surfaces later and less clearly than it could.
 - **A bounded embed call.** The per-request timeout is not yet applied, so a call that never returns
   is not yet cut off. The configuration key for it is deliberately absent until the code that reads
   it exists.

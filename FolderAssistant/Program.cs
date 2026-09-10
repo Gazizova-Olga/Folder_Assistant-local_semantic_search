@@ -103,10 +103,14 @@ internal sealed class Program
 					TimeSpan.FromSeconds(config.Indexing.ReconciliationIntervalSeconds))
 				: null;
 
+			// Only a network-bound embedder implements the probe seam; for the in-process ones this is
+			// null and the first pass just starts. The cast is how the composition root avoids knowing
+			// which kind the active profile built.
 			return new FolderIndexingService(
 				() => pipeline.Run(analyzedFolderPath, databasePath, config.Indexing),
 				changeFeed,
-				indexState);
+				indexState,
+				sp.GetRequiredService<IVectorizer>() as IEmbeddingHealthCheck);
 		});
 
 		// The bootstrap has to finish before the first request is served. A startup filter is what

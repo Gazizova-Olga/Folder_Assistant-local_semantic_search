@@ -1,3 +1,4 @@
+using FolderAssistant.Embedding;
 using Microsoft.Extensions.Hosting;
 
 namespace FolderAssistant.Indexing;
@@ -25,8 +26,17 @@ internal sealed class FolderIndexingService : BackgroundService
 	private readonly Func<IndexingResult> _runIndex;
 	private readonly IFileChangeFeed? _changeFeed;
 	private readonly IndexState _state;
+	private readonly IEmbeddingHealthCheck? _healthCheck;
 
-	public FolderIndexingService(Func<IndexingResult> runIndex, IFileChangeFeed? changeFeed, IndexState state)
+	/// <summary>
+	/// <paramref name="healthCheck"/> is null for every in-process embedder — they cannot be
+	/// unreachable, so there is nothing to probe and the first pass simply begins.
+	/// </summary>
+	public FolderIndexingService(
+		Func<IndexingResult> runIndex,
+		IFileChangeFeed? changeFeed,
+		IndexState state,
+		IEmbeddingHealthCheck? healthCheck = null)
 	{
 		ArgumentNullException.ThrowIfNull(runIndex);
 		ArgumentNullException.ThrowIfNull(state);
@@ -34,11 +44,12 @@ internal sealed class FolderIndexingService : BackgroundService
 		this._runIndex = runIndex;
 		this._changeFeed = changeFeed;
 		this._state = state;
+		this._healthCheck = healthCheck;
 	}
 
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 	{
-		await this.IndexAsync("startup", stoppingToken).ConfigureAwait(false);
+		await this.IndexAsync("startup", stoppingToken, probeFirst: true).ConfigureAwait(false);
 
 		if (this._changeFeed is null)
 		{
@@ -63,10 +74,18 @@ internal sealed class FolderIndexingService : BackgroundService
 		}
 	}
 
-	private async Task IndexAsync(String reason, CancellationToken cancellationToken)
+	private async Task IndexAsync(String reason, CancellationToken cancellationToken, Boolean probeFirst = false)
 	{
 		try
 		{
+			if (probeFirst && this._healthCheck is not null)
+			{
+				// Before the first pass, not before every one: a backend that was reachable at startup
+				// and has since died fails per file anyway, and re-probing on each refresh would add a
+				// round-trip to every edit for an answer that is almost always yes.
+				await this._healthCheck.CheckAsync(cancellationToken).ConfigureAwait(false);
+			}
+
 			// The pipeline is synchronous and both CPU- and IO-bound. Handing it to the thread pool is
 			// what keeps it off the thread the host is starting on.
 			IndexingResult result = await Task.Run(this._runIndex, cancellationToken).ConfigureAwait(false);
