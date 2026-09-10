@@ -120,64 +120,14 @@ internal sealed class SqliteBlobVectorStoreReader : IVectorStoreReader
 		return results;
 	}
 
+	// Manifest-facing reads are the same whatever holds the vectors, so they live in a type both
+	// stores use rather than in one of them: SPEC-150 forbids an implementation depending on a
+	// concrete implementation, and there is no assembly boundary here to enforce that mechanically.
 	public IReadOnlyDictionary<String, ChunkLocation> ReadChunkLocations(
 		String databasePath,
 		IReadOnlyList<String> chunkIds)
-	{
-		ArgumentNullException.ThrowIfNull(chunkIds);
-
-		Dictionary<String, ChunkLocation> locations = new(StringComparer.Ordinal);
-
-		if (chunkIds.Count == 0)
-		{
-			return locations;
-		}
-
-		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
-		using SqliteCommand command = connection.CreateCommand();
-
-		// A bound parameter per id is fine here and not in DeleteRemovedFiles, because this list is
-		// TopK long — five, not twelve thousand.
-		String[] parameters = new String[chunkIds.Count];
-
-		for (Int32 i = 0; i < chunkIds.Count; i++)
-		{
-			parameters[i] = $"$id{i}";
-			command.Parameters.AddWithValue(parameters[i], chunkIds[i]);
-		}
-
-		command.CommandText = $"""
-			SELECT cm.chunk_id, fm.file_path, cm.chunk_index, cm.token_start, cm.token_end
-			FROM chunk_manifest cm
-			JOIN file_manifest fm ON fm.file_id = cm.file_id
-			WHERE cm.chunk_id IN ({String.Join(", ", parameters)});
-			""";
-
-		using SqliteDataReader reader = command.ExecuteReader();
-
-		while (reader.Read())
-		{
-			String chunkId = reader.GetString(0);
-
-			locations[chunkId] = new ChunkLocation(
-				ChunkId: chunkId,
-				FilePath: reader.GetString(1),
-				ChunkIndex: reader.GetInt32(2),
-				TokenStart: reader.GetInt32(3),
-				TokenEnd: reader.GetInt32(4));
-		}
-
-		return locations;
-	}
+		=> ManifestReads.ReadChunkLocations(databasePath, chunkIds);
 
 	public String? ReadFitArtifact(String databasePath, String modelVersionId)
-	{
-		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
-		using SqliteCommand command = connection.CreateCommand();
-
-		command.CommandText = "SELECT artifact_json FROM embedding_fit_artifact WHERE model_version_id = $id;";
-		command.Parameters.AddWithValue("$id", modelVersionId);
-
-		return command.ExecuteScalar() as String;
-	}
+		=> ManifestReads.ReadFitArtifact(databasePath, modelVersionId);
 }

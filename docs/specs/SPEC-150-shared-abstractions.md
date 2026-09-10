@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — partly written |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Owner | — |
-| Last updated | 2026-09-09 |
+| Last updated | 2026-09-10 |
 
 ## Purpose
 
@@ -48,6 +48,35 @@ protecting, and it is what makes this a cheap decision to reverse.
 **What must not happen in the meantime**: a contract growing a dependency on an implementation
 type. That is what would make the future split expensive, and it would not be caught by a
 compiler while everything shares an assembly.
+
+**It was broken within a day of being written down.** `SqliteVecVectorStoreReader` held a
+concrete `SqliteBlobVectorStoreReader`, to borrow the manifest-facing reads — chunk locations
+and the fit artifact — which genuinely are backend-independent. The substance was sound; the
+shape was exactly what this rule forbids, and with no compiler enforcing it, nothing objected.
+
+**The fix, and the general rule it illustrates**: shared behaviour goes into a type that *both*
+implementations use — `Persistence/ManifestReads.cs` — never into one of them for the other to
+reach into. Where two implementations legitimately share code, that is evidence of a third
+thing, not of a dependency between them.
+
+## Test Strategy
+
+**Shared contract suite: `VectorStoreContractTests`.** One set of tests, run identically against
+every implementation of `IVectorStoreWriter` / `IVectorStoreReader` / `IRetrievalQuery`,
+parameterised over composition profiles. A new backend is added to its `Backends` list and
+inherits the whole suite. Until a second implementation existed there was nothing to
+cross-check; the arrival of the `sqlite-vec` backend is what made it worth building.
+
+**It was built because per-backend tests had already let a real defect through.** The question
+"has this file already been embedded?" was answered against `chunk_vector`. The blob backend's
+own tests passed, because the blob backend writes `chunk_vector`. Under `sqlite-vec`, which does
+not, every file would have been re-embedded on every run — silently, with the index still
+looking correct. Verified by mutation: reintroducing that query fails exactly one
+parameterisation of `Reindexing_An_Unchanged_Folder_Embeds_Nothing` and leaves the other green.
+
+The lesson generalises past this defect. **A per-implementation test can only assert what that
+implementation happens to do.** Only a test written once and run against all of them asserts
+what the *contract* requires, which is the property this whole single-assembly design rests on.
 
 ## Contracts
 

@@ -170,14 +170,14 @@ internal sealed class SqliteVecVectorStoreWriter : IVectorStoreWriter
 ///
 /// <para>
 /// The manifest-facing reads — chunk locations and the fit artifact — are storage-agnostic: they hit
-/// <c>chunk_manifest</c>, <c>file_manifest</c> and <c>embedding_fit_artifact</c>, which both backends
-/// share. They are delegated rather than duplicated, so there is one implementation of them to be wrong.
+/// <c>chunk_manifest</c>, <c>file_manifest</c> and <c>embedding_fit_artifact</c>, which every backend
+/// shares, so they go to <see cref="ManifestReads"/>. They are deliberately *not* borrowed from the
+/// blob store: <c>SPEC-150</c> forbids an implementation depending on a concrete implementation, and
+/// with no assembly boundary to enforce that mechanically it has to hold by construction instead.
 /// </para>
 /// </summary>
 internal sealed class SqliteVecVectorStoreReader : IVectorStoreReader
 {
-	private readonly SqliteBlobVectorStoreReader _manifestReads = new();
-
 	public IReadOnlyList<StoredVector> ReadVectorsByModelVersion(String databasePath, String modelVersionId)
 	{
 		String table = SqliteVecTable.NameFor(modelVersionId);
@@ -238,8 +238,8 @@ internal sealed class SqliteVecVectorStoreReader : IVectorStoreReader
 	public IReadOnlyDictionary<String, ChunkLocation> ReadChunkLocations(
 		String databasePath,
 		IReadOnlyList<String> chunkIds)
-		=> this._manifestReads.ReadChunkLocations(databasePath, chunkIds);
+		=> ManifestReads.ReadChunkLocations(databasePath, chunkIds);
 
 	public String? ReadFitArtifact(String databasePath, String modelVersionId)
-		=> this._manifestReads.ReadFitArtifact(databasePath, modelVersionId);
+		=> ManifestReads.ReadFitArtifact(databasePath, modelVersionId);
 }

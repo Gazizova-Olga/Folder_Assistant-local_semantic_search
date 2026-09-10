@@ -1,10 +1,10 @@
 # Implementation status
 
-What is live, what is built but unreachable, and what is not built — as of 2026-09-09.
+What is live, what is built but unreachable, and what is not built — as of 2026-09-10.
 
 **Three states, not two.** "Built but unreachable" is the largest category here, and a diagram
-with only *done* and *not done* hides it: retrieval is implemented, tested and correct, and it
-also never runs. Colouring those the same as either neighbour would misrepresent the system in
+with only *done* and *not done* hides it: retrieval is implemented twice over, tested, composed — and it
+still never runs. Colouring those the same as either neighbour would misrepresent the system in
 opposite directions depending on which you chose.
 
 ```mermaid
@@ -21,7 +21,7 @@ flowchart LR
 
     subgraph built["Built but unreachable — no runtime caller"]
         direction TB
-        query["CosineRetrievalQuery<br/>tested, not registered"]
+        query["IRetrievalQuery x2<br/>composed, never called"]
     end
 
     subgraph notbuilt["Not built"]
@@ -48,13 +48,15 @@ flowchart LR
 
 ## The gap, stated plainly
 
-`CosineRetrievalQuery` is not registered in the composition root, and nothing outside
-`Retrieval/` and the test suite references `IRetrievalQuery`. Every pass writes vectors that the
-running application never reads.
+`IRetrievalQuery` **is** registered in the composition root now — the active composition profile
+resolves one of two implementations, and either can be pulled out of the container. What is
+still missing is a caller: nothing on the request path asks it anything, so every pass writes
+vectors the running application never reads.
 
-The write half is complete and the query half exists. They are not connected, and the work to
-connect them is a runtime caller — which in the plan means the filesystem tools and the agent
-that calls them. Until then the vector store is exercised only by tests.
+That narrows the gap to one edge rather than two. Composition was the prerequisite and it is
+done; the remaining work is a runtime caller, which in the plan means the filesystem tools and
+the agent that calls them. Until that lands, both vector backends, the whole indexing pipeline
+and all the measured performance work are infrastructure with no consumer.
 
 ## What each state means here
 

@@ -13,6 +13,12 @@ describes something not yet written, it says so.
 - **Replaceable where replacement is real.** Extension points exist where there is a
   genuine alternative implementation — the embedder, the vector backend, the retrieval
   strategy — not one interface per class.
+
+  > **This is the line that held.** The separate libraries were never built (`SPEC-150`), and
+  > interchangeability arrived anyway — through the interfaces, exactly as this line says. Two
+  > vectorizers, two vector stores and two retrieval strategies are substitutable today, inside
+  > one assembly. Which combination runs is chosen by a named composition profile, and a suite
+  > written once (`VectorStoreContractTests`) holds every backend to the same contract.
 - **Offline by construction on the default path.** The baseline embedder runs in-process.
   Reaching a network service is something an operator opts into.
 - **Storage that survives a model change.** Vectors are keyed by model as well as chunk,
@@ -112,11 +118,17 @@ These are the interfaces where a second implementation is genuinely expected.
 | Interface | Replaces | Why it is a seam |
 |---|---|---|
 | `IVectorizer` | The embedding implementation | A placeholder, a fitted model and a hosted service are all legitimate, and they differ in dimension and cost |
-| `IVectorStoreWriter` / `IVectorStoreReader` | How a vector is stored | The same vectors can sit in a JSON column or a packed binary one; retrieval should not know which |
-| `IRetrievalQuery` | How candidates are ranked | A brute-force scan and a native k-NN index answer the same question differently |
+| `IVectorStoreWriter` / `IVectorStoreReader` | How a vector is stored | **Two implementations.** Packed `float32` blobs in `chunk_vector`, or a native `vec0` virtual table; retrieval should not know which |
+| `IRetrievalQuery` | How candidates are ranked | **Two implementations.** A brute-force scan and a native k-NN index answer the same question differently |
 
 An interface that has exactly one implementation and no prospect of a second is not an
 extension point; it is indirection.
+
+A writer and a reader are chosen **as a pair**, by a composition profile, never separately: a
+reader looking somewhere other than where the writer wrote does not fail, it reports that
+nothing was ever embedded. And because two implementations of a contract now exist, they are
+held to it by one suite run against both rather than by tests written per backend — which had
+already let exactly that defect through once (`SPEC-150`).
 
 ## Storage
 
