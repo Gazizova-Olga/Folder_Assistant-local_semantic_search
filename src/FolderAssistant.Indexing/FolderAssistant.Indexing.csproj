@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<RootNamespace>FolderAssistant.Indexing</RootNamespace>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<!--
+		This assembly is standard modern C# — `string`/`var`, file-scoped namespaces — while the
+		application project spells BCL type names out and indents with tabs. The split is per assembly
+		and deliberate; match the file being edited rather than the repository.
+
+		It takes no dependency on the application. The direction is one way on purpose: the app will
+		drive this library through a seam, and a reference back would let indexing reach into retrieval.
+	-->
+
+	<ItemGroup>
+		<!--
+			The settling rule and the exclusion rule are internal: nothing outside this assembly composes
+			them, and the watcher is the only thing that should. They still need direct coverage, because
+			the alternative is asserting them through a real FileSystemWatcher — which tests the operating
+			system's timing rather than the rule.
+		-->
+		<InternalsVisibleTo Include="FolderAssistant.Tests" />
+	</ItemGroup>
+
+</Project>

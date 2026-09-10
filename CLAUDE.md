@@ -95,8 +95,14 @@ property of *which profiles exist*, not of an operator's choice of endpoint.
 
 ### Indexing
 
-A durable **outbox indexer**, eventually its own assembly: a debounced filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
+A durable **outbox indexer** in its own assembly (`src/FolderAssistant.Indexing`): a debounced
+filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
 delivers one changed file at a time to the embedding pipeline with retry and backoff.
+
+**Only the watcher exists so far** (`SPEC-121`) — the reconciler, outbox and dispatcher are not
+built, and nothing consumes the changes it publishes. The assembly boundary is one-way on purpose:
+the library knows nothing of chunking, embedding or retrieval and cannot come to depend on them by
+accident.
 
 The change signal is deliberately coarse — the consumer re-diffs by content hash — which
 makes it robust against the two ways filesystem watching is unreliable: dropped events on

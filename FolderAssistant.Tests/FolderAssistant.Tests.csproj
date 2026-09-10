@@ -28,6 +28,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\FolderAssistant\FolderAssistant.csproj" />
+		<ProjectReference Include="..\src\FolderAssistant.Indexing\FolderAssistant.Indexing.csproj" />
 	</ItemGroup>
 
 </Project>

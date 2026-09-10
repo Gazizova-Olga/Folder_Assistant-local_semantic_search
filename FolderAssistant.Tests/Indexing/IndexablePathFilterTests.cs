@@ -1,0 +1,79 @@
+using FluentAssertions;
+using FolderAssistant.Indexing.Watching;
+
+namespace FolderAssistant.Tests.Indexing;
+
+/// <summary>
+/// What the watcher refuses to report. Asserted as a function rather than through a real watcher,
+/// which would test the operating system's timing alongside the rule.
+/// </summary>
+public sealed class IndexablePathFilterTests
+{
+	private static readonly IndexablePathFilter Filter = new(".folderassistant");
+
+	[Theory]
+	[InlineData(@"C:\work\notes.md")]
+	[InlineData(@"C:\work\deep\nested\notes.md")]
+	[InlineData("/work/notes.md")]
+	[InlineData(@"C:\work\obj-lesson.md")]
+	[InlineData(@"C:\work\binder.md")]
+	public void An_Ordinary_File_Is_Reported(string path)
+		=> Filter.ShouldReport(path).Should().BeTrue();
+
+	/// <summary>
+	/// Not an optimisation. The index lives inside the folder it indexes, so its own writes land
+	/// under the watched tree — unfiltered, indexing causes an event which causes indexing, with no
+	/// idle state to settle into.
+	/// </summary>
+	[Theory]
+	[InlineData(@"C:\work\.folderassistant\manifest.db")]
+	[InlineData(@"C:\work\.folderassistant\manifest.db-wal")]
+	[InlineData("/work/.folderassistant/manifest.db")]
+	public void The_Metadata_Folder_Is_Never_Reported(string path)
+		=> Filter.ShouldReport(path).Should().BeFalse();
+
+	[Theory]
+	[InlineData(@"C:\work\bin\app.dll")]
+	[InlineData(@"C:\work\obj\Debug\app.pdb")]
+	[InlineData(@"C:\work\.git\HEAD")]
+	[InlineData(@"C:\work\.vs\config")]
+	[InlineData(@"C:\work\node_modules\pkg\index.js")]
+	[InlineData(@"C:\work\deep\bin\nested.txt")]
+	public void Build_Output_And_Tooling_Directories_Are_Not_Reported(string path)
+		=> Filter.ShouldReport(path).Should().BeFalse();
+
+	/// <summary>
+	/// The transient file an atomic write leaves beside its target. It holds a half-written copy of a
+	/// document that is about to be reported in its own right.
+	/// </summary>
+	[Theory]
+	[InlineData(@"C:\work\notes.md.tmp")]
+	[InlineData(@"C:\work\a1b2c3.tmp")]
+	public void A_Temporary_Write_File_Is_Not_Reported(string path)
+		=> Filter.ShouldReport(path).Should().BeFalse();
+
+	/// <summary>
+	/// The configured name is honoured, not just the default one. A deployment that renamed its
+	/// metadata folder would otherwise have the index watching its own database.
+	/// </summary>
+	[Fact]
+	public void A_Configured_Metadata_Folder_Name_Is_Honoured_Instead_Of_The_Default()
+	{
+		IndexablePathFilter configured = new("_index");
+
+		configured.ShouldReport(@"C:\work\_index\manifest.db").Should().BeFalse();
+		configured.ShouldReport(@"C:\work\.folderassistant\notes.md").Should().BeTrue();
+	}
+
+	/// <summary>
+	/// A directory whose name merely starts with an excluded one is a different directory. Matching
+	/// on a prefix rather than a whole segment would silently stop indexing a folder called
+	/// "binaries" or "objects".
+	/// </summary>
+	[Theory]
+	[InlineData(@"C:\work\binaries\notes.md")]
+	[InlineData(@"C:\work\objects\notes.md")]
+	[InlineData(@"C:\work\node_modules_old\notes.md")]
+	public void A_Directory_Merely_Prefixed_By_An_Excluded_Name_Is_Still_Reported(string path)
+		=> Filter.ShouldReport(path).Should().BeTrue();
+}
