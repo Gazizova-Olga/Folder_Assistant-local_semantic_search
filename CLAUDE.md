@@ -86,6 +86,13 @@ platform-unavailable profile is a startup failure, never a silent fallback. One 
 instance is shared by indexing and retrieval: a corpus-fitted embedder must be fitted
 identically on the write and the query side.
 
+Three embedders exist behind that seam. The **programmable** one is a character histogram — a
+deterministic floor with no semantics, and the offline default. The **LSA** one is fitted to the
+corpus and captures weak synonymy within it. The **Ollama** one (`SPEC-162`) is a real pretrained
+model served locally, and is the only one that can retrieve a passage sharing none of the query's
+words. It is also the only one that opens a socket, which is why offline-by-construction is a
+property of *which profiles exist*, not of an operator's choice of endpoint.
+
 ### Indexing
 
 A durable **outbox indexer**, eventually its own assembly: a debounced filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
