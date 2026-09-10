@@ -15,6 +15,13 @@ internal record AgentConfig
 	/// <summary>Local indexing configuration (scan, chunk, tokenize, and embedding persistence).</summary>
 	public IndexingConfig Indexing { get; init; } = new();
 
+	/// <summary>
+	/// Which bundle of module implementations to compose: vectorizer, vector store, and
+	/// retrieval strategy. See <see cref="CompositionProfiles"/> for the valid names. An
+	/// unknown or platform-unavailable profile is a startup failure, never a silent fallback.
+	/// </summary>
+	public String Profile { get; init; } = CompositionProfiles.Default;
+
 	/// <summary>HTTP port the web server listens on. Defaults to <c>5000</c>.</summary>
 	public Int32 Port { get; init; } = 5000;
 

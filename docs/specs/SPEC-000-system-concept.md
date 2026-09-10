@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — placeholder |
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Owner | — |
-| Last updated | 2026-09-08 |
+| Last updated | 2026-09-10 |
 
 ## Purpose
 
@@ -53,8 +53,26 @@ an admission of what is not yet decided; it is not a description of anything.
 
 - **Contract first.** A replaceable part is replaceable because an interface says what it
   must do, not because two implementations happen to look alike.
-- **Interchangeable by configuration.** Swapping an implementation should be a composition
-  change, not an edit spread across callers.
+- **Interchangeable by named profile, inside the trust boundary.** Which implementations run
+  — vectorizer, vector store, retrieval strategy — is decided by one configuration value
+  naming a profile: an *enumerated bundle* defined in code, never a set of independent
+  per-module switches. Per-module flags would describe a combinatorial space in which most
+  points are meaningless and some are dangerous — a reader looking somewhere other than
+  where the writer wrote does not fail, it reports that nothing has ever been embedded and
+  re-embeds the folder on every run. A bundle makes those combinations unnameable, and gives
+  every runnable configuration a name that can be put in a benchmark result.
+- **A profile may not cross the trust boundary.** A profile name in configuration *is* a
+  runtime flag, and that is only safe because every profile compiled into this binary is
+  offline and local: no configuration value can make the system reach the network, because
+  nothing in the assembly can. An implementation that changes that must not be a profile
+  here — it belongs in a separate assembly or publish, so the guarantee stays "it is not in
+  the binary" rather than "the configuration says not to". That, and not modularity, is the
+  criterion for ever splitting an assembly; the contracts already provide the modularity.
+- **An unresolvable profile is a startup failure, never a fallback.** An unknown name, or one
+  whose implementation is unavailable on this platform, throws. Falling back to the default
+  would run a configuration nobody asked for while reporting success, and the result would be
+  a *working* system answering out of a different embedding space than the operator believes
+  — the silently-plausible wrong answer this system is built against.
 - **Versioned explicitly.** Stored data outlives the code that wrote it. Schema and model
   identity are recorded, never inferred.
 - **Offline by construction where it matters.** The default path should not require a
@@ -68,6 +86,11 @@ an admission of what is not yet decided; it is not a description of anything.
 - **Embed** — turn chunks into vectors through a replaceable implementation.
 - **Store** — one folder-scoped database holding the manifest, the chunks and the vectors.
 - **Retrieve** — embed a query, rank against stored vectors, assemble what fits a budget.
+  Composed as of this version: the active profile registers `IRetrievalQuery` in the
+  composition root, so it is resolvable from the container. **Nothing on the request path
+  calls it yet** — the agent still answers without consulting the index, and until that lands
+  the indexing and retrieval machinery, including its measured performance, serves nothing at
+  runtime.
 - **Converse** — route a turn to an agent that can call the tools above.
 
 ## Keeping the specs honest

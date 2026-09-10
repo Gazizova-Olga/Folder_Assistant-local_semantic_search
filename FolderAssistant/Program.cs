@@ -1,6 +1,7 @@
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
 using FolderAssistant.Persistence;
+using FolderAssistant.Retrieval;
 using Microsoft.Extensions.Options;
 
 namespace FolderAssistant;
@@ -25,6 +26,36 @@ internal sealed class Program
 
 		builder.Services.AddSingleton<IndexState>();
 		builder.Services.AddSingleton<IIndexState>(sp => sp.GetRequiredService<IndexState>());
+
+		// Which implementations run is decided here, by name, from one configuration value. The
+		// profile is a bundle rather than a set of independent switches, so a mismatched combination
+		// cannot be expressed. Resolve throws on an unknown or platform-unavailable name and never
+		// falls back, because a silent fallback would serve answers from a different embedding space
+		// than the operator believes they configured.
+		builder.Services.AddSingleton(sp =>
+		{
+			ModuleSet profile = CompositionProfiles.Resolve(sp.GetRequiredService<AgentConfig>().Profile);
+			Console.WriteLine($"Composition profile: {profile.Name}");
+			return profile;
+		});
+
+		// One vectorizer instance, shared by indexing and retrieval. For a corpus-fitted vectorizer
+		// this is load-bearing rather than an economy: the pipeline loads the fit onto the instance,
+		// and a query embedded by an unfitted one lands in a different space than the vectors it is
+		// being compared against.
+		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>()
+			.CreateVectorizer(sp.GetRequiredService<AgentConfig>().Indexing));
+
+		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreWriter());
+		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreReader());
+
+		// Retrieval was implemented and tested but composed nowhere, which SPEC-000 called the
+		// central open item. This registers it, so it is resolvable from the container. The gap that
+		// remains is that nothing on the request path asks it anything yet.
+		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateRetrievalQuery(
+			sp.GetRequiredService<IVectorizer>(),
+			sp.GetRequiredService<IVectorStoreReader>(),
+			sp.GetRequiredService<IIndexState>()));
 
 		builder.Services.AddSingleton(sp =>
 		{
@@ -54,12 +85,14 @@ internal sealed class Program
 			String analyzedFolderPath = config.ResolveAnalyzedFolderPath();
 			String databasePath = sp.GetRequiredService<DatabaseBootstrapResult>().DatabasePath;
 
-			// Composition root for the embedding provider: swapping the IVectorizer built here is the
-			// only change needed to index with a different backend.
-			IVectorizer vectorizer = new ProgrammableEmbeddingVectorizer(
-				config.Indexing.ModelVersionId, config.Indexing.VectorDimension);
-
-			FolderIndexingPipeline pipeline = new(vectorizer);
+			// The vectorizer and the store both come from the resolved profile, so the writer and
+			// reader are a matched pair by construction. A reader looking somewhere other than where
+			// the writer wrote would not fail — it would report that no file had ever been embedded,
+			// and every file would re-embed on every run with the index still looking correct.
+			FolderIndexingPipeline pipeline = new(
+				sp.GetRequiredService<IVectorizer>(),
+				sp.GetRequiredService<IVectorStoreWriter>(),
+				sp.GetRequiredService<IVectorStoreReader>());
 
 			IFileChangeFeed? changeFeed = config.Indexing.WatchEnabled
 				? new FileSystemWatcherChangeFeed(
