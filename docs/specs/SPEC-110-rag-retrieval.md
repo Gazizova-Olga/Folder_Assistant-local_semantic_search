@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Owner | Retrieval |
-| Last updated | 2026-09-10 |
+| Last updated | 2026-09-11 |
 
 ## Purpose
 
@@ -129,13 +129,19 @@ The ranges overlap almost entirely — a correct match scored 0.745 while two un
 scored 0.934 against each other. The letter-frequency profile of English prose is nearly the
 same whatever the prose is about, so everything is similar to everything.
 
-**So no constant separates relevant from irrelevant, and `MinScore` cannot act as an absolute
-relevance floor today.** It is left at `0.0`. Any cut-off that is going to work has to be
-relative to the scores a given query actually produced.
+**So no constant separates relevant from irrelevant under this vectorizer, and `MinScore` cannot
+act as an absolute relevance floor while it is the one composed.** It is left at `0.0`.
 
 This is a property of the vectorizer, not of cosine or of the retrieval strategy — both of which
-are sound. It is the strongest argument for promoting a corpus-fitted embedder, and the reason
-an absolute threshold should not be tuned before then: it would be tuned against noise.
+are sound. It is the strongest argument for promoting a real embedder, and the reason an absolute
+threshold should not be tuned against this one: it would be tuned against noise.
+
+**And with a real embedder it does separate**, measured — see "Can a score floor tell a good
+question from a bad one?" below. An earlier version of this section concluded from the
+placeholder's numbers that *any* workable cut-off "has to be relative to the scores a given query
+actually produced". That inference was too strong: it generalised a property of one deliberately
+semantics-free embedder into a property of absolute thresholds. The measurement above stands; the
+conclusion drawn from it has been narrowed to the vectorizer it was taken on.
 
 ### Locatability
 
@@ -191,6 +197,43 @@ would explain a different ordering than the one produced.
 **Deferred, deliberately:** per-call budget configuration (the defaults are code constants),
 vector-based MMR, and a stopword list. The lexical signal is coarse and carries a minority share
 of the ranking, so stopwords would be tuning a weight that mostly is not deciding anything.
+
+## Can a score floor tell a good question from a bad one?
+
+A short circuit that refuses to answer from weak matches needs a threshold, and a threshold is
+only worth having if the scores it cuts actually separate questions the corpus can answer from
+questions it cannot. That is measurable, and it had not been measured.
+
+`RelevanceFloorBenchmark` (opt-in, `RELEVANCE_FLOOR_BENCH=1`) puts five documents on unrelated
+everyday subjects in a folder, then asks five questions the corpus answers and five from domains
+it contains nothing on — worded to avoid quoting the documents, so a match is meaning rather than
+shared vocabulary. It records the top-hit score per query. Both embedders see the identical corpus
+and the identical queries, because the point is to tell "a floor cannot work" apart from "this
+embedder scores everything alike".
+
+| | answerable | unanswerable | separation |
+|---|---|---|---|
+| `programmable-blob` (the default profile) | 0.8464 – 0.9004 | 0.8033 – **0.9220** | **−0.0756 — overlapping** |
+| `qwen3-embedding:0.6b` (`ollama-blob`) | **0.5040** – 0.7215 | 0.1209 – **0.2520** | **+0.2520 — separable** |
+
+**With a real embedder the premise holds, cleanly.** Every answerable question outscores every
+unanswerable one, and any floor in `(0.2520, 0.5040]` divides them.
+
+**With the placeholder embedder no floor can work at all.** The populations overlap, and the
+highest-scoring query of all ten is one the corpus cannot answer. This is the same property
+recorded above and in `SPEC-161`, reproduced here as the control: a harness that did not show it
+would be measuring itself.
+
+**A floor of `0.2` — the obvious round number — is on the correct side but under-selective.** It
+rejects 4 of 5 unanswerable questions and none of the answerable ones, missing one at `0.2520`. It
+sits essentially at the top of the unanswerable distribution rather than between the two, which
+makes it a value that happens to work rather than one chosen from a measurement.
+
+**What this does not establish.** Ten queries, one small corpus, one model. Two runs are
+bit-identical, so the band edges are not model noise — but they rest on five samples per bucket,
+and the width of the separation is the robust part, not the exact edges. The honest conclusion is
+that a floor is *possible* with a real embedder and *impossible* with the placeholder, not that
+any particular constant is the right one to ship.
 
 ## Observability
 
