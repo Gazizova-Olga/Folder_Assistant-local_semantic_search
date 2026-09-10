@@ -12,7 +12,7 @@ place, before and after.
 This file is the baseline. **The count is the contract**: a build reporting more than this has
 introduced something new, and it gets triaged rather than added to the pile.
 
-- **Baseline: 9 warnings.** Verified 2026-09-09, .NET 10 SDK.
+- **Baseline: 9 warnings.** Verified 2026-09-10, .NET 10 SDK.
 - Recheck with:
 
   ```bash
@@ -43,14 +43,14 @@ Mechanical. Clearing these is what restores signal.
 
 | Rule | Sites |
 | --- | --- |
-| `S2325` — could be static | `LocalTextFileScanner.cs(29)`, `SimpleChunking.cs(16, 37)` |
+| `S2325` — could be static | `LocalTextFileScanner.cs(43)`, `SimpleChunking.cs(63, 93)` |
 | `S3267` — use LINQ `Where` | `FileChangeFeed.cs(158)` — arguably wrong: the nested loop returns on the first match, and a `Where` would express the same short-circuit less clearly while allocating |
 | `S3878` — redundant array creation | `FolderIndexingPipelineTests.cs(54)` |
 
 ## Intended end state
 
 Clear the 5, attach targeted `[SuppressMessage]` attributes carrying the justifications above to
-the 3 deliberate ones, then set `TreatWarningsAsErrors` in a `Directory.Build.props`. The
+the 4 deliberate ones, then set `TreatWarningsAsErrors` in a `Directory.Build.props`. The
 baseline becomes zero and the build enforces it, which is strictly better than a document
 someone has to remember to read. Until then, this file is the thing to check a build against.
 
