@@ -32,7 +32,14 @@ internal sealed record EmbeddingResult(
 	IReadOnlyList<Single> Vector,
 	String ModelVersionId,
 	Int32 Dimension,
-	String ProviderType);
+	String ProviderType,
+
+	/// <summary>
+	/// Wall-clock of the call that produced this vector. It is a property of the batch <em>call</em>
+	/// rather than of the text, so it is identical across a batch's results — one round-trip embedded
+	/// them all. Zero until a telemetry decorator stamps it: a vectorizer does not time itself.
+	/// </summary>
+	Double LatencyMs = 0);
 
 /// <summary>
 /// An embedding implementation. Implementations are interchangeable, and their vectors coexist in one
@@ -106,6 +113,52 @@ internal interface IEmbeddingHealthCheck
 	/// normally when the backend answered a probe.
 	/// </summary>
 	ValueTask CheckAsync(CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// The outcome of a single embedding call, as recorded in telemetry.
+///
+/// <para>
+/// This appears only on a telemetry event, never on an <see cref="EmbeddingResult"/>. A materialised
+/// result is the product of a successful call by construction — the contract throws rather than
+/// returning a vector it could not produce — so a status field on the result could only ever read
+/// <see cref="Success"/>.
+/// </para>
+/// </summary>
+internal enum EmbeddingStatus
+{
+	Success,
+	Failed,
+	TimedOut,
+}
+
+/// <summary>
+/// One embedding call's observability record.
+///
+/// <para>
+/// This is the per-call primitive. The aggregates worth watching — success rate, latency
+/// percentiles, cost — are computed downstream from a stream of these rather than emitted here,
+/// because an aggregate computed at the source cannot be sliced afterwards by anything it did not
+/// already group by.
+/// </para>
+/// </summary>
+internal sealed record EmbeddingCallTelemetry(
+	String ProviderType,
+	String ModelVersionId,
+	Int32 Dimension,
+	Int32 RequestCount,
+	Double LatencyMs,
+	EmbeddingStatus Status,
+	String? ErrorCode = null);
+
+/// <summary>
+/// Sink for per-call embedding telemetry. A seam rather than a logging call inside the embedding
+/// path, so that emission is testable and a metrics backend can replace the default sink without
+/// anything on that path changing.
+/// </summary>
+internal interface IEmbeddingTelemetry
+{
+	void Record(EmbeddingCallTelemetry call);
 }
 
 internal static class VectorizerExtensions

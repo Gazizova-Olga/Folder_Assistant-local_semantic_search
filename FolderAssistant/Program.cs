@@ -44,8 +44,14 @@ internal sealed class Program
 		// this is load-bearing rather than an economy: the pipeline loads the fit onto the instance,
 		// and a query embedded by an unfitted one lands in a different space than the vectors it is
 		// being compared against.
-		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>()
-			.CreateVectorizer(sp.GetRequiredService<AgentConfig>().Indexing));
+		builder.Services.AddSingleton<IEmbeddingTelemetry, LoggerEmbeddingTelemetry>();
+
+		// Wrapped, not constructed bare: Wrap re-exposes whichever optional capability the composed
+		// vectorizer implements. A plain wrapper would answer "no" to the fit and health-check type
+		// tests while still returning good vectors, which disables both silently.
+		builder.Services.AddSingleton(sp => EmbeddingTelemetryVectorizer.Wrap(
+			sp.GetRequiredService<ModuleSet>().CreateVectorizer(sp.GetRequiredService<AgentConfig>().Indexing),
+			sp.GetRequiredService<IEmbeddingTelemetry>()));
 
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreWriter());
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreReader());

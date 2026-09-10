@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | Embedding |
 | Last updated | 2026-09-10 |
 
@@ -119,7 +119,37 @@ against a different fit is projected from a different space, and the result is n
   quietly wrong.
 - **Performance** — batching is available to any caller that has more than one text.
 - **Operability** — which implementation is active, and its dimension, are recorded in the
-  database rather than inferred from configuration.
+  database rather than inferred from configuration. Every call is observable; see Observability.
+
+## Observability
+
+Every embedding call emits one `EmbeddingCallTelemetry`: provider type, model version, dimension,
+the number of texts in the batch, latency, a status, and — on the failure path — an error code.
+It is recorded on **both** paths. A backend that has started failing is precisely what an operator
+needs to see, and telemetry that only reports successes describes a system that is always healthy.
+
+Three decisions are load-bearing.
+
+- **Timing lives in one decorator, not in each implementation.** Measured separately, the numbers
+  from two vectorizers would not be comparable, which defeats the point of being able to swap them.
+- **The decorator must re-expose the inner's optional capabilities.** The cold-fit path finds a
+  fittable vectorizer by type test, and startup finds the health check the same way. A wrapper that
+  did not forward them would answer "no" to both while still returning good vectors — disabling
+  fitting and the startup probe with no symptom but worse retrieval. Composition therefore goes
+  through `EmbeddingTelemetryVectorizer.Wrap`, never the bare constructor.
+- **Status separates cancellation from failure.** A cancelled call is `TimedOut`, not `Failed`; an
+  error rate that counts process shutdowns tells an operator to investigate a normal exit.
+
+`latencyMs` is also stamped onto every `EmbeddingResult` the call produced. It is a property of the
+batch call rather than of a text, so it is identical across a batch — one round-trip embedded all of
+them — and a vector can still be asked what it cost to produce.
+
+Status and error code are event fields only, never result fields. A materialised result is the
+product of a successful call by construction, so a status on it could only ever read `Success`.
+
+The aggregates worth watching — success rate, latency percentiles — are computed downstream from a
+stream of these events rather than emitted here: an aggregate computed at the source cannot later be
+sliced by anything it did not already group by.
 
 ## Open questions
 
