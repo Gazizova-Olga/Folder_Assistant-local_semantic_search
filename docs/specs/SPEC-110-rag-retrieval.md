@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Owner | Retrieval |
 | Last updated | 2026-09-10 |
 
@@ -34,6 +34,10 @@ Both retrieval backends are implemented, and context assembly now exists as a se
 **Nothing calls the reducer yet.** It is composed and resolvable, in the same position retrieval
 itself occupied before the composition root registered it: the stage a consumer will run, with no
 consumer built. A semantic-search tool is what will use it, and that belongs to the agent work.
+
+Per-call telemetry wraps the composed query and is exported at `GET /metrics` (see Observability).
+It records what searches do, so until something searches it has nothing to record — the instrument
+is in place ahead of the traffic, not measuring traffic that exists.
 
 ## Contracts
 
@@ -187,6 +191,50 @@ would explain a different ordering than the one produced.
 **Deferred, deliberately:** per-call budget configuration (the defaults are code constants),
 vector-based MMR, and a stopword list. The lexical signal is coarse and carries a minority share
 of the ranking, so stopwords would be tuning a weight that mostly is not deciding anything.
+
+## Observability
+
+The unit is the call, not the hit. A search ranks its whole candidate set in one pass and succeeds
+or fails as a whole, so each `IRetrievalQuery.Search` emits exactly one `RetrievalCallTelemetry`
+through the `IRetrievalTelemetry` sink: backend, requested top-k, result count, latency, status,
+and — when the status is not `Success` — the type name of what went wrong.
+
+Recording lives in a decorator over the composed query (`RetrievalTelemetryQuery.Wrap`), not inside
+either backend. Both implementations exist to be compared against each other on latency; measured
+separately they would be two instruments as much as two backends, and the comparison would carry
+the difference between the instruments.
+
+**Three of the four statuses are deliberately not `Failed`.**
+
+- `NotReady` — the index was not queryable yet. Every process reports this until its first pass
+  finishes, so it is the one status a dashboard should expect and not act on. It logs at
+  information, not warning, for the same reason: an alert keyed on warning volume would fire on
+  ordinary startup traffic.
+- `Failed` on a *failed build* — the same `IndexNotReadyException` type carries both conditions,
+  and only the still-building one is benign. A build that failed is usually a backend that stopped
+  answering, and filing it under `NotReady` would describe a dead dependency as a condition that
+  clears on its own. `IndexNotReadyException.IsBuildFailure`, set by `RetrievalGuard` at the throw
+  site, is what separates them; the `errorCode` names the underlying error rather than the refusal
+  wrapped around it.
+- `TimedOut` — a search embeds its query text before it can rank anything, so an embedding backend
+  that stops answering ends the *search*. That is a fault outside the backend being measured, and
+  charging it to whichever backend happened to be composed would report a regression in the wrong
+  place.
+
+**Deliberately not recorded:** candidate-pool size and the active model version. Neither crosses
+the `IRetrievalQuery` boundary, and a decorator that reported them would be reporting what it
+assumed rather than what it observed.
+
+The default sink writes both a structured log line and a `Meter`, exported at `GET /metrics` for a
+Prometheus scrape. Two channels rather than one: the log line is what someone reads when a single
+query behaved oddly, and the meter is what a dashboard reads — and it keeps working when the log
+level is raised to suppress routine successes, which is the first thing done to a per-call log.
+`docs/observability-retrieval.md` is the operator reference.
+
+**Known gap.** The timeout classification currently recognises cancellation only, which is what a
+stalled embed actually produces here — the HTTP client's own deadline is the thing that gives up.
+Once the embed call carries a deadline of its own and reports it as such, this classification has
+to learn that second shape, or a bounded embed will be recorded as a plain failure.
 
 ## Open questions
 

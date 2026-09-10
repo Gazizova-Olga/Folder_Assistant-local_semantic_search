@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
 using FolderAssistant.Indexing;
+using FolderAssistant.Retrieval;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -106,6 +107,39 @@ public sealed class HostStartupTests
 		}
 
 		state.Status.Should().Be(IndexStatus.Ready);
+	}
+
+	/// <summary>
+	/// The metrics wiring, which no unit test can reach: the meter name has to be the one registered
+	/// with the host, and the scrape endpoint has to be mapped. Both are strings agreed on in two
+	/// places, and getting either wrong produces an endpoint that serves perfectly well and reports
+	/// nothing about retrieval — the failure looks like an idle system.
+	///
+	/// <para>
+	/// A series only exists once its instrument has recorded, so this searches first. Nothing on the
+	/// request path does that yet, which is why the search here is made directly.
+	/// </para>
+	/// </summary>
+	[Fact]
+	public async Task A_Search_Reaches_The_Scrape_Endpoint_As_A_Tagged_Series()
+	{
+		using TempFolder folder = new();
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"));
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+
+		IRetrievalQuery query = host.Services.GetRequiredService<IRetrievalQuery>();
+		query.Search(folder.Combine(".folderassistant", "manifest.db"), "alpha", new RetrievalOptions(TopK: 3));
+
+		String metrics = await client.GetStringAsync("/metrics");
+
+		metrics.Should().Contain("retrieval_search_count");
+		metrics.Should().Contain("retrieval_search_duration");
+
+		// The backend tag is the point of the measurement: the two implementations are a baseline and
+		// a candidate, and an untagged series would describe neither.
+		metrics.Should().Contain("backend=\"CosineRetrievalQuery\"");
 	}
 
 	private static Int64 CountIndexedFiles(TempFolder folder)

@@ -36,6 +36,9 @@
 		<PackageReference Include="sqlite-vec" />
 		<!-- Reaches a local Ollama server over its OpenAI-compatible endpoint; see Directory.Packages.props. -->
 		<PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+		<!-- Serves the retrieval meter at GET /metrics; see Directory.Packages.props. -->
+		<PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+		<PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" />
 	</ItemGroup>
 
 	<ItemGroup>

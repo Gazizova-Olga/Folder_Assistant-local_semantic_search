@@ -4,6 +4,7 @@ using FolderAssistant.Indexing;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
 using Microsoft.Extensions.Options;
+using OpenTelemetry.Metrics;
 
 namespace FolderAssistant;
 
@@ -60,13 +61,32 @@ internal sealed class Program
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreWriter());
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreReader());
 
+		// Per-call retrieval telemetry, the same seam shape the embedding sink above uses.
+		builder.Services.AddSingleton<IRetrievalTelemetry, LoggerRetrievalTelemetry>();
+
 		// Retrieval was implemented and tested but composed nowhere, which SPEC-000 called the
 		// central open item. This registers it, so it is resolvable from the container. The gap that
 		// remains is that nothing on the request path asks it anything yet.
-		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateRetrievalQuery(
-			sp.GetRequiredService<IVectorizer>(),
-			sp.GetRequiredService<IVectorStoreReader>(),
-			sp.GetRequiredService<IIndexState>()));
+		//
+		// Wrapped, so whichever backend the profile chose is timed by the same instrument. Measuring
+		// inside each backend instead would make the two sets of numbers incomparable, which is the
+		// one thing they exist to be.
+		builder.Services.AddSingleton(sp => RetrievalTelemetryQuery.Wrap(
+			sp.GetRequiredService<ModuleSet>().CreateRetrievalQuery(
+				sp.GetRequiredService<IVectorizer>(),
+				sp.GetRequiredService<IVectorStoreReader>(),
+				sp.GetRequiredService<IIndexState>()),
+			sp.GetRequiredService<IRetrievalTelemetry>()));
+
+		// The retrieval meter, served at GET /metrics below. Metrics only: nothing in this assembly
+		// emits a trace yet, and registering a tracing pipeline with no source to read would export
+		// an empty signal that looks like a broken one.
+		builder.Services.AddOpenTelemetry()
+			.WithMetrics(metrics =>
+			{
+				metrics.AddMeter(LoggerRetrievalTelemetry.MeterName);
+				metrics.AddPrometheusExporter();
+			});
 
 		builder.Services.AddSingleton(sp =>
 		{
@@ -142,6 +162,10 @@ internal sealed class Program
 			name = "Folder Assistant",
 			analyzedFolder = config.ResolveAnalyzedFolderPath(),
 		}));
+
+		// Prometheus scrapes this directly, on the port the app already serves. A collector in
+		// between would be a second process to run before any of this is visible.
+		app.MapPrometheusScrapingEndpoint();
 
 		app.Run();
 	}

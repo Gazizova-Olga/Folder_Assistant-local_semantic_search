@@ -27,10 +27,24 @@ internal sealed record RetrievalOptions(Int32 TopK = 5, Double MinScore = 0.0);
 /// </summary>
 internal sealed class IndexNotReadyException : InvalidOperationException
 {
-	public IndexNotReadyException(String message, Exception? innerException = null)
+	public IndexNotReadyException(String message, Exception? innerException = null, Boolean isBuildFailure = false)
 		: base(message, innerException)
 	{
+		this.IsBuildFailure = isBuildFailure;
 	}
+
+	/// <summary>
+	/// Whether the index build itself failed, as opposed to not having finished yet.
+	///
+	/// <para>
+	/// One exception type carries two conditions that read alike to a caller and must not read alike
+	/// to an operator. An index that is still building is the ordinary state of every process before
+	/// its first pass completes. An index that failed to build is a fault — usually a backend that is
+	/// not answering — and nothing downstream can tell the two apart, because both refuse the query
+	/// with the same type and neither carries a status of its own.
+	/// </para>
+	/// </summary>
+	public Boolean IsBuildFailure { get; }
 }
 
 /// <summary>
@@ -84,10 +98,75 @@ internal static class RetrievalGuard
 			case IndexStatus.Failed:
 				throw new IndexNotReadyException(
 					$"The folder index failed to build: {indexState.Error?.Message}",
-					indexState.Error);
+					indexState.Error,
+					isBuildFailure: true);
 
 			default:
 				return;
 		}
 	}
+}
+
+/// <summary>
+/// The outcome of a single search, as recorded in telemetry.
+///
+/// <para>
+/// Three of these are not <see cref="Failed"/> on purpose. An error rate that counts an index that
+/// has not finished building, or a query abandoned because the embedding backend never answered,
+/// reports a broken retrieval backend on days when retrieval did nothing wrong — and the backends
+/// are being compared against each other on exactly these numbers.
+/// </para>
+/// </summary>
+internal enum RetrievalStatus
+{
+	Success,
+
+	/// <summary>A genuine fault in the search itself.</summary>
+	Failed,
+
+	/// <summary>
+	/// The index was not queryable yet. Every process passes through this before its first index
+	/// finishes, so it is the one status a dashboard should expect to see and not act on.
+	/// </summary>
+	NotReady,
+
+	/// <summary>
+	/// The call was cancelled or timed out. A search embeds its query text before it can rank
+	/// anything, so an embedding backend that stops answering ends the search rather than the
+	/// ranking — a fault outside the backend whose latency this measurement exists to compare.
+	/// </summary>
+	TimedOut,
+}
+
+/// <summary>
+/// One search's observability record.
+///
+/// <para>
+/// The unit is the call, not the hit: a search ranks its whole candidate set in one pass, and it
+/// succeeds or fails as a whole.
+/// </para>
+///
+/// <para>
+/// The fields are what a decorator can observe from outside <see cref="IRetrievalQuery"/>, and
+/// deliberately no more. How large a candidate pool a backend read, and which model version it
+/// scoped itself to, do not cross that interface — a wrapper reporting them would be reporting
+/// what it assumed rather than what happened.
+/// </para>
+/// </summary>
+internal sealed record RetrievalCallTelemetry(
+	String Backend,
+	Int32 RequestedTopK,
+	Int32 ResultCount,
+	Double LatencyMs,
+	RetrievalStatus Status,
+	String? ErrorCode = null);
+
+/// <summary>
+/// Sink for per-call retrieval telemetry, mirroring <see cref="Embedding.IEmbeddingTelemetry"/>: a
+/// seam rather than a logging call on the retrieval path, so emission is testable and a metrics
+/// backend can replace the default sink without the path itself changing.
+/// </summary>
+internal interface IRetrievalTelemetry
+{
+	void Record(RetrievalCallTelemetry call);
 }

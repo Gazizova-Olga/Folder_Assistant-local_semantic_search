@@ -209,6 +209,12 @@ the caller's cancellation token before its exception type**: an HTTP client repo
 deadline as a cancellation, so type-first filing would record a dead endpoint as a user
 closing a tab.
 
+The retrieval sink emits through **two channels**: a structured log line, and a `Meter`
+exported at `GET /metrics` for a Prometheus scrape. The log line is what someone reads about
+one odd query; the meter is what a dashboard reads, and it keeps working when the log level
+is raised to suppress routine successes. Operator reference:
+[docs/observability-retrieval.md](docs/observability-retrieval.md).
+
 ## Code conventions
 
 Non-obvious and applied consistently — match them:

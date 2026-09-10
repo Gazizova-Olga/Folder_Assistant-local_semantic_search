@@ -41,6 +41,17 @@
 			localhost, and nothing in the assembly can reach anything else.
 		-->
 		<PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+		<!--
+			Metrics. The retrieval sink records through a Meter, and these two carry it out of the process:
+			the hosting package registers the meter with the host, and the Prometheus exporter serves it from
+			GET /metrics on the Kestrel host that is already running — no collector, no second port, and no
+			surface a user could reach by accident (SPEC-110).
+
+			The exporter is beta. It has been beta across every OpenTelemetry .NET release so far, which is a
+			fact about that package rather than about this pin; both are held on the same 1.x line.
+		-->
+		<PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
+		<PackageVersion Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.17.0-beta.1" />
 	</ItemGroup>
 
 	<ItemGroup Label="Tests">
