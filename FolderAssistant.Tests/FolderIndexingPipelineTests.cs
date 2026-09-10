@@ -51,7 +51,7 @@ public sealed class FolderIndexingPipelineTests
 		new LocalTextFileScanner()
 			.Scan(folder.Path, maxTextFileSizeBytes: 1024 * 1024)
 			.Select(static file => file.RelativePath)
-			.Should().BeEquivalentTo(["real.md"]);
+			.Should().BeEquivalentTo("real.md");
 	}
 
 	[Fact]

@@ -52,13 +52,18 @@ dotnet test --filter "DisplayName~Cascades"
 Targets **.NET 10**. NuGet versions are managed centrally in `Directory.Packages.props`
 (Central Package Management) — **do not put versions in `.csproj` files**.
 
-`SonarAnalyzer.CSharp` runs as a global analyzer on every build, and the build does not fail on
-warnings — so they have to be read by hand. **The baseline is 9 warnings**, each triaged in
-[docs/ANALYZER-WARNINGS.md](docs/ANALYZER-WARNINGS.md). A build reporting more has introduced
-something new: triage it against that file rather than adding to the pile. Four of the nine are
-deliberate and must **not** be "fixed". This matters because a real defect has already hidden in
-that noise once — a `Split` overload mis-binding in the watcher's metadata-folder guard, in a
-fully green build that no test could have caught.
+`SonarAnalyzer.CSharp` runs as a global analyzer on every build, and **the build fails on any
+warning** — `TreatWarningsAsErrors` in `Directory.Build.props`. The baseline is zero and it is
+enforced, not documented, so there is no count to remember and nothing to check by hand.
+
+Four warnings are deliberate. They are carried as targeted `[SuppressMessage]` attributes with
+written justifications on the members themselves, and listed together in
+[docs/ANALYZER-WARNINGS.md](docs/ANALYZER-WARNINGS.md). **A new suppression needs a justification
+saying why the code is right**, not why the rule is inconvenient; if that cannot be written, the
+warning is correct and the code should change. Never silence a rule repo-wide to get a build green.
+
+The gate exists because a real defect has already hidden in the noise here — a `Split` overload
+mis-binding in the watcher's metadata-folder guard, in a fully green build that no test caught.
 
 ## Target architecture
 

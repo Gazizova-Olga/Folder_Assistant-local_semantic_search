@@ -1,0 +1,20 @@
+<Project>
+
+  <!--
+    Repo-wide build settings.
+
+    TreatWarningsAsErrors enforces the zero-warning baseline that docs/ANALYZER-WARNINGS.md has
+    documented up to now. SonarAnalyzer runs on every build, and without a gate the warnings rot
+    until a real defect hides among them — which happened here once, a Split overload mis-binding
+    in the metadata-folder guard that sat in a fully green build.
+
+    Deliberate warnings and analyzer false positives are carried as targeted [SuppressMessage]
+    attributes with written justifications, next to the code they describe. They are never handled
+    by lowering this bar or by silencing a rule repo-wide: a suppression a reader can see and argue
+    with is worth more than a severity setting nobody looks at.
+  -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
 using FolderAssistant.Persistence;
@@ -137,6 +138,10 @@ internal sealed class Program
 	/// </summary>
 	private sealed class StartupDependencies : IStartupFilter
 	{
+		[SuppressMessage("Major Code Smell", "S1144:Unused private types or members should be removed",
+			Justification = "False positive: the constructor is invoked by the DI container, and that invocation is " +
+				"the mechanism ordering the database bootstrap before the server accepts a request (SPEC-130). It " +
+				"looks unused precisely because nothing calls it explicitly.")]
 		public StartupDependencies(DatabaseBootstrapResult database)
 		{
 			_ = database;

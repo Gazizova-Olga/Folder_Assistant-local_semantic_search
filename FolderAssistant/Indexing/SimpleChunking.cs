@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -60,6 +61,10 @@ internal sealed partial class SimpleTokenizer
 	[GeneratedRegex(@"\S+")]
 	private static partial Regex TokenPattern();
 
+	[SuppressMessage("Minor Code Smell", "S2325:Methods and properties that do not access instance data should be static",
+		Justification = "Kept an instance method by design: SimpleTokenizer is used as an instantiable " +
+			"collaborator — a new() field on the pipeline, and new SimpleTokenizer() at test call sites. " +
+			"Making it static would change how every caller reaches it for no behavioural gain.")]
 	public TokenizedText Tokenize(String content)
 	{
 		if (String.IsNullOrWhiteSpace(content))
@@ -90,6 +95,10 @@ internal sealed partial class SimpleTokenizer
 /// </summary>
 internal sealed class TextChunker
 {
+	[SuppressMessage("Minor Code Smell", "S2325:Methods and properties that do not access instance data should be static",
+		Justification = "Kept an instance method by design: TextChunker is used as an instantiable " +
+			"collaborator — a new() field on the pipeline, and new TextChunker() at test call sites. " +
+			"Making it static would change how every caller reaches it for no behavioural gain.")]
 	public IReadOnlyList<TextChunk> Chunk(
 		String fileId,
 		TokenizedText tokenized,

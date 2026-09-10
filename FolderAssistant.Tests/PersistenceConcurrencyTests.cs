@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using FluentAssertions;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
@@ -22,6 +23,14 @@ public sealed class PersistenceConcurrencyTests
 	private static readonly IndexingConfig Config = new() { ChunkSizeTokens = 8, ChunkOverlapTokens = 2 };
 
 	[Fact]
+	[SuppressMessage("Major Code Smell", "S1215:GC.Collect should not be called",
+		Justification = "The collect is what makes this test detect anything: the fault it guards against is a " +
+			"database handle finalized while another connection is inside sqlite3_prepare_v2, so a collection has " +
+			"to land during the concurrent work. Remove it and the same iterations pass with the shared cache " +
+			"restored — the test silently stops guarding.")]
+	[SuppressMessage("Usage", "xUnit1031:Do not use blocking task operations in test method",
+		Justification = "Deliberate: the test drives eight threads at one bootstrap and joins them. That concurrent " +
+			"join is the scenario under test, not an accident.")]
 	public void Concurrent_Bootstraps_Of_The_Same_Folder_Never_Fault()
 	{
 		List<Exception> failures = [];

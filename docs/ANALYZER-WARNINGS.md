@@ -1,57 +1,74 @@
-# Analyzer warning baseline
+# Analyzer warnings — the gate, and what is suppressed under it
 
-`SonarAnalyzer.CSharp` runs as a global analyzer on every build, and the build does **not** fail
-on warnings. That combination rots: warnings accumulate, nobody reads them, and a real defect
+`SonarAnalyzer.CSharp` runs as a global analyzer on every build, and since 2026-09-10 the build
+**fails on any warning**: `TreatWarningsAsErrors` in [Directory.Build.props](../Directory.Build.props).
+
+Before that, this file was the gate — a documented count that a human had to remember to compare a
+build against. That arrangement rots: warnings accumulate, nobody reads them, and a real defect
 hides in the noise.
 
 It already happened here. Two of the warnings this file was written to triage were not noise at
-all — see "Fixed, for the record" below. One of them was a mis-bound `Split` overload in the
-watcher's metadata-folder guard, and **no test caught it**: the suite was green with the bug in
-place, before and after.
+all — see "Fixed, for the record" below. One was a mis-bound `Split` overload in the watcher's
+metadata-folder guard, and **no test caught it**: the suite was green with the bug in place, before
+and after.
 
-This file is the baseline. **The count is the contract**: a build reporting more than this has
-introduced something new, and it gets triaged rather than added to the pile.
+**The baseline is now zero, and it is enforced rather than documented.** A new warning is a build
+error at the moment it is introduced, by whoever introduced it, instead of a line in a file someone
+may not read.
 
-- **Baseline: 8 warnings.** Verified 2026-09-10, .NET 10 SDK.
-- Recheck with:
+- **Baseline: 0 warnings, 0 errors.** Verified 2026-09-10, .NET 10 SDK.
+- Nothing to recheck by hand any more — `dotnet build` is the check. If it succeeds, the baseline
+  holds.
 
-  ```bash
-  dotnet build --no-incremental -v q --nologo 2>&1 \
-    | grep -oE "[A-Za-z0-9._]+\.cs\([0-9]+,[0-9]+\): warning [A-Za-z0-9]+" | sort -u
-  ```
+## What this file is for now
 
-  The raw log double-counts — each project is reported once in the body and once in the summary
-  — so `sort -u` is what makes the number comparable. An *incremental* build reports fewer
-  still, because a project that did not recompile reports nothing. Know which build you are
-  reading before treating a number as a regression.
+Two things, and neither is a count:
 
-## Deliberate — do not "fix" these (4)
+1. **The justification for every suppression in the tree.** Four warnings are deliberate. They are
+   carried as targeted `[SuppressMessage]` attributes with written reasons, on the members they
+   describe. This file lists them so they can be reviewed together, but the attributes are the
+   source of truth — a reader meeting one in the code gets the reasoning without leaving the file.
+2. **The record of what was cleared and why**, below, including the two defects that were hiding in
+   the noise.
 
-These fire on code that is correct as written. Changing the code to satisfy the analyzer would
-break it. They are the reason this file exists rather than a blanket `TreatWarningsAsErrors`.
+**How to add one.** A new suppression needs a justification that says *why the code is right*, not
+why the rule is annoying. If that sentence cannot be written, the warning is telling the truth and
+the code should change. Never silence a rule repo-wide in `.editorconfig` to get a build green —
+that removes the warning everywhere, including where it would have been correct next time.
+
+## Deliberate — carried as [SuppressMessage], with these justifications (4)
+
+These fire on code that is correct as written; changing it to satisfy the analyzer would break it.
+Each is carried as a targeted attribute on the member itself — the gate stays on, and the exception
+is visible where someone would meet it. Sites are named by member, not line, because line numbers
+drift and this table went stale that way once already.
 
 | Rule | Site | Why it stays |
 | --- | --- | --- |
-| `S1215` (`GC.Collect`) | `PersistenceConcurrencyTests.cs(54)` | The collect is what makes the test detect anything. The fault it guards against is a database handle finalized while another connection is inside `sqlite3_prepare_v2`, so collections have to land *during* the concurrent work. Removing it leaves the same 60 iterations passing even with the shared cache restored — the test silently stops guarding. |
-| `xUnit1031` (blocking wait) | `PersistenceConcurrencyTests.cs(47)` | Same test. It deliberately drives eight threads at one bootstrap and joins them; that is the scenario under test, not an accident. |
-| `S1144` (unused constructor) | `Program.cs(140)` | False positive. `StartupDependencies`' constructor is invoked by the container, and **that invocation is the mechanism** ordering the database bootstrap before the server listens (`SPEC-130`). It looks unused precisely because nothing calls it explicitly. |
-| `S2699` (test without assertions) | `CorpusBenchmark.cs(34)` | It is a measuring instrument, not a test, and it says so. It asserts nothing on purpose: a benchmark that fails a build on a timing threshold turns machine variance into a red suite. It lives under `[Fact]` because that is the runner already present, and it returns immediately unless an environment variable asks for it. |
+| `S1215` (`GC.Collect`) | `PersistenceConcurrencyTests.Concurrent_Bootstraps_Of_The_Same_Folder_Never_Fault` | The collect is what makes the test detect anything. The fault it guards against is a database handle finalized while another connection is inside `sqlite3_prepare_v2`, so collections have to land *during* the concurrent work. Removing it leaves the same 60 iterations passing even with the shared cache restored — the test silently stops guarding. |
+| `xUnit1031` (blocking wait) | the same test | It deliberately drives eight threads at one bootstrap and joins them; that is the scenario under test, not an accident. |
+| `S1144` (unused constructor) | `Program.StartupDependencies` constructor | False positive. `StartupDependencies`' constructor is invoked by the container, and **that invocation is the mechanism** ordering the database bootstrap before the server listens (`SPEC-130`). It looks unused precisely because nothing calls it explicitly. |
+| `S2699` (test without assertions) | `CorpusBenchmark.Measure_The_Baseline` | It is a measuring instrument, not a test, and it says so. It asserts nothing on purpose: a benchmark that fails a build on a timing threshold turns machine variance into a red suite. It lives under `[Fact]` because that is the runner already present, and it returns immediately unless an environment variable asks for it. |
 
-## Noise — worth clearing, no behaviour at stake (4)
+## Cleared to reach zero, 2026-09-10
 
-Mechanical. Clearing these is what restores signal.
+Four warnings stood between the tree and the gate. None was silenced.
 
-| Rule | Sites |
-| --- | --- |
-| `S2325` — could be static | `LocalTextFileScanner.cs(43)`, `SimpleChunking.cs(63, 93)` |
-| `S3878` — redundant array creation | `FolderIndexingPipelineTests.cs(54)` |
+| Rule | Site | How it was cleared |
+| --- | --- | --- |
+| `S3878` — array created for a `params` parameter | `FolderIndexingPipelineTests.cs(54)` | Genuinely redundant. `BeEquivalentTo(["real.md"])` became `BeEquivalentTo("real.md")`; the array was doing nothing. |
+| `S2325` — could be static | `LocalTextFileScanner.Enumerate` | **Suppressed.** Kept an instance method by design — see below. |
+| `S2325` — could be static | `SimpleTokenizer.Tokenize` | **Suppressed**, same reason. |
+| `S2325` — could be static | `TextChunker.Chunk` | **Suppressed**, same reason. |
 
-## Intended end state
+**Why the three `S2325` sites are suppressed rather than made static.** All three types are used as
+instantiable collaborators: each is a `new()` field on `FolderIndexingPipeline` and is constructed
+directly at test call sites (`new LocalTextFileScanner()`, `new TextChunker()`). Making the methods
+static would change how every caller reaches them, and would buy nothing at runtime. The analyzer
+is reporting a fact about the method body; it is not reporting a problem with the design.
 
-Clear the 4, attach targeted `[SuppressMessage]` attributes carrying the justifications above to
-the 4 deliberate ones, then set `TreatWarningsAsErrors` in a `Directory.Build.props`. The
-baseline becomes zero and the build enforces it, which is strictly better than a document
-someone has to remember to read. Until then, this file is the thing to check a build against.
+`S3267` on `FileChangeFeed.ShouldIgnore` was cleared one commit earlier by fixing the code — the
+detail is at the end of this file.
 
 ## Fixed, for the record
 

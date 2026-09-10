@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Diagnostics;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
@@ -31,6 +32,11 @@ public sealed class CorpusBenchmark
 	public CorpusBenchmark(ITestOutputHelper output) => this._output = output;
 
 	[Fact]
+	[SuppressMessage("Major Code Smell", "S2699:Tests should include assertions",
+		Justification = "It is a measuring instrument, not a test, and it says so. It asserts nothing on purpose: " +
+			"a benchmark that fails a build on a timing threshold turns machine variance into a red suite. It lives " +
+			"under [Fact] because that is the runner already present, and returns immediately unless an environment " +
+			"variable asks for it.")]
 	public void Measure_The_Baseline()
 	{
 		String? fileCountSetting = Environment.GetEnvironmentVariable("BENCHMARK_FILES");
