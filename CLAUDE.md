@@ -140,6 +140,15 @@ as an unconditional pipeline stage. Two tools, deliberately separate:
 - **Text search** is an index-independent exact/regex folder scan, for literal lookups and
   for the window before the first index is ready.
 
+Ahead of that reduction sits a **low-confidence screen**: when even the best candidate
+falls below a floor, the whole set is refused rather than thinned, because a handful of
+weak passages costs context tokens and invites an answer built on text that does not
+address the question. It cannot live inside the reducer, which is contractually obliged to
+return its best candidate even when that one alone busts the budget. **The floor is a
+property of the embedding model, so its default is off** — measured, a real embedder
+separates answerable from unanswerable questions cleanly while the placeholder's scores
+overlap, and a non-zero default would claim a selectivity the default profile lacks.
+
 While the first index builds, semantic search **refuses** rather than answering from a
 half-built index: results from a partial index are indistinguishable from genuinely poor
 ones. A query vector is compared only against vectors sharing its model version — scoring

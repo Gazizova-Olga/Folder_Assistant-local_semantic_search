@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.8.0 |
+| Version | 0.9.0 |
 | Owner | Retrieval |
 | Last updated | 2026-09-11 |
 
@@ -38,6 +38,12 @@ consumer built. A semantic-search tool is what will use it, and that belongs to 
 Per-call telemetry wraps the composed query and is exported at `GET /metrics` (see Observability).
 It records what searches do, so until something searches it has nothing to record — the instrument
 is in place ahead of the traffic, not measuring traffic that exists.
+
+The low-confidence screen (`RelevanceFloor`) is likewise built and uncalled, and **off by default**
+for a measured reason given below. Only the screen itself is here: the requirement it comes from
+also asked that the caller size its own result count and that the model be told to judge question
+scope before searching, and both of those live in a tool description and a system prompt — surfaces
+this repository does not have until the agent lands.
 
 ## Contracts
 
@@ -198,6 +204,33 @@ would explain a different ordering than the one produced.
 vector-based MMR, and a stopword list. The lexical signal is coarse and carries a minority share
 of the ranking, so stopwords would be tuning a weight that mostly is not deciding anything.
 
+## The low-confidence short circuit
+
+A set of weak passages is worse than no passages. It costs context tokens, and it invites an answer
+built on text that does not address the question — which reads exactly like an answer built on text
+that does. `RelevanceFloor.Screen` therefore refuses a whole candidate set when even its **best**
+match falls below a floor.
+
+Three properties are deliberate.
+
+- **It screens on the best score, not on each candidate.** Per-candidate filtering already exists as
+  `RetrievalOptions.MinScore`, applied by both backends while ranking. Thinning a set and refusing
+  one are different decisions, and the best match is the one that says whether the corpus has
+  anything to say at all.
+- **It sits above the reducer, and has to.** `IContextReduction` promises to return the best
+  candidate it was given even when that candidate alone exceeds the budget, precisely so an empty
+  result cannot be confused with having found nothing. A stage that must sometimes return nothing
+  cannot live inside a stage that must never return nothing.
+- **Refused and empty stay distinguishable.** An empty set is not low confidence — reporting it as
+  such would tell a caller to rephrase a perfectly good question and hide that there was nothing to
+  search. The best score is reported either way, because a set turned away at `0.39` and one turned
+  away at `0.01` describe different corpora.
+
+**The default is `RelevanceFloor.Off`.** The floor that applies is a property of the embedding
+model, and the measurement below found that the default profile's scores cannot support one at all.
+A shipped non-zero default would claim a filtering power those scores do not have, which is the
+same reason `MinScore` defaults to `0.0`.
+
 ## Can a score floor tell a good question from a bad one?
 
 A short circuit that refuses to answer from weak matches needs a threshold, and a threshold is
@@ -286,9 +319,18 @@ to learn that second shape, or a bounded embed will be recorded as a plain failu
   and what is worth spending the context on — and keeping them apart means the retrieval contract
   stays a pure top-k similarity search. A native k-NN backend needs no rerank logic pushed into it,
   and the reducer works the same whichever backend produced the candidates.
-- Whether `MinScore` should be absolute, or relative to the best hit for a given query. An
-  absolute floor is easy to reason about and hard to choose well — and, as measured above,
-  impossible to choose at all while the active vectorizer scores everything alike.
+- Whether `MinScore` should be absolute, or relative to the best hit for a given query.
+  **Partly answered (0.9.0), by measurement:** an absolute floor is choosable and effective with a
+  real embedder — `(0.2520, 0.5040]` separates the two populations cleanly under
+  `qwen3-embedding:0.6b` — and remains impossible under the placeholder, whose scores overlap. So
+  the question was never "absolute or relative" in general; it was "which embedder is composed".
+  What stays open is the *shipped default*: ten queries over one corpus is not enough to fix a
+  constant that fires on real questions, and `RelevanceFloor.Off` is the honest default until there
+  is more evidence or a per-profile value.
+- Whether the floor should be configurable per profile rather than per deployment. The measurement
+  says the right value is a property of the embedding model, and the composition profile already
+  knows which model it built — but wiring a retrieval constant into `ModuleSet` is a larger change
+  than this evidence justifies.
 
 ## References
 
