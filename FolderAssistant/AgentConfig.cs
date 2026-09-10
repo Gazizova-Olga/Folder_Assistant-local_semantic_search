@@ -125,6 +125,27 @@ internal record IndexingConfig
 	/// <summary>Deterministic model version identifier used for persisted vectors.</summary>
 	public String ModelVersionId { get; init; } = "programmable-v1";
 
+	// ── Ollama embedding provider — read only by the ollama-* composition profiles (SPEC-162) ──
+
+	/// <summary>Base URL of the local Ollama OpenAI-compatible embeddings endpoint.</summary>
+	public String OllamaEndpoint { get; init; } = "http://localhost:11434/v1";
+
+	/// <summary>The Ollama embedding model. The default is the one this system targets.</summary>
+	public String OllamaModel { get; init; } = "qwen3-embedding:0.6b";
+
+	/// <summary>
+	/// The <c>model_version_id</c> Ollama vectors are stored and queried under. It is separate from the
+	/// model name because vectors are keyed by version, not by whatever the server happens to be serving.
+	/// </summary>
+	public String OllamaModelVersionId { get; init; } = "qwen3-embedding-0.6b-v1";
+
+	/// <summary>
+	/// The vector width <see cref="OllamaModel"/> emits. For <c>qwen3-embedding:0.6b</c> it is 1024, fixed
+	/// by the weights — this setting exists to be checked against, not to choose. The vectorizer validates
+	/// that the model really emits this width and fails rather than storing a wrong-width vector.
+	/// </summary>
+	public Int32 OllamaEmbeddingDimension { get; init; } = 1024;
+
 	/// <summary>Watch the analyzed folder and re-index when it changes.</summary>
 	public Boolean WatchEnabled { get; init; } = true;
 

@@ -86,6 +86,39 @@ internal static class CompositionProfiles
 					=> new SqliteVecRetrievalQuery(vectorizer, reader, indexState),
 				IsAvailable: static () => SqliteVecExtension.IsAvailable,
 				UnavailableReason: NoNativeBinary),
+
+			// Local Ollama, qwen3-embedding:0.6b (SPEC-162). Not fittable — the model is pretrained, so
+			// there is no corpus fit and a query needs nothing restored before it can be embedded.
+			//
+			// "Available" here means the code path runs everywhere. Whether the local server is reachable
+			// and has the model pulled is a runtime condition, not a platform one, and it is not something
+			// Resolve can answer without making a network call at startup.
+			["ollama-blob"] = new(
+				Name: "ollama-blob",
+				CreateVectorizer: static indexing => new OllamaEmbeddingVectorizer(
+					indexing.OllamaEndpoint,
+					indexing.OllamaModel,
+					indexing.OllamaModelVersionId,
+					indexing.OllamaEmbeddingDimension),
+				CreateVectorStoreWriter: static () => new SqliteBlobVectorStoreWriter(),
+				CreateVectorStoreReader: static () => new SqliteBlobVectorStoreReader(),
+				CreateRetrievalQuery: static (vectorizer, reader, indexState)
+					=> new CosineRetrievalQuery(vectorizer, reader, indexState),
+				IsAvailable: static () => true),
+
+			["ollama-vec"] = new(
+				Name: "ollama-vec",
+				CreateVectorizer: static indexing => new OllamaEmbeddingVectorizer(
+					indexing.OllamaEndpoint,
+					indexing.OllamaModel,
+					indexing.OllamaModelVersionId,
+					indexing.OllamaEmbeddingDimension),
+				CreateVectorStoreWriter: static () => new SqliteVecVectorStoreWriter(),
+				CreateVectorStoreReader: static () => new SqliteVecVectorStoreReader(),
+				CreateRetrievalQuery: static (vectorizer, reader, indexState)
+					=> new SqliteVecRetrievalQuery(vectorizer, reader, indexState),
+				IsAvailable: static () => SqliteVecExtension.IsAvailable,
+				UnavailableReason: NoNativeBinary),
 		};
 
 	/// <summary>Every profile name, whether or not it can run on this platform.</summary>

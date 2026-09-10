@@ -31,6 +31,16 @@
 			it ships per-RID native binaries, so it is a candidate under measurement rather than a default.
 		-->
 		<PackageVersion Include="sqlite-vec" Version="0.1.7-alpha.2.1" />
+		<!--
+			The OpenAI client and Microsoft.Extensions.AI's embedding abstraction, used to reach a *local*
+			Ollama server over its OpenAI-compatible endpoint (SPEC-162).
+
+			Upstream took no new dependency for this, because its agent already referenced the OpenAI SDK
+			from the first commit. Here the agent arrives later, so this genuinely is a new dependency and
+			says so rather than repeating that it is free. It is not a network egress: the endpoint is
+			localhost, and nothing in the assembly can reach anything else.
+		-->
+		<PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
 	</ItemGroup>
 
 	<ItemGroup Label="Tests">

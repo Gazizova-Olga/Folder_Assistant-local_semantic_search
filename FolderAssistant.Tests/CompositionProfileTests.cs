@@ -106,6 +106,8 @@ public sealed class CompositionProfileTests
 	[InlineData("programmable-vec")]
 	[InlineData("lsa-blob")]
 	[InlineData("lsa-vec")]
+	[InlineData("ollama-blob")]
+	[InlineData("ollama-vec")]
 	public void Every_Available_Profile_Composes_All_Four_Modules(String name)
 	{
 		if (!TryResolve(name, out ModuleSet profile))
@@ -132,6 +134,11 @@ public sealed class CompositionProfileTests
 	/// one. It deliberately does not pin *which* of the two: the corpus-fitted profiles exist to
 	/// treat those documents as near-synonymous, so demanding a particular one would assert against
 	/// the property that family is built for.
+	/// </para>
+	/// <para>
+	/// The <c>ollama-*</c> profiles are deliberately absent here. They compose (above) but cannot be
+	/// exercised end to end without a live model server, and a test that silently skips whenever one is
+	/// missing would report success for a path nobody ran.
 	/// </para>
 	/// </summary>
 	[Theory]
