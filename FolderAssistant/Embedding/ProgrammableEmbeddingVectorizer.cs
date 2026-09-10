@@ -30,13 +30,15 @@ internal sealed class ProgrammableEmbeddingVectorizer : IVectorizer
 
 	public ModelDescriptor Descriptor { get; }
 
-	public IReadOnlyList<EmbeddingResult> Vectorize(
+	public ValueTask<IReadOnlyList<EmbeddingResult>> VectorizeAsync(
 		IReadOnlyList<String> texts,
 		EmbeddingKind kind,
 		CancellationToken cancellationToken = default)
 	{
 		ArgumentNullException.ThrowIfNull(texts);
 
+		// In-process arithmetic: it completes synchronously, so the ValueTask carries the finished
+		// result with no thread hop and no allocation of a Task.
 		EmbeddingResult[] results = new EmbeddingResult[texts.Count];
 
 		for (Int32 i = 0; i < texts.Count; i++)
@@ -45,7 +47,7 @@ internal sealed class ProgrammableEmbeddingVectorizer : IVectorizer
 			results[i] = this.VectorizeSingle(texts[i]);
 		}
 
-		return results;
+		return new ValueTask<IReadOnlyList<EmbeddingResult>>(results);
 	}
 
 	private EmbeddingResult VectorizeSingle(String text)

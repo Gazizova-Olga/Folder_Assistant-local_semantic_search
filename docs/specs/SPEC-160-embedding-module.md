@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-08 |
+| Last updated | 2026-09-10 |
 
 ## Purpose
 
@@ -30,12 +30,21 @@ another without the rest of the system noticing.
 ```
 IVectorizer
     ModelDescriptor Descriptor { get; }
-    IReadOnlyList<EmbeddingResult> Vectorize(texts, kind, cancellationToken)
+    ValueTask<IReadOnlyList<EmbeddingResult>> VectorizeAsync(texts, kind, cancellationToken)
 ```
 
-- **Operations** — vectorize a batch. A batch is the primitive because most backends charge
-  per call, so a caller with many texts must be able to say so; single-text embedding is an
-  extension over it, not a second contract.
+- **Operations** — vectorize a batch, **asynchronously**. A batch is the primitive because most
+  backends charge per call, so a caller with many texts must be able to say so; single-text
+  embedding is an extension over it, not a second contract.
+- **Why async** — a vectorizer may be network-bound. A local model server (`SPEC-162`) is still a
+  socket, and the indexing path would otherwise block a thread per file waiting on a round-trip.
+  In-process implementations complete synchronously and consume no thread, so the contract costs
+  them nothing but the `ValueTask`.
+- **The synchronous shim is deliberate, and it is not a shortcut.** `Vectorize(...)` wraps
+  `VectorizeAsync` for the callers that stay synchronous: the retrieval query path embeds a single
+  query vector per call, and making it async would ripple through the whole retrieval stack for no
+  throughput gain, while the cold-fit pipeline is a batch job with nothing to overlap. It blocks
+  only its own caller, never the indexing path.
 - **Input** — the texts, an `EmbeddingKind`, and a cancellation token. An embedding call is
   the slowest thing on the indexing path and must be abandonable.
 - **Output** — per text: the vector, the `modelVersionId` that produced it, its `dimension`,

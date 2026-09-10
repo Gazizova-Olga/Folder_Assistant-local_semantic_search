@@ -43,7 +43,17 @@ internal interface IVectorizer
 {
 	ModelDescriptor Descriptor { get; }
 
-	IReadOnlyList<EmbeddingResult> Vectorize(
+	/// <summary>
+	/// Embeds a batch of texts.
+	///
+	/// <para>
+	/// Asynchronous because a vectorizer may be network-bound — a local model server is still a socket
+	/// (<c>SPEC-162</c>). In-process implementations complete synchronously and consume no thread, so the
+	/// contract costs them nothing; a network-bound one can be awaited rather than blocking a thread per
+	/// file while the indexing path waits on a round-trip.
+	/// </para>
+	/// </summary>
+	ValueTask<IReadOnlyList<EmbeddingResult>> VectorizeAsync(
 		IReadOnlyList<String> texts,
 		EmbeddingKind kind,
 		CancellationToken cancellationToken = default);
@@ -74,6 +84,24 @@ internal interface IFittableVectorizer : IVectorizer
 
 internal static class VectorizerExtensions
 {
+	/// <summary>
+	/// Synchronous convenience over <see cref="IVectorizer.VectorizeAsync"/>, for the callers that stay
+	/// synchronous — the retrieval query path embeds a single query vector per call, and making it async
+	/// would ripple through the whole retrieval stack for no throughput gain, while the cold-fit pipeline
+	/// is a batch job with nothing to overlap.
+	///
+	/// <para>
+	/// In-process vectorizers complete synchronously, so this blocks no thread. A network-bound one blocks
+	/// only the caller of that single embed, never the indexing path, which awaits <c>VectorizeAsync</c>.
+	/// </para>
+	/// </summary>
+	public static IReadOnlyList<EmbeddingResult> Vectorize(
+		this IVectorizer vectorizer,
+		IReadOnlyList<String> texts,
+		EmbeddingKind kind,
+		CancellationToken cancellationToken = default)
+		=> vectorizer.VectorizeAsync(texts, kind, cancellationToken).AsTask().GetAwaiter().GetResult();
+
 	/// <summary>Embeds one text. The contract is a batch because most backends charge per call.</summary>
 	public static EmbeddingResult Vectorize(this IVectorizer vectorizer, String text, EmbeddingKind kind)
 		=> vectorizer.Vectorize([text], kind)[0];

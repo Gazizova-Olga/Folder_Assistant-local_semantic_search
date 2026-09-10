@@ -181,16 +181,18 @@ public sealed class CosineRetrievalQueryTests
 		public ModelDescriptor Descriptor { get; }
 			= new(modelVersionId, "stub", "stub-model", vector.Length);
 
-		public IReadOnlyList<EmbeddingResult> Vectorize(
+		public ValueTask<IReadOnlyList<EmbeddingResult>> VectorizeAsync(
 			IReadOnlyList<String> texts,
 			EmbeddingKind kind,
 			CancellationToken cancellationToken = default)
 		{
 			this.Kinds.Add(kind);
 
-			return texts
+			IReadOnlyList<EmbeddingResult> results = texts
 				.Select(_ => new EmbeddingResult(vector, modelVersionId, vector.Length, "stub"))
 				.ToArray();
+
+			return new ValueTask<IReadOnlyList<EmbeddingResult>>(results);
 		}
 	}
 

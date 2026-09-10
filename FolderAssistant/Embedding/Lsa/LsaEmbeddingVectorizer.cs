@@ -92,7 +92,7 @@ internal sealed class LsaEmbeddingVectorizer : IFittableVectorizer
 		this._model = model;
 	}
 
-	public IReadOnlyList<EmbeddingResult> Vectorize(
+	public ValueTask<IReadOnlyList<EmbeddingResult>> VectorizeAsync(
 		IReadOnlyList<String> texts,
 		EmbeddingKind kind,
 		CancellationToken cancellationToken = default)
@@ -112,7 +112,8 @@ internal sealed class LsaEmbeddingVectorizer : IFittableVectorizer
 			results[i] = this.Transform(model, texts[i]);
 		}
 
-		return results;
+		// In-process arithmetic: completes synchronously, so the ValueTask carries the result directly.
+		return new ValueTask<IReadOnlyList<EmbeddingResult>>(results);
 	}
 
 	private EmbeddingResult Transform(LsaModel model, String text)
