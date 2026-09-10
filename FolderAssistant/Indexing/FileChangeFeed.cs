@@ -39,7 +39,10 @@ internal interface IFileChangeFeed : IDisposable
 /// </summary>
 internal sealed class FileSystemWatcherChangeFeed : IFileChangeFeed
 {
-	private static readonly String[] IgnoredDirectorySegments = [".git", ".vs", "bin", "obj", "node_modules"];
+	// A case-insensitive set, matching LocalTextFileScanner IgnoredDirectoryNames: the lookup is what
+	// this is for, and doing it by hand meant a nested loop per path segment.
+	private static readonly HashSet<String> IgnoredDirectorySegments =
+		new(StringComparer.OrdinalIgnoreCase) { ".git", ".vs", "bin", "obj", "node_modules" };
 
 	// Must stay a Char[]. Passing the two separators as loose arguments binds to
 	// Split(Char, Int32) rather than the params overload, because Char converts implicitly to
@@ -148,23 +151,9 @@ internal sealed class FileSystemWatcherChangeFeed : IFileChangeFeed
 		String relative = Path.GetRelativePath(this._rootPath, fullPath);
 		String[] segments = relative.Split(PathSeparators, StringSplitOptions.RemoveEmptyEntries);
 
-		foreach (String segment in segments)
-		{
-			if (String.Equals(segment, this._metadataFolderName, StringComparison.OrdinalIgnoreCase))
-			{
-				return true;
-			}
-
-			foreach (String ignored in IgnoredDirectorySegments)
-			{
-				if (String.Equals(segment, ignored, StringComparison.OrdinalIgnoreCase))
-				{
-					return true;
-				}
-			}
-		}
-
-		return false;
+		return segments.Any(segment
+			=> String.Equals(segment, this._metadataFolderName, StringComparison.OrdinalIgnoreCase)
+			|| IgnoredDirectorySegments.Contains(segment));
 	}
 
 	private void OnDebounceElapsed(Object? state) => this.Publish(this._pendingReason);

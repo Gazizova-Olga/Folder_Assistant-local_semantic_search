@@ -15,7 +15,7 @@ implemented and tested, with two interchangeable embedding implementations behin
 What does not run yet: **nothing calls retrieval at runtime.** There is no agent, no tools and
 no chat surface, so the vectors are written and never read outside the test suite. That is the
 next substantial piece of work, not an oversight —
-[docs/DOCUMENTATION-ADJUSTMENTS-2026-09-09.md](docs/DOCUMENTATION-ADJUSTMENTS-2026-09-09.md)
+[docs/diagrams/adjustments/DOCUMENTATION-ADJUSTMENTS-2026-09-09.md](docs/diagrams/adjustments/DOCUMENTATION-ADJUSTMENTS-2026-09-09.md)
 records it, and [docs/diagrams/implementation-status.md](docs/diagrams/implementation-status.md)
 shows what is live, what is built but unreachable, and what is not built.
 

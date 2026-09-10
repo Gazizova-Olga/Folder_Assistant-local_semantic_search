@@ -12,7 +12,7 @@ place, before and after.
 This file is the baseline. **The count is the contract**: a build reporting more than this has
 introduced something new, and it gets triaged rather than added to the pile.
 
-- **Baseline: 9 warnings.** Verified 2026-09-10, .NET 10 SDK.
+- **Baseline: 8 warnings.** Verified 2026-09-10, .NET 10 SDK.
 - Recheck with:
 
   ```bash
@@ -34,22 +34,21 @@ break it. They are the reason this file exists rather than a blanket `TreatWarni
 | --- | --- | --- |
 | `S1215` (`GC.Collect`) | `PersistenceConcurrencyTests.cs(54)` | The collect is what makes the test detect anything. The fault it guards against is a database handle finalized while another connection is inside `sqlite3_prepare_v2`, so collections have to land *during* the concurrent work. Removing it leaves the same 60 iterations passing even with the shared cache restored — the test silently stops guarding. |
 | `xUnit1031` (blocking wait) | `PersistenceConcurrencyTests.cs(47)` | Same test. It deliberately drives eight threads at one bootstrap and joins them; that is the scenario under test, not an accident. |
-| `S1144` (unused constructor) | `Program.cs(107)` | False positive. `StartupDependencies`' constructor is invoked by the container, and **that invocation is the mechanism** ordering the database bootstrap before the server listens (`SPEC-130`). It looks unused precisely because nothing calls it explicitly. |
+| `S1144` (unused constructor) | `Program.cs(140)` | False positive. `StartupDependencies`' constructor is invoked by the container, and **that invocation is the mechanism** ordering the database bootstrap before the server listens (`SPEC-130`). It looks unused precisely because nothing calls it explicitly. |
 | `S2699` (test without assertions) | `CorpusBenchmark.cs(34)` | It is a measuring instrument, not a test, and it says so. It asserts nothing on purpose: a benchmark that fails a build on a timing threshold turns machine variance into a red suite. It lives under `[Fact]` because that is the runner already present, and it returns immediately unless an environment variable asks for it. |
 
-## Noise — worth clearing, no behaviour at stake (5)
+## Noise — worth clearing, no behaviour at stake (4)
 
 Mechanical. Clearing these is what restores signal.
 
 | Rule | Sites |
 | --- | --- |
 | `S2325` — could be static | `LocalTextFileScanner.cs(43)`, `SimpleChunking.cs(63, 93)` |
-| `S3267` — use LINQ `Where` | `FileChangeFeed.cs(158)` — arguably wrong: the nested loop returns on the first match, and a `Where` would express the same short-circuit less clearly while allocating |
 | `S3878` — redundant array creation | `FolderIndexingPipelineTests.cs(54)` |
 
 ## Intended end state
 
-Clear the 5, attach targeted `[SuppressMessage]` attributes carrying the justifications above to
+Clear the 4, attach targeted `[SuppressMessage]` attributes carrying the justifications above to
 the 4 deliberate ones, then set `TreatWarningsAsErrors` in a `Directory.Build.props`. The
 baseline becomes zero and the build enforces it, which is strictly better than a document
 someone has to remember to read. Until then, this file is the thing to check a build against.
@@ -86,3 +85,26 @@ error before checking the status**, so a `Ready` index could carry a stale excep
 `Error` is the reason an index is unusable, not a log of the last thing that went wrong. It now
 records nothing when it declines to leave `Ready`. That one *is* covered:
 `A_Failed_Refresh_Leaves_A_Ready_Index_Unblemished` fails if the check is reverted, measured.
+
+## Cleared, 2026-09-10 — `S3267` in `FileChangeFeed.ShouldIgnore`
+
+This file previously recorded that warning as *"arguably wrong: the nested loop returns on the
+first match, and a `Where` would express the same short-circuit less clearly while allocating"*.
+That defence was half right and it was defending the wrong shape.
+
+The short-circuit argument holds against `Where`. It does not hold against the actual problem,
+which was a **nested** loop: for every path segment, a linear scan of the ignored-directory list.
+The list is a set lookup by nature, and `LocalTextFileScanner` had already been using a
+case-insensitive `HashSet` for the identical job. Making the two agree removes the warning
+honestly rather than suppressing it, and `Any` over a set keeps the short-circuit the old code had.
+
+`ShouldIgnore` is the method a real defect hid in once — the `Split` overload mis-binding recorded
+below — so `FileChangeFeedTests` was run against this change specifically: 8 passed, including the
+metadata-folder and build-output guards this method exists to provide.
+
+**Not recorded here: a second `S3267`.** `SimpleTokenizer.Tokenize` loops over
+`Regex.EnumerateMatches`, whose enumerator is a `ref struct` that LINQ cannot be applied to at all
+— the transformation the rule wants would allocate a `Match` per token and revert the `SPEC-120`
+work. This build does not raise the warning there, so there is nothing to file as deliberate, and
+inventing an entry for a warning that does not fire would make this document describe a build that
+does not exist.

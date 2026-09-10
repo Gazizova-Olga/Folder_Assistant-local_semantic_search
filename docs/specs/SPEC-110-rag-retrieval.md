@@ -109,7 +109,7 @@ dropped rather than returned with an invented path — a hit with no source is n
 ### A score is not yet comparable across queries
 
 Measured over the programmable vectorizer at dimension 64
-([DOCUMENTATION-ADJUSTMENTS-2026-09-09](../DOCUMENTATION-ADJUSTMENTS-2026-09-09.md)):
+([DOCUMENTATION-ADJUSTMENTS-2026-09-09](../diagrams/adjustments/DOCUMENTATION-ADJUSTMENTS-2026-09-09.md)):
 
 | | measured |
 |---|---|
