@@ -1,0 +1,200 @@
+using System.Collections.Concurrent;
+using FolderAssistant.Indexing.Watching;
+
+namespace FolderAssistant.Indexing.Scanning;
+
+/// <summary>
+/// Walks the folder and reconciles what is on disk against what the index has recorded.
+///
+/// <para>
+/// This is the safety net, not the main path. Watching delivers changes promptly and imperfectly:
+/// the operating system drops events when its buffer overflows — during exactly the bursts an index
+/// most needs to keep up with — and a save implemented as write-temp-then-rename can arrive as a
+/// shape the watcher reports but nothing downstream recognises. Every such miss is silent. A
+/// periodic full comparison is what makes them temporary rather than permanent.
+/// </para>
+///
+/// <para>
+/// Because it is the safety net, its own failures matter more than an ordinary component's. A
+/// reconciler that stops running looks exactly like one with nothing to do, and the symptom appears
+/// much later as a search that quietly does not find a file. Two rules follow, and both are
+/// mutation-tested rather than asserted in a comment.
+/// </para>
+/// </summary>
+public sealed class Reconciler
+{
+    private readonly string _rootPath;
+    private readonly IIndexStore _store;
+    private readonly IContentHasher _hasher;
+    private readonly IndexablePathFilter _filter;
+    private readonly int _maxDegreeOfParallelism;
+
+    /// <param name="maxDegreeOfParallelism">
+    /// How many files are hashed at once. Sizes a disk- and CPU-bound job, so it scales with the
+    /// machine — unrelated to how many files are delivered onward at once, which is one network
+    /// round-trip each into a single backend. One knob for both could only ever suit one of them.
+    /// </param>
+    public Reconciler(
+        string rootPath,
+        string metadataFolderName,
+        IIndexStore store,
+        IContentHasher hasher,
+        int maxDegreeOfParallelism = 0)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(hasher);
+
+        _rootPath = Path.GetFullPath(rootPath);
+        _store = store;
+        _hasher = hasher;
+        _filter = new IndexablePathFilter(metadataFolderName);
+        _maxDegreeOfParallelism = maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Environment.ProcessorCount;
+    }
+
+    /// <summary>
+    /// Compares the folder against the index once, and applies what it finds.
+    /// </summary>
+    public async Task<ReconcileResult> ReconcileAsync(CancellationToken cancellationToken = default)
+    {
+        IReadOnlyDictionary<string, FileRecord> recorded = await _store.ReadAllAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        ConcurrentDictionary<string, FileRecord> onDisk = new(StringComparer.Ordinal);
+        ConcurrentBag<string> skipped = [];
+
+        await Parallel.ForEachAsync(
+            EnumerateIndexableFiles(),
+            new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = _maxDegreeOfParallelism,
+            },
+            async (absolutePath, token) =>
+            {
+                string relativePath = ToRelativeKey(absolutePath);
+
+                try
+                {
+                    string hash = await _hasher.HashAsync(absolutePath, token).ConfigureAwait(false);
+                    long size = new FileInfo(absolutePath).Length;
+
+                    onDisk[relativePath] = new FileRecord(relativePath, hash, size);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // A file being written, locked, or unreadable. This is ordinary: the indexer does
+                    // not own the folder it indexes, and an editor holding a file is the normal case
+                    // rather than an error condition.
+                    //
+                    // The file is left out of this pass's picture ENTIRELY — not recorded with an
+                    // empty or placeholder hash. A blank hash becomes the file's stored identity, and
+                    // every other unhashable file then carries the same one, so any comparison keyed
+                    // on content sees a folder full of identical files.
+                    //
+                    // And the exception is swallowed rather than allowed to leave this delegate:
+                    // Parallel.ForEachAsync cancels its remaining work when a body throws, so one
+                    // locked file would end the pass for every file after it.
+                    skipped.Add(relativePath);
+                }
+            }).ConfigureAwait(false);
+
+        List<ReconciledChange> changes = [];
+
+        foreach ((string relativePath, FileRecord current) in onDisk)
+        {
+            if (!recorded.TryGetValue(relativePath, out FileRecord? previous))
+            {
+                changes.Add(new ReconciledChange(relativePath, FileDelta.Added, current));
+            }
+            else if (!string.Equals(previous.ContentHash, current.ContentHash, StringComparison.Ordinal))
+            {
+                changes.Add(new ReconciledChange(relativePath, FileDelta.Modified, current));
+            }
+        }
+
+        foreach ((string relativePath, FileRecord previous) in recorded)
+        {
+            // A file that was skipped is NOT a file that was removed. It is on disk and simply could
+            // not be read this pass, so treating its absence from `onDisk` as a deletion would drop
+            // its index entry and re-add it on the next pass — an edit-and-delete cycle driven purely
+            // by someone else holding the file open.
+            if (!onDisk.ContainsKey(relativePath) && !skipped.Contains(relativePath))
+            {
+                changes.Add(new ReconciledChange(relativePath, FileDelta.Removed, previous));
+            }
+        }
+
+        if (changes.Count > 0)
+        {
+            await _store.ApplyAsync(changes, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new ReconcileResult(onDisk.Count, skipped.Count, changes);
+    }
+
+    /// <summary>
+    /// Reconciles on a fixed interval until cancelled.
+    ///
+    /// <para>
+    /// <strong>A failed pass must not end the loop.</strong> This loop is what heals every change the
+    /// watcher dropped; if one transient fault could stop it, the index would silently stop
+    /// converging for the rest of the process's life and nothing would report it — the folder would
+    /// simply drift, and the first symptom would be a search that does not find a file that is
+    /// plainly there.
+    /// </para>
+    /// </summary>
+    public async Task RunPeriodicallyAsync(TimeSpan interval, CancellationToken cancellationToken)
+    {
+        using PeriodicTimer timer = new(interval);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                try
+                {
+                    await ReconcileAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    // Deliberately everything. The next pass re-reads the whole folder from scratch,
+                    // so a fault here costs one interval of staleness — where letting it escape costs
+                    // every future pass.
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopping.
+        }
+    }
+
+    private IEnumerable<string> EnumerateIndexableFiles()
+    {
+        EnumerationOptions options = new()
+        {
+            RecurseSubdirectories = true,
+
+            // A reparse point can point anywhere, including above the root or back into this tree.
+            // Following one turns a bounded walk into an unbounded one, and can put files outside the
+            // watched folder into its index.
+            AttributesToSkip = FileAttributes.ReparsePoint,
+
+            // A folder disappearing mid-walk is ordinary here, and it must not end the enumeration
+            // for everything after it.
+            IgnoreInaccessible = true,
+        };
+
+        return Directory
+            .EnumerateFiles(_rootPath, "*", options)
+            .Where(path => _filter.ShouldReport(path));
+    }
+
+    private string ToRelativeKey(string absolutePath)
+        => Path.GetRelativePath(_rootPath, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
+}

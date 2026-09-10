@@ -13,6 +13,13 @@
 
 	<ItemGroup Label="Runtime">
 		<PackageVersion Include="MathNet.Numerics" Version="5.0.0" />
+		<!--
+			Non-cryptographic hashing for change detection in the indexing library. The reconciler hashes
+			every file in the folder on every pass, and the question it answers — did these bytes change —
+			is not a security boundary, so a cryptographic digest would be paying for a guarantee nothing
+			downstream relies on.
+		-->
+		<PackageVersion Include="System.IO.Hashing" Version="10.0.0" />
 		<PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
 		<!--
 			Security pin, and the reason it is a direct reference rather than left transitive.

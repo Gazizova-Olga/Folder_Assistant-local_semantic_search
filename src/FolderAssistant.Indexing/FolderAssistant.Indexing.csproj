@@ -17,6 +17,11 @@
 	-->
 
 	<ItemGroup>
+		<!-- Change detection only, not a security boundary; see Directory.Packages.props. -->
+		<PackageReference Include="System.IO.Hashing" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<!--
 			The settling rule and the exclusion rule are internal: nothing outside this assembly composes
 			them, and the watcher is the only thing that should. They still need direct coverage, because

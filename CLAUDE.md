@@ -99,8 +99,9 @@ A durable **outbox indexer** in its own assembly (`src/FolderAssistant.Indexing`
 filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
 delivers one changed file at a time to the embedding pipeline with retry and backoff.
 
-**Only the watcher exists so far** (`SPEC-121`) — the reconciler, outbox and dispatcher are not
-built, and nothing consumes the changes it publishes. The assembly boundary is one-way on purpose:
+**The watcher and the reconciler exist so far** (`SPEC-121`) — the outbox and dispatcher are not
+built, and the store the reconciler applies its conclusions to has no implementation yet. The
+assembly boundary is one-way on purpose:
 the library knows nothing of chunking, embedding or retrieval and cannot come to depend on them by
 accident.
 

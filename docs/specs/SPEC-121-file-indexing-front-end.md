@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.1.0 |
+| Version | 0.2.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-11 |
 
@@ -40,10 +40,11 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 ## Implementation status
 
-**The watcher front end is built. Nothing else in this spec is.** There is no reconciler, no
-outbox, no dispatcher and no bridge to the indexing subsystem yet, and nothing consumes the changes
-this stage publishes. The sections below describe only what exists; the rest of the design is named
-in Scope so the gap is visible, and will be specified as it is built rather than promised here.
+**The watcher and the reconciler are built. The outbox is not.** There is no durable operation log,
+no dispatcher and no bridge to the indexing subsystem yet, and nothing consumes what either stage
+produces — the reconciler applies its conclusions to a store the application has not yet
+implemented. The sections below describe only what exists; the rest of the design is named in Scope
+so the gap is visible, and will be specified as it is built rather than promised here.
 
 ## The signal is deliberately coarse
 
@@ -110,6 +111,48 @@ between asserting the rule and asserting that the machine was fast enough.
 
 Exclusion matches a **whole path segment**, never a prefix. A folder called `binaries` or `objects`
 is an ordinary folder.
+
+## Reconciliation, and why its own failures matter more than most
+
+Watching is prompt and imperfect. The reconciler compares the whole folder against what the index
+recorded and repairs the difference, which is what makes a dropped event temporary rather than
+permanent.
+
+**Because it is the safety net, a reconciler that stops running looks exactly like one with nothing
+to do.** There is no error, no queue backing up, and no symptom until much later, when a search
+quietly fails to find a file that is plainly there. Three rules follow, and each is verified by
+breaking it rather than asserted in a comment.
+
+**A pass must survive a file it cannot read.** The indexer does not own the folder it indexes: an
+editor holding a file open, a build writing one, a checkout replacing one — all deny the
+share-`Read` open this needs, and all are ordinary rather than exceptional. Hashing runs in
+parallel, and a parallel loop cancels its remaining work when one body throws, so a single locked
+file would otherwise end the pass for every file after it.
+
+**A file that could not be hashed is left out of the pass's picture entirely** — never recorded with
+an empty or placeholder hash. A blank becomes that file's stored identity, and since every
+unhashable file would carry the same blank, any comparison keyed on content sees a folder full of
+identical files.
+
+**A skipped file is not a deleted one.** It is on disk and merely unreadable this pass. Reading its
+absence from the pass as a deletion would drop its index entry and re-add it on the next pass — an
+endless delete-and-restore cycle driven entirely by someone else holding the file open.
+
+**And a failed pass must not end the loop.** A fault here costs one interval of staleness, because
+the next pass re-reads the whole folder from scratch. Letting it escape costs every future pass.
+
+The walk does not follow reparse points. One can point above the root or back into the tree,
+turning a bounded walk unbounded and putting files from outside the watched folder into its index.
+
+Hashing parallelism is sized independently of anything else. It is a disk- and CPU-bound job that
+scales with the machine, unlike delivery onward, which is one round trip per file into a single
+backend. A single knob for both could only ever suit one of them.
+
+**Change detection does not use a cryptographic hash.** The question is whether these bytes differ
+from the last ones seen, nothing downstream treats the answer as an identity or a signature, and it
+is computed for every file on every pass. It is deliberately a different hash from the one the
+indexing subsystem uses to address chunk content, which must be stable across machines because it
+keys stored rows.
 
 ## Non-functional requirements
 
