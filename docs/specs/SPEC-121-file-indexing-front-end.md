@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-11 |
 
@@ -41,11 +41,12 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 ## Implementation status
 
-**The watcher, the reconciler and the per-change pipeline are built. The outbox is not.** There is no
-durable operation log, no dispatcher and no bridge to the indexing subsystem yet. Nothing yet composes the
-watcher and the pipeline together, and both writers apply their conclusions to a store the
-application has not yet implemented. The sections below describe only what exists; the rest of the design is named in Scope
-so the gap is visible, and will be specified as it is built rather than promised here.
+**The watcher, the reconciler, the per-change pipeline and the outbox dispatcher are built. The store
+and the bridge are not.** The outbox exists as a contract and a dispatcher that drains it; nothing
+implements the store behind either the writers or the dispatcher, and nothing implements the seam that
+turns a delivered file into embedded content. Nothing yet composes these stages together. The sections
+below describe only what exists; the rest of the design is named in Scope so the gap is visible, and will
+be specified as it is built rather than promised here.
 
 ## The signal is deliberately coarse
 
@@ -212,8 +213,51 @@ file, and every file in a folder indexed at once would share it.
 - **Both writers use one rule.** If the reconciler and the per-change path derived it differently, a
   file's recorded age would depend on which of them discovered it.
 
-Nothing reads the value yet. It is recorded state, like a record's size, and it is recorded correctly
-from the first writer that sees a file rather than corrected after the fact.
+It reaches the embedding side as part of each delivered file's metadata.
+
+## Delivery: the outbox
+
+Recording a change and delivering it are two steps, and only the first is quick. The store **queues a
+delivery in the same write that records the change** — an upsert for an added or modified file, a delete
+for a removed one — so a recorded change can never be forgotten: nothing would come back for it, because
+the next comparison would find the record already matching the disk. A dispatcher then drains the queue
+into the embedding side, one seam the application implements.
+
+**Delivery is at-least-once.** An operation is claimed, delivered, and only then retired. A process that
+stops mid-delivery records no outcome; its claimed operations return to the queue when the next one starts.
+That is affordable only because repeating a delivery costs nothing: **content already delivered is not
+delivered again**, judged by the content hash last confirmed for the file.
+
+**The delivered id is `sha256("file::" + relative key)`**, exactly the id the application's corpus scanner
+derives, so a file delivered on its own lands on the same rows a whole-folder scan wrote. The two
+derivations live in two assemblies by agreement, and a test runs the scanner to hold them to it.
+
+**One file's operations run in the order they were queued, never concurrently.** A claimed batch is split
+by file: parallel across files, sequential within one. An upsert and a delete for the same file, run
+together or out of order, can leave content embedded for a file that no longer exists. How many files run
+at once defaults to one, because each delivery is a round trip into a single backend and what that backend
+can take in parallel is a property of the backend.
+
+**Recording a file as delivered is conditional on the content that was delivered.** A delivery is a round
+trip, and the file can be rewritten while it happens. The dispatcher records the hash it read before
+delivering, and the store accepts it only if the file's recorded content is still that hash. Writing the
+record back whole instead would restore the old hash over the new one; the delivery already queued for the
+new content would then find it "already delivered" and skip, leaving the file on stale content with nothing
+left to correct it. **Only the dispatcher states what was delivered** — the writers' record has no such
+field — so no writer can revert it either. Losing a mark is safe, because the queued delivery repeats the
+work. Losing an edit is not.
+
+**A failed delivery waits, then tries again**, doubling the wait each time up to a cap, so a backend that is
+down is not hammered and a backend that recovers is found.
+
+**A delivery that will not be tried again is retired as failed, keeping the error that ended it.** Retired
+as done, an outbox full of abandoned work would look exactly like one where everything had arrived, and the
+file's only symptom would be a search that quietly does not find it. It is the **last** error that is kept:
+a run of "connection refused" ended by "model not found" is only actionable if the second survives.
+
+**A failed drain does not end the dispatcher's loop**, for the reconciler's reason — every queued file
+depends on it. A drain that failed part-way can leave operations claimed and never resolved, so the next
+pass returns them to the queue before claiming again.
 
 ## Non-functional requirements
 
@@ -252,6 +296,12 @@ its own clock cannot coincide with the value it should record. Setting a creatio
 everywhere, so those tests compare exactly against what the filesystem reports — which a clock reading
 cannot match — and additionally against the backdated value wherever the backdating took, since the
 first comparison uses the rule itself as its expected value and cannot see the rule being wrong.
+
+The dispatcher runs against an in-memory outbox, a scripted embedding side and a clock the test advances,
+so a retry delay is asserted as the value it is rather than slept through. Two orderings need real
+concurrency and get it without racing a deadline: one file's operations are shown never to overlap with
+four slots available, and two files are shown to run at once by having each delivery wait until the other
+has started — run one at a time, the first would time out.
 
 ## Open questions
 

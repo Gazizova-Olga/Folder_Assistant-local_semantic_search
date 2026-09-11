@@ -69,6 +69,13 @@ public interface IIndexStore
     /// <summary>
     /// Records a set of conclusions. Applied as one unit: a partially applied pass would leave the
     /// index describing a folder that never existed at any moment.
+    ///
+    /// <para>
+    /// Applying a change also queues its delivery — an upsert for an added or modified file, a delete for a
+    /// removed one — <strong>in the same unit</strong>. Recorded without being queued, a change would be
+    /// believed and never delivered, and nothing would come back for it: the next comparison finds the
+    /// record already matching the disk.
+    /// </para>
     /// </summary>
     Task ApplyAsync(IReadOnlyList<ReconciledChange> changes, CancellationToken cancellationToken = default);
 }
