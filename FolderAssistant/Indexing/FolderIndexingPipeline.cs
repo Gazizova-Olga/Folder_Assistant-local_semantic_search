@@ -200,6 +200,11 @@ internal sealed class FolderIndexingPipeline
 			descriptor,
 			fitArtifactJson);
 
+		// A whole-folder pass is the largest single write this system makes, and it ends here: fold the log
+		// back into the database once, rather than leaving the folder holding it until a later writer happens
+		// to reclaim it.
+		FolderDatabaseMaintenance.Checkpoint(databasePath);
+
 		return new IndexingResult(
 			FilesScanned: scanned,
 			FilesIndexed: indexed,

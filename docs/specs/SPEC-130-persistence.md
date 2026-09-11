@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.8.0 |
+| Version | 0.9.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-09 |
+| Last updated | 2026-09-11 |
 
 ## Purpose
 
@@ -132,6 +132,21 @@ not carry.
 - **WAL is what makes that legal**, and is the only reason a read does not block behind an
   index in flight. It is set once at bootstrap: `journal_mode` is persisted in the database
   file rather than being a property of a connection.
+- **WAL has a cost, and it is reclaimed at exactly two moments.** A committed write lives in the
+  log until a checkpoint copies it back, and SQLite's automatic checkpoint runs on a page
+  threshold while writing and never shrinks the log file. Measured with `CorpusBenchmark` at
+  4,000 files, a whole-folder pass left a **25,303 KB log beside a 24 MB database** — a second
+  copy of about everything it had written — and **23,798 KB beside 23 MB** under `sqlite-vec`.
+  A truncating checkpoint now runs when a whole-folder pass finishes; after it, the same
+  measurement reads **0 KB** for both, in two runs. The outbox dispatcher invites one at the
+  other quiet moment — a drain going quiet after delivering work (`SPEC-121`) — which the store
+  takes once one implements the invitation; none does yet, so that half is a contract, not a
+  measurement. Checkpointing anywhere else is **ruled out**: per write it blocks readers
+  again and again to reclaim the same space, and on an idle poll it would run forever against
+  a folder nobody is touching. It is also **advisory** — a checkpoint SQLite cannot take right
+  now (a reader still on an older snapshot) reports busy rather than failing, costs disk only,
+  and must never surface as an error in the loop that asked for it. The statement lives once,
+  in `FolderDatabaseMaintenance`.
 - **`PRAGMA foreign_keys` and `PRAGMA busy_timeout` are per-connection and are not
   persisted**, so every connection sets them for itself immediately after opening.
   `foreign_keys` additionally cannot be set inside a transaction, and cascading deletes

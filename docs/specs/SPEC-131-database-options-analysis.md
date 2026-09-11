@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Reversed on evidence; see the verdict section |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-09 |
+| Last updated | 2026-09-11 |
 
 ## Purpose
 
@@ -208,6 +208,14 @@ building the backend and running both over the same corpus.
 | cold index, `sqlite-vec` | 5.4 s | 16.3 s |
 | database size | 24 MB | 74 MB |
 | database size, `sqlite-vec` | 23 MB | 69 MB |
+
+"Database size" is the `.db` file alone. When these were taken, a write-ahead log about as large
+as the database stayed beside it after a cold index — measured later at 4,000 files as 25,303 KB
+beside 24 MB, and 23,798 KB beside 23 MB under `sqlite-vec` — so at that size the disk a freshly
+indexed folder actually occupied was roughly double the first column. The 72,000-vector column was
+not re-measured. A whole-folder pass now checkpoints when it finishes and leaves no log behind
+([SPEC-130](SPEC-130-persistence.md)); the figures themselves are unchanged, because the log was
+never in them.
 
 **The measurement behind the earlier verdict was right; the inference from it was not.** Cosine
 arithmetic really is a small minority of a query — 15 ms of 106, 49 ms of 325. The error was

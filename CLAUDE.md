@@ -209,7 +209,10 @@ Rules that bite:
   before the server accepts a request. DDL from the request path costs a round-trip per
   turn and forces read paths onto write-capable connections.
 - **WAL** is set once at creation. It is the only reason retrieval can read while the
-  background indexer writes.
+  background indexer writes. Its log is reclaimed by a truncating checkpoint at exactly two
+  quiet moments — a whole-folder pass finishing, and the outbox drain going quiet after
+  delivering work — and never per write or on an idle poll. Advisory: one that cannot be taken
+  costs disk, never correctness.
 - Vectors are keyed `(chunk_id, model_version_id)` so multiple embedding models can coexist
   during a migration; exactly one model is active for write.
 

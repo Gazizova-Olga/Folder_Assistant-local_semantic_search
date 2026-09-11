@@ -152,6 +152,7 @@ public sealed class CorpusBenchmark
 		this.Log($"retrieval: p50 {timings[timings.Count / 2]} ms over {candidates.Count} vectors " +
 			$"(min {timings[0]}, max {timings[^1]})");
 		this.Log($"database size: {new FileInfo(database.DatabasePath).Length / 1024 / 1024} MB");
+		this.Log($"write-ahead log left behind: {WriteAheadLogKilobytes(database.DatabasePath)} KB");
 		this.Log($"peak working set: {Process.GetCurrentProcess().PeakWorkingSet64 / 1024 / 1024} MB");
 
 		// The candidate backend, over the same corpus, into its own database file inside the same
@@ -197,7 +198,20 @@ public sealed class CorpusBenchmark
 		this.Log($"vec retrieval: p50 {vecTimings[vecTimings.Count / 2]} ms " +
 			$"(min {vecTimings[0]}, max {vecTimings[^1]})");
 		this.Log($"vec database size: {new FileInfo(vecDatabase.DatabasePath).Length / 1024 / 1024} MB");
+		this.Log($"vec write-ahead log left behind: {WriteAheadLogKilobytes(vecDatabase.DatabasePath)} KB");
 		this.Log($"peak working set (after both backends): {Process.GetCurrentProcess().PeakWorkingSet64 / 1024 / 1024} MB");
+	}
+
+	/// <summary>
+	/// The size of the log beside the database, which the database size above does not include. Read while this
+	/// process still holds pooled connections, so SQLite has not folded it away on a last close — the state a
+	/// running application leaves the folder in.
+	/// </summary>
+	private static Int64 WriteAheadLogKilobytes(String databasePath)
+	{
+		FileInfo log = new(databasePath + "-wal");
+
+		return log.Exists ? log.Length / 1024 : 0;
 	}
 
 	/// <summary>Live bytes after a full collect — what the run is holding, not what it has churned.</summary>

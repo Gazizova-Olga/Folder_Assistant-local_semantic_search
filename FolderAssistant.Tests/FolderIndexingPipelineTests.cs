@@ -175,6 +175,36 @@ public sealed class FolderIndexingPipelineTests
 		Count(connection, "SELECT COUNT(*) FROM chunk_vector;").Should().Be(first.VectorsIndexed);
 	}
 
+	/// <summary>
+	/// A whole-folder pass ends by folding its write-ahead log back into the database. A reader stays open
+	/// throughout, the way retrieval does while indexing runs: with no connection left, SQLite would fold and
+	/// remove the log on its own when the last one closed, and the test could not tell a checkpoint from that.
+	/// </summary>
+	[Fact]
+	public void A_Whole_Folder_Pass_Leaves_No_Write_Ahead_Log_Behind()
+	{
+		using TempFolder folder = new();
+
+		for (Int32 i = 0; i < 50; i++)
+		{
+			File.WriteAllText(folder.Combine($"doc{i:D2}.md"), $"document {i} " + String.Join(' ', Enumerable.Range(0, 200)), Encoding.UTF8);
+		}
+
+		DatabaseBootstrapResult database = new FolderDatabaseBootstrapper()
+			.EnsureInitialized(folder.Path, new PersistenceConfig());
+
+		using SqliteConnection reader = FolderDatabaseConnection.OpenRead(database.DatabasePath);
+		Count(reader, "SELECT COUNT(*) FROM file_manifest;").Should().Be(0);
+
+		new FolderIndexingPipeline().Run(
+			folder.Path,
+			database.DatabasePath,
+			new IndexingConfig { ChunkSizeTokens = 16, ChunkOverlapTokens = 4, VectorDimension = 32 });
+
+		new FileInfo(database.DatabasePath + "-wal").Length.Should().Be(0);
+		Count(reader, "SELECT COUNT(*) FROM file_manifest;").Should().Be(50, "the checkpoint reclaims disk and changes nothing stored");
+	}
+
 	private static Int64 Count(SqliteConnection connection, String sql)
 	{
 		using SqliteCommand command = connection.CreateCommand();

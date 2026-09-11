@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-11 |
 
@@ -259,6 +259,15 @@ a run of "connection refused" ended by "model not found" is only actionable if t
 depends on it. A drain that failed part-way can leave operations claimed and never resolved, so the next
 pass returns them to the queue before claiming again.
 
+**When a burst of deliveries ends, the dispatcher invites the store to checkpoint** — once per burst, at
+the moment a drain that delivered work finds the outbox empty. Never per operation, which would block
+readers again and again to reclaim the same space; never on an idle poll, which would run forever against
+a folder nobody is touching; and not after a drain that failed, which learned nothing about whether the
+burst is over. The invitation is advisory: a store with no such concept ignores it, and one that cannot
+take it right now may fail without consequence — a checkpoint reclaims disk and delivers nothing, so it
+must not end the loop. What a checkpoint is for, and what it was measured to reclaim, is in
+[SPEC-130](SPEC-130-persistence.md).
+
 ## Non-functional requirements
 
 - **A lost event must not be fatal.** The overflow notification tears down nothing; a reconciler is
@@ -301,7 +310,10 @@ The dispatcher runs against an in-memory outbox, a scripted embedding side and a
 so a retry delay is asserted as the value it is rather than slept through. Two orderings need real
 concurrency and get it without racing a deadline: one file's operations are shown never to overlap with
 four slots available, and two files are shown to run at once by having each delivery wait until the other
-has started — run one at a time, the first would time out.
+has started — run one at a time, the first would time out. The checkpoint rule is asserted by counting
+invitations across a real run: one for a burst, none for a dispatcher that never delivered, one more for
+each later burst, none while the store is failing every drain, and deliveries continuing past a
+checkpoint that throws.
 
 ## Open questions
 

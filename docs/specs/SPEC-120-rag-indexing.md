@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.11.0 |
+| Version | 0.12.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-09 |
+| Last updated | 2026-09-11 |
 
 ## Purpose
 
@@ -81,6 +81,11 @@ loaded and reused rather than recomputed.
 
 The write remains a **single transaction**. Streaming changed what is held in memory, not the
 atomicity of what is stored.
+
+A pass **ends with a truncating WAL checkpoint**, once, after that transaction commits. A
+whole-folder pass is the largest single write the system makes, and without one the folder kept a
+log about as large as the database beside it until some later writer reclaimed it — measured, and
+the policy governing when a checkpoint may run, in [SPEC-130](SPEC-130-persistence.md).
 
 ## Delta handling
 

@@ -97,4 +97,12 @@ public interface IOutboxStore
     /// error that ended it.
     /// </summary>
     Task MarkAbandonedAsync(long opId, int attempts, string error, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Invited to reclaim what a burst of deliveries left behind — for a database under a write-ahead log,
+    /// to fold the log back in. Called only when a drain that delivered work finds the outbox empty, never
+    /// per operation and never while idle. Advisory: a store with no such concept does nothing, and one that
+    /// cannot take it right now may fail without consequence.
+    /// </summary>
+    Task CheckpointAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

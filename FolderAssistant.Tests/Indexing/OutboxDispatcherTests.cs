@@ -323,6 +323,113 @@ public sealed class OutboxDispatcherTests
 		outbox.ClaimCalls.Should().BeGreaterThan(3);
 	}
 
+	/// <summary>
+	/// Five deliveries, one per drain, then silence. One checkpoint, when the burst ends — not one per
+	/// operation, and not one per idle poll afterwards.
+	/// </summary>
+	[Fact]
+	public async Task A_Burst_Checkpoints_Once_When_It_Ends_Not_Per_Operation_And_Not_While_Idle()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new();
+		long[] ops = [.. Enumerable.Range(0, 5).Select(i => outbox.Enqueue($"file{i}.md", DeliveryKind.Delete))];
+
+		await RunWhile(Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast with { BatchSize = 1 }), async () =>
+		{
+			await Until(() => ops.All(op => outbox.StateOf(op) == OpState.Done) && outbox.CheckpointCalls > 0);
+
+			// Twenty idle polls' worth of nothing to do.
+			await Task.Delay(200);
+		});
+
+		outbox.CheckpointCalls.Should().Be(1);
+	}
+
+	[Fact]
+	public async Task A_Dispatcher_That_Never_Delivered_Never_Checkpoints()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new();
+
+		await RunWhile(Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast), () => Task.Delay(200));
+
+		outbox.ClaimCalls.Should().BeGreaterThan(1, "it polled");
+		outbox.CheckpointCalls.Should().Be(0);
+	}
+
+	[Fact]
+	public async Task Each_Burst_Checkpoints_When_It_Ends()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new();
+		outbox.Enqueue("first.md", DeliveryKind.Delete);
+
+		await RunWhile(Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast), async () =>
+		{
+			await Until(() => outbox.CheckpointCalls == 1);
+
+			outbox.Enqueue("second.md", DeliveryKind.Delete);
+			await Until(() => outbox.CheckpointCalls == 2);
+		});
+
+		outbox.CheckpointCalls.Should().Be(2);
+	}
+
+	/// <summary>
+	/// A drain that failed found nothing out about whether the burst is over, so it is not a quiet moment.
+	/// The store goes away during a delivery; no checkpoint while it is gone, one once it is back and the
+	/// outbox is seen to be empty.
+	/// </summary>
+	[Fact]
+	public async Task A_Failed_Drain_Is_Not_Taken_For_The_End_Of_A_Burst()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new();
+		long op = outbox.Enqueue("note.md", DeliveryKind.Delete);
+
+		ScriptedVectorizer vectorizer = new()
+		{
+			OnDelete = _ =>
+			{
+				outbox.ClaimsFail = true;
+				return Task.CompletedTask;
+			},
+		};
+
+		await RunWhile(Dispatcher(folder, outbox, vectorizer, Fast), async () =>
+		{
+			await Until(() => outbox.StateOf(op) == OpState.Done);
+			int claimsBefore = outbox.ClaimCalls;
+			await Until(() => outbox.ClaimCalls > claimsBefore + 5);
+
+			outbox.CheckpointCalls.Should().Be(0, "every drain since the delivery failed");
+
+			outbox.ClaimsFail = false;
+			await Until(() => outbox.CheckpointCalls == 1);
+		});
+	}
+
+	/// <summary>A checkpoint reclaims disk and delivers nothing; one that fails must not stop deliveries.</summary>
+	[Fact]
+	public async Task A_Failing_Checkpoint_Does_Not_Stop_Deliveries()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new() { CheckpointsFail = true };
+		outbox.Enqueue("first.md", DeliveryKind.Delete);
+
+		ScriptedVectorizer vectorizer = new();
+
+		await RunWhile(Dispatcher(folder, outbox, vectorizer, Fast), async () =>
+		{
+			await Until(() => outbox.CheckpointCalls == 1);
+
+			long later = outbox.Enqueue("second.md", DeliveryKind.Delete);
+			await Until(() => outbox.StateOf(later) == OpState.Done);
+		});
+
+		vectorizer.Deletes.Should().HaveCount(2);
+	}
+
 	[Fact]
 	public async Task Cancelling_Ends_The_Run()
 	{
@@ -347,6 +454,36 @@ public sealed class OutboxDispatcherTests
 		OutboxDispatcherOptions? options = null,
 		TimeProvider? time = null)
 		=> new(folder.Path, outbox, vectorizer, options, time);
+
+	/// <summary>Runs the dispatcher for the duration of <paramref name="scenario"/>, then stops it.</summary>
+	private static async Task RunWhile(OutboxDispatcher dispatcher, Func<Task> scenario)
+	{
+		using CancellationTokenSource stopping = new();
+		Task run = dispatcher.RunAsync(stopping.Token);
+
+		try
+		{
+			await scenario();
+		}
+		finally
+		{
+			await stopping.CancelAsync();
+			await run;
+		}
+	}
+
+	/// <summary>Waits for <paramref name="condition"/>, failing if it has not held within a generous deadline.</summary>
+	private static async Task Until(Func<bool> condition)
+	{
+		DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+
+		while (!condition() && DateTime.UtcNow < deadline)
+		{
+			await Task.Delay(10);
+		}
+
+		condition().Should().BeTrue("it should have happened well within the deadline");
+	}
 
 	private static async Task RunUntil(OutboxDispatcher dispatcher, Func<bool> condition)
 	{
@@ -385,6 +522,24 @@ public sealed class OutboxDispatcherTests
 		public int FailClaims { get; init; }
 
 		public int ClaimCalls { get; private set; }
+
+		/// <summary>While set, every claim fails — for a store that goes away part-way through a run.</summary>
+		public bool ClaimsFail { get; set; }
+
+		public bool CheckpointsFail { get; init; }
+
+		public int CheckpointCalls => Volatile.Read(ref _checkpointCalls);
+
+		private int _checkpointCalls;
+
+		public Task CheckpointAsync(CancellationToken cancellationToken)
+		{
+			Interlocked.Increment(ref _checkpointCalls);
+
+			return CheckpointsFail
+				? Task.FromException(new IOException("database is locked"))
+				: Task.CompletedTask;
+		}
 
 		public void Record(string relativePath, string contentHash, long size = 0, DateTime createdUtc = default, string? syncedHash = null)
 		{
@@ -444,7 +599,7 @@ public sealed class OutboxDispatcherTests
 			{
 				ClaimCalls++;
 
-				if (ClaimCalls <= FailClaims)
+				if (ClaimCalls <= FailClaims || ClaimsFail)
 				{
 					throw new InvalidOperationException("the store is unavailable");
 				}

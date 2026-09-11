@@ -136,12 +136,14 @@ public sealed class OutboxDispatcher
     {
         // A previous process may have stopped mid-delivery.
         bool requeueInFlight = true;
+        bool deliveredSinceQuiet = false;
 
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 int claimed = 0;
+                bool drained = false;
 
                 try
                 {
@@ -152,6 +154,7 @@ public sealed class OutboxDispatcher
                     }
 
                     claimed = await DrainOnceAsync(cancellationToken).ConfigureAwait(false);
+                    drained = true;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -163,6 +166,20 @@ public sealed class OutboxDispatcher
                     requeueInFlight = true;
                 }
 
+                if (claimed > 0)
+                {
+                    deliveredSinceQuiet = true;
+                }
+                else if (drained && deliveredSinceQuiet)
+                {
+                    // The burst just ended. This is the one moment a checkpoint is cheap and worth it: nothing
+                    // is delivering, and whatever the burst wrote is all still waiting to be reclaimed. Per
+                    // operation it would block readers again and again for the same space; on every idle poll
+                    // it would run forever against a folder nobody is touching.
+                    deliveredSinceQuiet = false;
+                    await CheckpointQuietlyAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 if (claimed == 0)
                 {
                     await Task.Delay(_options.PollInterval, _time, cancellationToken).ConfigureAwait(false);
@@ -172,6 +189,26 @@ public sealed class OutboxDispatcher
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Stopping. Anything claimed and not resolved is requeued on the next start.
+        }
+    }
+
+    /// <summary>
+    /// A checkpoint reclaims disk; it delivers nothing. One the store cannot take right now must not end the
+    /// loop every queued file depends on.
+    /// </summary>
+    private async Task CheckpointQuietlyAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _store.CheckpointAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Costs disk space until the next burst ends; changes nothing that is delivered or retrievable.
         }
     }
 
