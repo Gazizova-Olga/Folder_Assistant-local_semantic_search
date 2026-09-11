@@ -99,9 +99,9 @@ A durable **outbox indexer** in its own assembly (`src/FolderAssistant.Indexing`
 filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
 delivers one changed file at a time to the embedding pipeline with retry and backoff.
 
-**The watcher and the reconciler exist so far** (`SPEC-121`) — the outbox and dispatcher are not
-built, and the store the reconciler applies its conclusions to has no implementation yet. The
-assembly boundary is one-way on purpose:
+**The watcher, the reconciler and the per-change pipeline exist so far** (`SPEC-121`) — the outbox
+and dispatcher are not built, and the store both writers apply their conclusions to has no
+implementation yet. The assembly boundary is one-way on purpose:
 the library knows nothing of chunking, embedding or retrieval and cannot come to depend on them by
 accident.
 
@@ -113,7 +113,8 @@ Properties worth stating because they are easy to "simplify" away:
 
 - **A concurrent writer may delay indexing a file but must never stop it.** Every read
   opens share-`Read`, and a live write handle denies it, so per-file failures are skipped
-  rather than allowed to abort a pass — and the reconcile loop catches everything, because
+  rather than allowed to abort a pass, a change whose file is busy is retried rather than
+  dropped — and the reconcile loop catches everything, because
   that loop *is* the safety net and a single fault would otherwise end it for the process
   lifetime.
 - **A file that cannot be hashed is left out of the classification entirely**, never

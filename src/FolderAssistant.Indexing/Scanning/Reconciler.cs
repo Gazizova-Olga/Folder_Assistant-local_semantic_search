@@ -72,7 +72,7 @@ public sealed class Reconciler
             },
             async (absolutePath, token) =>
             {
-                string relativePath = ToRelativeKey(absolutePath);
+                string relativePath = IndexKey.For(_rootPath, absolutePath);
 
                 try
                 {
@@ -194,7 +194,4 @@ public sealed class Reconciler
             .EnumerateFiles(_rootPath, "*", options)
             .Where(path => _filter.ShouldReport(path));
     }
-
-    private string ToRelativeKey(string absolutePath)
-        => Path.GetRelativePath(_rootPath, absolutePath).Replace(Path.DirectorySeparatorChar, '/');
 }

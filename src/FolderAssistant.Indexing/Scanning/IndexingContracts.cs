@@ -18,7 +18,7 @@ namespace FolderAssistant.Indexing.Scanning;
 /// <param name="Size">Length in bytes at the time it was recorded.</param>
 public sealed record FileRecord(string RelativePath, string ContentHash, long Size);
 
-/// <summary>What a reconciliation pass concluded about one file.</summary>
+/// <summary>What comparing one file on disk against the index concluded.</summary>
 public enum FileDelta
 {
     /// <summary>Present on disk, absent from the index.</summary>
@@ -56,7 +56,14 @@ public interface IIndexStore
     Task<IReadOnlyDictionary<string, FileRecord>> ReadAllAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Records a pass's conclusions. Applied as one unit: a partially applied pass would leave the
+    /// One file's record, or <see langword="null"/> when the index has none. The per-change path
+    /// reads this rather than <see cref="ReadAllAsync"/>: a single event concerns a single file, and
+    /// reading every record to answer it is a cost that grows with the corpus on every save.
+    /// </summary>
+    Task<FileRecord?> ReadAsync(string relativePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Records a set of conclusions. Applied as one unit: a partially applied pass would leave the
     /// index describing a folder that never existed at any moment.
     /// </summary>
     Task ApplyAsync(IReadOnlyList<ReconciledChange> changes, CancellationToken cancellationToken = default);

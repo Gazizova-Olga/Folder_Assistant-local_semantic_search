@@ -243,6 +243,9 @@ public sealed class ReconcilerTests
 		public Task<IReadOnlyDictionary<string, FileRecord>> ReadAllAsync(CancellationToken cancellationToken = default)
 			=> Task.FromResult<IReadOnlyDictionary<string, FileRecord>>(_records);
 
+		public Task<FileRecord?> ReadAsync(string relativePath, CancellationToken cancellationToken = default)
+			=> Task.FromResult(_records.GetValueOrDefault(relativePath));
+
 		public Task ApplyAsync(IReadOnlyList<ReconciledChange> changes, CancellationToken cancellationToken = default)
 		{
 			ApplyCalls++;
@@ -265,6 +268,9 @@ public sealed class ReconcilerTests
 				: Task.FromResult<IReadOnlyDictionary<string, FileRecord>>(
 					new Dictionary<string, FileRecord>(StringComparer.Ordinal));
 		}
+
+		public Task<FileRecord?> ReadAsync(string relativePath, CancellationToken cancellationToken = default)
+			=> Task.FromResult<FileRecord?>(null);
 
 		public Task ApplyAsync(IReadOnlyList<ReconciledChange> changes, CancellationToken cancellationToken = default)
 			=> Task.CompletedTask;

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-11 |
 
@@ -30,6 +30,7 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 - Watching the folder: debounced, coalesced, and deliberately coarse.
 - Reconciling periodically, as the safety net for events the watcher never delivers.
+- Processing each settled change against the index, one file at a time.
 - A durable outbox of per-file operations with at-least-once delivery and retry.
 
 **Out of scope**
@@ -40,10 +41,10 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 ## Implementation status
 
-**The watcher and the reconciler are built. The outbox is not.** There is no durable operation log,
-no dispatcher and no bridge to the indexing subsystem yet, and nothing consumes what either stage
-produces — the reconciler applies its conclusions to a store the application has not yet
-implemented. The sections below describe only what exists; the rest of the design is named in Scope
+**The watcher, the reconciler and the per-change pipeline are built. The outbox is not.** There is no
+durable operation log, no dispatcher and no bridge to the indexing subsystem yet. Nothing yet composes the
+watcher and the pipeline together, and both writers apply their conclusions to a store the
+application has not yet implemented. The sections below describe only what exists; the rest of the design is named in Scope
 so the gap is visible, and will be specified as it is built rather than promised here.
 
 ## The signal is deliberately coarse
@@ -154,6 +155,49 @@ is computed for every file on every pass. It is deliberately a different hash fr
 indexing subsystem uses to address chunk content, which must be stable across machines because it
 keys stored rows.
 
+## The per-change path
+
+A settled change names a file. It does not say what happened to that file, and the pipeline does not
+ask: by the time a change is processed the file may have been recreated, deleted again, or saved with
+identical bytes. **The event's kind is not read.** What is on disk now, against what the index
+recorded, decides whether the file was added, modified or removed — the same comparison the
+reconciler makes, for one file. Identical content costs no write.
+
+**Both writers key a file identically**, through one rule. Keyed differently, each would read the
+other's record as a different file: the second writer would add it again, and the first record would
+never be removed.
+
+**A file is settled before it is hashed.** A change has already gone quiet for a whole debounce
+window by now, but a quiet window measures events, not writers. Two kinds of writer survive it: one
+that holds its handle, which denies the share-`Read` open, and one that shares the file while writing
+it, so the open succeeds and the content keeps moving. The probe checks for both — an open, and a size
+and write time that hold still across an interval.
+
+**A busy file delays a change; it never drops it.** A change that meets a writer — at the probe, or at
+the hash, since the two are separate opens and a writer can take the file in between — is tried again
+after a delay. Treating it as a failed change would drop it with nothing behind it to try again, and
+the file would stay stale until a reconcile happened to pass over it.
+
+**Retries are bounded.** After a fixed number of attempts the file is left to the periodic reconcile,
+which retries every file it could not read on every pass anyway. An editor can hold a file for hours,
+and chasing it on the event path as well would only hold a retry open for as long as the writer holds
+its handle.
+
+**A change waiting out a retry is not discarded when its source completes.** A change is outstanding
+from the moment it is taken until it finishes, including while it waits; processing ends only once the
+source has completed *and* nothing is outstanding. Ending when the source ends would discard exactly
+the changes that met a busy file.
+
+**A fault on one change does not stop the ones behind it.** Anything other than a busy file — the store
+refusing a write, say — drops that one change, and the periodic reconcile restates the file from disk.
+
+The pipeline reads the index **one record at a time**. A single event concerns a single file, and
+reading every record to answer it would be a cost that grows with the corpus on every save.
+
+A folder created, moved in or deleted arrives as one event for the folder, not one per file inside it.
+There is no file at that path to hash, so the change is a removal if the index held a file there and
+nothing otherwise; the files beneath the folder are found by the next reconcile.
+
 ## Non-functional requirements
 
 - **A lost event must not be fatal.** The overflow notification tears down nothing; a reconciler is
@@ -178,12 +222,22 @@ that operating-system events reach the settling rule at all — the two halves c
 wired together wrongly. Its deadlines are deliberately generous: a slow machine should make it slow,
 not red.
 
+The settle probe's wait between its two looks is replaceable, so a write or a delete landing between
+them is staged exactly rather than raced against a real delay. A writer taking a file between the
+probe and the hash cannot be staged on demand at all, so the pipeline's retry is tested with a hasher
+that loses a set number of times. The pipeline's tests require a run to **finish on its own** rather
+than cancelling it after a deadline: a run that never finished would otherwise stop quietly and leave
+its assertions to pass or fail on whatever it managed first.
+
 ## Open questions
 
 - Whether the settle loop should poll or schedule per path. Polling is used, because a burst
   touching a thousand files would otherwise schedule a thousand timers to do one pass's work, and
   the poll interval is already bounded by the window it detects. Worth revisiting if a very long
   window makes the latency noticeable.
+- Whether a folder moved in or deleted should be expanded into per-file changes on the event path. Today
+  its files wait for the next reconcile, which bounds the delay by the reconcile interval rather than by
+  the debounce window.
 - Whether an in-process writer should report changes directly. The application's own file tools will
   write into this folder, and rediscovering their writes through the operating system is wasteful —
   but a direct path must feed the settling rule rather than bypass it, or a batch of edits stops
