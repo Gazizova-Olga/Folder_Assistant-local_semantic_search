@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.9.0 |
+| Version | 0.10.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-11 |
+| Last updated | 2026-09-12 |
 
 ## Purpose
 
@@ -164,19 +164,48 @@ not carry.
 - Regression guard: `PersistenceConcurrencyTests` — concurrent bootstraps under GC pressure,
   and retrieval reading while the indexer writes.
 
-### Known: concurrent bootstrap faults intermittently
+### Known: concurrent bootstraps fault intermittently, and the cause is connection pooling
 
 `Concurrent_Bootstraps_Of_The_Same_Folder_Never_Fault` goes red in roughly one run in five
-(**measured: 3 red in 15 runs, in isolation**), with `SQLITE_ERROR` (code 1, "SQL logic
-error") raised from `BeginTransaction` inside `FolderDatabaseBootstrapper`.
+(**measured: 3 red in 15, and 1 in 10, in isolation**), with `SQLITE_ERROR` (code 1) raised
+from `BeginTransaction` inside `FolderDatabaseBootstrapper`.
 
-**This is not the shared-cache fault and not a busy-timeout shortfall.** It is never
+**It is not the shared-cache fault and not a busy-timeout shortfall.** It is never
 `SQLITE_BUSY`, and the busy handler is not invoked for `SQLITE_ERROR`, so the timeout every
-connection now sets is not involved. The connection stays usable afterwards.
+connection sets is not involved. The connection stays usable afterwards.
 
-The cause is not established and nothing here fixes it. It is recorded rather than left for
-someone to rediscover as an unexplained red build — and it must not be "fixed" by lowering
-the test's concurrency, which is the only thing making the property testable at all.
+**It is the connection pool.** Measured by driving the failing shape — eight concurrent
+bootstraps of one folder — and counting failures rather than red runs, alternating passes so
+machine drift fell on both sides:
+
+| connection string | failures |
+|---|---|
+| pooled (the default) | **70 in 100,000 bootstraps** |
+| `Pooling=False` | **0 in 40,000 bootstraps** |
+
+Two further results from the same measurement. **`GC.Collect()` is not the trigger** — with it
+removed the fault persists at 25 and 5 failures per 20,000, against 15 with it — so the collect
+in that test guards the shared-cache fault only, and stays. And **the error text shows a shared
+handle**: alongside `'SQL logic error'` and `'cannot start a transaction within a transaction'`
+came `'not an error'` and `'database schema has changed\0ithin a transaction'`, one error buffer
+holding two messages spliced by an embedded NUL. That is one `sqlite3` handle in use by two
+threads at once, which is also what the `ObjectDisposedException`-inside-SQLite shape seen
+elsewhere in the suite looks like from managed code: **one fault, two presentations.**
+
+What is *not* established is the mechanism inside `Microsoft.Data.Sqlite` (10.0.9) that lets a
+pooled handle be reached twice. Only that pooling is required for the fault, which is as far as
+the measurement reaches.
+
+**Nothing here is changed for it yet.** `Pooling=False` would remove the fault and make every
+connection pay a full open; a retry around `BEGIN` would hide this presentation of a shared
+handle while leaving the others. Neither is a decision to take from a bug hunt, so the finding is
+recorded and the choice left open. It must not be "fixed" by lowering the test's concurrency,
+which is the only thing making the property testable at all.
+
+**The same pooling behaviour has a second, non-flaky symptom**, worth knowing because it is
+silent: a disposed connection returns to the pool still holding its database file open, so a test
+directory containing a database cannot be deleted straight away. `TempFolder` closes the pools and
+retries; without that, every test touching a database leaves its folder behind.
 
 ## Migration
 
