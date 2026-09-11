@@ -119,6 +119,41 @@ public sealed class CosineRetrievalQueryTests
 			.Score.Should().Be(0.0);
 	}
 
+	/// <summary>
+	/// The scan's arithmetic is arranged for speed — the query's norm taken once, stored vectors read over
+	/// spans — and must not move a single ranking for it. Only exact equality with the plain single-loop
+	/// formula guarantees that; "close" would let two chunks a hair apart swap places. Half the stored vectors
+	/// are arrays and half are not, so both loops are held to it.
+	/// </summary>
+	[Fact]
+	public void Every_Score_Is_Bit_Identical_To_The_Plain_Single_Loop_Formula()
+	{
+		Random random = new(20260911);
+		Single[] query = RandomVector(random, 64);
+
+		StoredChunkVector[] stored = [.. Enumerable.Range(0, 200).Select(i =>
+		{
+			Single[] vector = RandomVector(random, 64);
+			IReadOnlyList<Single> shaped = i % 2 == 0 ? vector : vector.ToList().AsReadOnly();
+
+			return new StoredChunkVector($"c{i:D3}", $"c{i:D3}.md", 0, 0, 1, shaped);
+		})];
+
+		IReadOnlyList<RetrievalHit> hits = Search(
+			new FakeVectorStoreReader(stored),
+			query,
+			new RetrievalOptions(TopK: stored.Length, MinScore: Double.NegativeInfinity));
+
+		hits.Should().HaveCount(stored.Length);
+
+		foreach (RetrievalHit hit in hits)
+		{
+			Double expected = PlainCosine(query, stored.Single(s => s.ChunkId == hit.ChunkId).Vector);
+
+			BitConverter.DoubleToInt64Bits(hit.Score).Should().Be(BitConverter.DoubleToInt64Bits(expected), hit.ChunkId);
+		}
+	}
+
 	[Fact]
 	public void An_Empty_Index_Returns_Nothing()
 		=> Search(new FakeVectorStoreReader(), [1.0f, 0.0f]).Should().BeEmpty();
@@ -160,6 +195,31 @@ public sealed class CosineRetrievalQueryTests
 
 	private static StoredChunkVector Stored(String chunkId, Single[] vector)
 		=> new(chunkId, $"{chunkId}.md", 0, 0, 1, vector);
+
+	private static Single[] RandomVector(Random random, Int32 dimension)
+		=> [.. Enumerable.Range(0, dimension).Select(_ => (Single)((random.NextDouble() * 2) - 1))];
+
+	/// <summary>Cosine similarity in its plainest form: one loop, every sum accumulated together.</summary>
+	private static Double PlainCosine(IReadOnlyList<Single> left, IReadOnlyList<Single> right)
+	{
+		Double dot = 0.0;
+		Double leftNorm = 0.0;
+		Double rightNorm = 0.0;
+
+		for (Int32 i = 0; i < left.Count; i++)
+		{
+			dot += left[i] * right[i];
+			leftNorm += left[i] * left[i];
+			rightNorm += right[i] * right[i];
+		}
+
+		if (leftNorm <= 0 || rightNorm <= 0)
+		{
+			return 0.0;
+		}
+
+		return dot / (Math.Sqrt(leftNorm) * Math.Sqrt(rightNorm));
+	}
 
 	/// <summary>
 	/// What the reader used to return in one call: a vector and its location together. Kept as a

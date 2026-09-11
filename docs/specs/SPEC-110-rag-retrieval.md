@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.9.0 |
+| Version | 0.10.0 |
 | Owner | Retrieval |
 | Last updated | 2026-09-11 |
 
@@ -177,6 +177,16 @@ build that disagreed with this one; scoring them would return plausible nonsense
 to detect. It is the thing a candidate backend must beat, on the same vectors and the same
 metric, **agreeing with it on ranking up to ties**. Keeping it is what makes that comparison
 possible.
+
+Its arithmetic may be made cheaper, but **its scores may not move by a single bit.** What depends
+on the query alone — its components and its norm — is computed once per search rather than once per
+candidate, and stored vectors are read over spans; each sum still accumulates the same products in
+the same order, so every score equals the plain single-loop formula exactly, and a test holds it to
+exact equality rather than closeness. A baseline whose scores drift, however slightly, is no longer
+the thing another backend was compared against. No latency is claimed for the change: measured at
+72,000 vectors, brute-force p50 read 288 and 328 ms before and 231 and 271 ms after, but code the
+change does not touch moved over the same runs by a comparable amount, so the difference is not
+separable from the machine at that sample size.
 
 ## Rerank and budget policy
 
