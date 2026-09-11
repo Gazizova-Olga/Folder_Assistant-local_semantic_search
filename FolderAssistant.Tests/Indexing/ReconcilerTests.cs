@@ -1,5 +1,6 @@
 using FluentAssertions;
 using FolderAssistant.Indexing.Scanning;
+using Microsoft.Extensions.Logging;
 
 namespace FolderAssistant.Tests.Indexing;
 
@@ -257,6 +258,73 @@ public sealed class ReconcilerTests
 		Func<Task> stop = async () => await loop;
 
 		await stop.Should().CompleteWithinAsync(TimeSpan.FromSeconds(20));
+	}
+
+	/// <summary>
+	/// A file somebody else is holding is the ordinary consequence of indexing a folder in use, so it
+	/// is recorded at debug: enough to explain a file that never appears, quiet enough that an
+	/// afternoon of editing does not bury everything else.
+	/// </summary>
+	[Fact]
+	public async Task A_File_It_Could_Not_Hash_Is_Recorded_At_Debug_And_Nothing_Louder()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("locked.md"), "held open");
+		await File.WriteAllTextAsync(folder.Combine("fine.md"), "readable");
+
+		CapturingLogger<Reconciler> log = new();
+
+		await new Reconciler(
+			folder.Path,
+			".folderassistant",
+			new FakeStore(),
+			new ThrowingHasher(failFor: "locked.md"),
+			logger: log).ReconcileAsync();
+
+		log.At(LogLevel.Debug).Should().ContainSingle()
+			.Which.Message.Should().Contain("locked.md");
+
+		log.Lines.Should().OnlyContain(
+			line => line.Level == LogLevel.Debug,
+			"a file another process is writing is expected here, not a fault to raise");
+	}
+
+	/// <summary>
+	/// Surviving a bad pass is only half of the requirement. A pass that fails every time heals nothing
+	/// and leaves the folder drifting, and from outside it is indistinguishable from a pass with nothing
+	/// to do — the loop is running either way. What it survived has to be recorded, or the first symptom
+	/// is a search that does not find a file that is plainly there.
+	/// </summary>
+	[Fact]
+	public async Task A_Failed_Pass_Is_Recorded_So_A_Loop_That_Heals_Nothing_Is_Not_Silent()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("a.md"), "alpha");
+
+		FailingStore store = new(failCalls: 2);
+		CapturingLogger<Reconciler> log = new();
+
+		Reconciler reconciler = new(
+			folder.Path, ".folderassistant", store, new XxHash64ContentHasher(), logger: log);
+
+		using CancellationTokenSource stopping = new();
+
+		Task loop = reconciler.RunPeriodicallyAsync(TimeSpan.FromMilliseconds(20), stopping.Token);
+
+		DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+
+		while (store.Calls < 4 && DateTime.UtcNow < deadline)
+		{
+			await Task.Delay(20);
+		}
+
+		await stopping.CancelAsync();
+		await loop;
+
+		log.At(LogLevel.Warning).Should().HaveCount(2, "one line for each pass that failed");
+		log.At(LogLevel.Warning).Should().OnlyContain(
+			line => line.Exception is InvalidOperationException,
+			"the fault that was survived is the whole content of the report");
 	}
 
 	private static Task<ReconcileResult> Reconcile(TempFolder folder, IIndexStore store, IContentHasher? hasher = null)

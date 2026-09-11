@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using FluentAssertions;
 using FolderAssistant.Indexing.Pipeline;
+using Microsoft.Extensions.Logging;
 using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
 
@@ -282,19 +283,90 @@ public sealed class ChangePipelineTests
 		await stop.Should().CompleteWithinAsync(TimeSpan.FromSeconds(20));
 	}
 
+	// ── what it survives has to be visible, or it looks like nothing happened ──
+
+	/// <summary>
+	/// The catch-all is right: one change failing must not end processing for every change behind it.
+	/// But this is where a change goes to die — nothing written, nothing queued to try it again, stale
+	/// until a reconcile happens to pass over the file. Silent, a pipeline dropping every change it is
+	/// handed is indistinguishable from one that has been handed nothing.
+	/// </summary>
+	[Fact]
+	public async Task A_Dropped_Change_Is_Recorded_Instead_Of_Vanishing()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("doomed.md"), "one");
+
+		CapturingLogger<ChangePipeline> log = new();
+
+		await Run(
+			Pipeline(folder, new RecordingStore { FailApplyCalls = 1 }, logger: log),
+			Changed(folder, "doomed.md", FileChangeKind.Created));
+
+		log.At(LogLevel.Warning).Should().ContainSingle()
+			.Which.Message.Should().Contain("doomed.md", "whoever wonders why that file is stale needs its name");
+	}
+
+	/// <summary>
+	/// The one outcome on this path that leaves the index stale with nothing queued to correct it. The
+	/// file is left to the reconciler, which is a slower promise than the rest of this class makes.
+	/// </summary>
+	[Fact]
+	public async Task Giving_Up_On_A_File_That_Never_Settles_Is_Recorded()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("held.md"), "held forever");
+
+		CapturingLogger<ChangePipeline> log = new();
+
+		await Run(
+			Pipeline(folder, new RecordingStore(), settler: new ScriptedSettler(SettleResult.Busy), maxAttempts: 3, logger: log),
+			Changed(folder, "held.md", FileChangeKind.Modified));
+
+		LoggedLine given = log.At(LogLevel.Warning).Should().ContainSingle().Subject;
+
+		given.Message.Should().Contain("held.md").And.Contain("3");
+	}
+
+	/// <summary>
+	/// A change that lost a race and then landed is not a fault, and reporting it as one would make an
+	/// ordinary save look like a problem. Debug: it explains a delay, nothing more.
+	/// </summary>
+	[Fact]
+	public async Task A_Hash_That_Lost_To_A_Writer_Is_Recorded_At_Debug_And_Nothing_Louder()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("busy.md"), "being written");
+
+		CapturingLogger<ChangePipeline> log = new();
+
+		await Run(
+			Pipeline(folder, new RecordingStore(), hasher: new FlakyHasher(failures: 1), logger: log),
+			Changed(folder, "busy.md", FileChangeKind.Created));
+
+		log.At(LogLevel.Debug).Should().ContainSingle()
+			.Which.Message.Should().Contain("busy.md");
+
+		log.Lines.Should().OnlyContain(
+			line => line.Level == LogLevel.Debug,
+			"the change was retried and landed, which is the rule working rather than failing");
+	}
+
 	private static ChangePipeline Pipeline(
 		TempFolder folder,
 		IIndexStore store,
 		IContentHasher? hasher = null,
 		IFileSettler? settler = null,
-		int maxAttempts = ChangePipeline.DefaultMaxAttempts)
+		int maxAttempts = ChangePipeline.DefaultMaxAttempts,
+		ILogger<ChangePipeline>? logger = null)
 		=> new(
 			folder.Path,
 			store,
 			hasher ?? new XxHash64ContentHasher(),
 			settler ?? new FileSettler(TimeSpan.Zero),
 			retryDelay: TimeSpan.FromMilliseconds(10),
-			maxAttempts);
+			maxAttempts,
+			logger);
 
 	private static ObservedChange Changed(TempFolder folder, string relativePath, FileChangeKind kind)
 		=> new(folder.Combine(relativePath), kind);

@@ -1,6 +1,8 @@
 using System.Threading.Channels;
 using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FolderAssistant.Indexing.Pipeline;
 
@@ -38,19 +40,25 @@ public sealed class ChangePipeline
     private readonly IFileSettler _settler;
     private readonly TimeSpan _retryDelay;
     private readonly int _maxAttempts;
+    private readonly ILogger _logger;
 
     /// <param name="rootPath">The watched root. Keys are derived from it exactly as the reconciler derives them.</param>
     /// <param name="settleProbeInterval">How long a file's size and write time must hold still before it is hashed.</param>
     /// <param name="retryDelay">How long a change that met a busy file waits before it is tried again.</param>
     /// <param name="maxAttempts">Total tries for one change, including the first.</param>
+    /// <param name="logger">
+    /// Optional. Omitted, the pipeline runs silent: it records what it drops and what it gives up on,
+    /// but takes the logger to record it with from whoever hosts it rather than choosing one.
+    /// </param>
     public ChangePipeline(
         string rootPath,
         IIndexStore store,
         IContentHasher hasher,
         TimeSpan settleProbeInterval,
         TimeSpan retryDelay,
-        int maxAttempts = DefaultMaxAttempts)
-        : this(rootPath, store, hasher, new FileSettler(settleProbeInterval), retryDelay, maxAttempts)
+        int maxAttempts = DefaultMaxAttempts,
+        ILogger<ChangePipeline>? logger = null)
+        : this(rootPath, store, hasher, new FileSettler(settleProbeInterval), retryDelay, maxAttempts, logger)
     {
     }
 
@@ -60,7 +68,8 @@ public sealed class ChangePipeline
         IContentHasher hasher,
         IFileSettler settler,
         TimeSpan retryDelay,
-        int maxAttempts = DefaultMaxAttempts)
+        int maxAttempts = DefaultMaxAttempts,
+        ILogger<ChangePipeline>? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         ArgumentNullException.ThrowIfNull(store);
@@ -74,6 +83,7 @@ public sealed class ChangePipeline
         _settler = settler;
         _retryDelay = retryDelay;
         _maxAttempts = maxAttempts;
+        _logger = logger ?? NullLogger<ChangePipeline>.Instance;
     }
 
     /// <summary>
@@ -151,11 +161,17 @@ public sealed class ChangePipeline
                 {
                     throw;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     // Deliberately everything that is not a busy file. One change failing — the store
                     // refusing a write, say — must not end processing for every change behind it; this
                     // one is dropped, and the periodic reconcile restates the file from disk.
+                    //
+                    // Recorded, because this is where a change goes to die: nothing is written, nothing
+                    // is queued to retry it, and the file stays stale until a reconcile happens over it.
+                    // Staying alive is right; staying silent makes a pipeline that drops every change
+                    // look exactly like one with nothing to do.
+                    _logger.LogWarning(ex, "Dropped the change for {Path}; the pipeline continues.", pending.Change.Path);
                     retry = false;
                 }
 
@@ -165,6 +181,17 @@ public sealed class ChangePipeline
                 }
                 else
                 {
+                    if (retry)
+                    {
+                        // The attempts ran out rather than the change finishing. Warning, because this is
+                        // the one outcome on this path that leaves the index stale with nothing queued to
+                        // correct it — only the next reconcile will.
+                        _logger.LogWarning(
+                            "Giving up on {Path} after {Attempts} attempts; it stays stale until a reconciliation pass.",
+                            pending.Change.Path,
+                            _maxAttempts);
+                    }
+
                     Interlocked.Decrement(ref outstanding);
                     CompleteIfIdle();
                 }
@@ -217,6 +244,7 @@ public sealed class ChangePipeline
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            _logger.LogDebug(ex, "Hashing {Path} met a live writer; the change will be tried again.", change.Path);
             return true;
         }
 

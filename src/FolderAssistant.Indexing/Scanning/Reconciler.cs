@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using FolderAssistant.Indexing.Watching;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FolderAssistant.Indexing.Scanning;
 
@@ -28,18 +30,24 @@ public sealed class Reconciler
     private readonly IContentHasher _hasher;
     private readonly IndexablePathFilter _filter;
     private readonly int _maxDegreeOfParallelism;
+    private readonly ILogger _logger;
 
     /// <param name="maxDegreeOfParallelism">
     /// How many files are hashed at once. Sizes a disk- and CPU-bound job, so it scales with the
     /// machine — unrelated to how many files are delivered onward at once, which is one network
     /// round-trip each into a single backend. One knob for both could only ever suit one of them.
     /// </param>
+    /// <param name="logger">
+    /// Optional. Omitted, the reconciler runs silent: it records what it survives, but takes the
+    /// logger to record it with from whoever hosts it rather than choosing one.
+    /// </param>
     public Reconciler(
         string rootPath,
         string metadataFolderName,
         IIndexStore store,
         IContentHasher hasher,
-        int maxDegreeOfParallelism = 0)
+        int maxDegreeOfParallelism = 0,
+        ILogger<Reconciler>? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         ArgumentNullException.ThrowIfNull(store);
@@ -50,6 +58,7 @@ public sealed class Reconciler
         _hasher = hasher;
         _filter = new IndexablePathFilter(metadataFolderName);
         _maxDegreeOfParallelism = maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Environment.ProcessorCount;
+        _logger = logger ?? NullLogger<Reconciler>.Instance;
     }
 
     /// <summary>
@@ -97,6 +106,11 @@ public sealed class Reconciler
                     // Parallel.ForEachAsync cancels its remaining work when a body throws, so one
                     // locked file would end the pass for every file after it.
                     skipped.Add(relativePath);
+
+                    // Debug, not warning. This is the expected consequence of indexing a folder
+                    // somebody else is using, and at warning level an ordinary editing session would
+                    // fill the log with it. A file that stays locked repeats the same line every pass.
+                    _logger.LogDebug(ex, "Skipped hashing {Path} this pass; it is locked or unreadable.", relativePath);
                 }
             }).ConfigureAwait(false);
 
@@ -162,11 +176,16 @@ public sealed class Reconciler
                 {
                     throw;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     // Deliberately everything. The next pass re-reads the whole folder from scratch,
                     // so a fault here costs one interval of staleness — where letting it escape costs
                     // every future pass.
+                    //
+                    // Surviving is only half of it. A pass that fails every time leaves the folder
+                    // drifting and looks, from outside, exactly like a pass with nothing to do — so
+                    // the survival is recorded rather than only performed.
+                    _logger.LogWarning(ex, "A reconciliation pass failed; the loop continues and the next pass retries.");
                 }
             }
         }

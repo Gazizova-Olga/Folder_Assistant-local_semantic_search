@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using FluentAssertions;
 using FolderAssistant.Indexing.Outbox;
+using Microsoft.Extensions.Logging;
 using FolderAssistant.Indexing.Scanning;
 
 namespace FolderAssistant.Tests.Indexing;
@@ -445,6 +446,84 @@ public sealed class OutboxDispatcherTests
 		await stop.Should().CompleteWithinAsync(TimeSpan.FromSeconds(20));
 	}
 
+	// ── what the loop survives, and what it gives up on ───────────────────────
+
+	/// <summary>
+	/// The one error this library raises, and the level is the point. The operation is retired and the
+	/// file marked failed, so the stored state is durable and correct — and completely silent. Nothing
+	/// will try it again, and its only other symptom is a search that does not find a file that is
+	/// plainly there. The attempts before it are debug: work that recovers on its own should not page
+	/// anybody, and an embedding backend restarting produces a run of them.
+	/// </summary>
+	[Fact]
+	public async Task A_Delivery_Retired_As_Failed_Is_Recorded_At_Error_And_Its_Retries_At_Debug()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new();
+		outbox.Enqueue("note.md", DeliveryKind.Delete);
+
+		ManualClock clock = new();
+		ScriptedVectorizer vectorizer = new() { OnDelete = _ => throw new IOException("no backend there") };
+		CapturingLogger<OutboxDispatcher> log = new();
+
+		OutboxDispatcher dispatcher = Dispatcher(
+			folder, outbox, vectorizer, new OutboxDispatcherOptions { MaxAttempts = 3 }, clock, log);
+
+		for (int i = 0; i < 4; i++)
+		{
+			await dispatcher.DrainOnceAsync(CancellationToken.None);
+			clock.Advance(TimeSpan.FromHours(1));
+		}
+
+		log.At(LogLevel.Error).Should().ContainSingle()
+			.Which.Message.Should().Contain("note.md");
+
+		log.At(LogLevel.Debug).Should().HaveCount(2, "the attempts that were still going to be tried again");
+	}
+
+	/// <summary>
+	/// Every queued file depends on this loop continuing, so a drain that fails on every pass is
+	/// indistinguishable from an outbox with nothing in it — the same shape as the reconciler's.
+	/// </summary>
+	[Fact]
+	public async Task A_Failed_Drain_Is_Recorded_So_A_Loop_That_Delivers_Nothing_Is_Not_Silent()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new() { FailClaims = 2 };
+		long op = outbox.Enqueue("note.md", DeliveryKind.Delete);
+
+		CapturingLogger<OutboxDispatcher> log = new();
+
+		await RunUntil(
+			Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast, logger: log),
+			() => outbox.StateOf(op) == OpState.Done);
+
+		log.At(LogLevel.Warning).Should().HaveCount(2, "one line for each drain that failed");
+	}
+
+	/// <summary>
+	/// A checkpoint reclaims disk and delivers nothing, so one that could not be taken is debug rather
+	/// than a fault — but it is recorded, because a write-ahead log quietly growing has no other symptom.
+	/// </summary>
+	[Fact]
+	public async Task A_Checkpoint_That_Could_Not_Be_Taken_Is_Recorded_At_Debug_And_Nothing_Louder()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new() { CheckpointsFail = true };
+		outbox.Enqueue("first.md", DeliveryKind.Delete);
+
+		CapturingLogger<OutboxDispatcher> log = new();
+
+		await RunWhile(
+			Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast, logger: log),
+			() => Until(() => outbox.CheckpointCalls == 1));
+
+		log.At(LogLevel.Debug).Should().NotBeEmpty();
+		log.Lines.Should().OnlyContain(
+			line => line.Level == LogLevel.Debug,
+			"nothing that was queued failed to arrive; only the disk reclaim did");
+	}
+
 	private static readonly OutboxDispatcherOptions Fast = new() { PollInterval = TimeSpan.FromMilliseconds(10) };
 
 	private static OutboxDispatcher Dispatcher(
@@ -452,8 +531,9 @@ public sealed class OutboxDispatcherTests
 		IOutboxStore outbox,
 		IVectorizationService vectorizer,
 		OutboxDispatcherOptions? options = null,
-		TimeProvider? time = null)
-		=> new(folder.Path, outbox, vectorizer, options, time);
+		TimeProvider? time = null,
+		ILogger<OutboxDispatcher>? logger = null)
+		=> new(folder.Path, outbox, vectorizer, options, time, logger);
 
 	/// <summary>Runs the dispatcher for the duration of <paramref name="scenario"/>, then stops it.</summary>
 	private static async Task RunWhile(OutboxDispatcher dispatcher, Func<Task> scenario)

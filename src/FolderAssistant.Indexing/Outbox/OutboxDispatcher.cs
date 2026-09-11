@@ -1,4 +1,6 @@
 using FolderAssistant.Indexing.Scanning;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FolderAssistant.Indexing.Outbox;
 
@@ -64,13 +66,15 @@ public sealed class OutboxDispatcher
     private readonly IVectorizationService _vectorizer;
     private readonly OutboxDispatcherOptions _options;
     private readonly TimeProvider _time;
+    private readonly ILogger _logger;
 
     public OutboxDispatcher(
         string rootPath,
         IOutboxStore store,
         IVectorizationService vectorizer,
         OutboxDispatcherOptions? options = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        ILogger<OutboxDispatcher>? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         ArgumentNullException.ThrowIfNull(store);
@@ -81,6 +85,7 @@ public sealed class OutboxDispatcher
         _vectorizer = vectorizer;
         _options = options ?? new OutboxDispatcherOptions();
         _time = time ?? TimeProvider.System;
+        _logger = logger ?? NullLogger<OutboxDispatcher>.Instance;
 
         ArgumentOutOfRangeException.ThrowIfLessThan(_options.MaxAttempts, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_options.Parallelism, 1);
@@ -160,9 +165,14 @@ public sealed class OutboxDispatcher
                 {
                     throw;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     // Deliberately everything: the store refusing a claim, or failing to record an outcome.
+                    //
+                    // Warning, for the reconcile loop's reason: every queued file depends on this loop
+                    // continuing, and a drain that fails on every pass is indistinguishable from an
+                    // outbox with nothing in it.
+                    _logger.LogWarning(ex, "A drain of the outbox failed; the loop continues and the next pass retries.");
                     requeueInFlight = true;
                 }
 
@@ -206,9 +216,12 @@ public sealed class OutboxDispatcher
         {
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Costs disk space until the next burst ends; changes nothing that is delivered or retrievable.
+            // Costs disk space until the next burst ends; changes nothing that is delivered or retrievable —
+            // so debug, and recorded rather than swallowed only because a log that never fills is the one
+            // symptom a folder quietly growing a write-ahead log would otherwise have.
+            _logger.LogDebug(ex, "Could not checkpoint the write-ahead log after a burst; delivery is unaffected.");
         }
     }
 
@@ -280,10 +293,33 @@ public sealed class OutboxDispatcher
 
         if (attempts >= _options.MaxAttempts)
         {
+            // The only error this library raises, and the level is the point: the operation is retired and
+            // the file marked failed, so the state is durable, correct and completely silent. Nothing will
+            // try it again, and its one other symptom is a search that does not find a file that is there.
+            _logger.LogError(
+                ex,
+                "Giving up on the {Kind} of {Path} after {Attempts} attempts; it is retired as failed and will not be tried again.",
+                op.Kind,
+                op.RelativePath,
+                attempts);
+
             return _store.MarkAbandonedAsync(op.Id, attempts, error, cancellationToken);
         }
 
-        return _store.RescheduleAsync(op.Id, attempts, _time.GetUtcNow() + RetryDelay(attempts), error, cancellationToken);
+        TimeSpan retryDelay = RetryDelay(attempts);
+
+        // Debug: a delivery that will be tried again is the ordinary cost of reaching another process, and
+        // at any higher level an embedding backend restarting would page somebody about work that recovers
+        // on its own.
+        _logger.LogDebug(
+            ex,
+            "The {Kind} of {Path} failed (attempt {Attempts}); trying again in {RetryDelay}.",
+            op.Kind,
+            op.RelativePath,
+            attempts,
+            retryDelay);
+
+        return _store.RescheduleAsync(op.Id, attempts, _time.GetUtcNow() + retryDelay, error, cancellationToken);
     }
 
     /// <summary>Doubles from <see cref="OutboxDispatcherOptions.BaseRetryDelay"/>, capped.</summary>

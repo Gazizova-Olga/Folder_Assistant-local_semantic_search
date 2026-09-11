@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-11 |
+| Last updated | 2026-09-12 |
 
 ## Purpose
 
@@ -268,6 +268,33 @@ take it right now may fail without consequence — a checkpoint reclaims disk an
 must not end the loop. What a checkpoint is for, and what it was measured to reclaim, is in
 [SPEC-130](SPEC-130-persistence.md).
 
+## Observability
+
+Every loop in this subsystem is built to survive a fault and keep converging: the reconcile loop
+outlives a bad pass, the per-change pipeline outlives a bad change, the dispatcher retries a delivery
+and eventually gives up on it. Each of those decisions is right and none of them change here. They
+share one cost, and it is the reason this section exists — **surviving a fault and never meeting one
+look identical from outside.** A reconciliation that has failed every pass for an hour presents
+exactly as one with nothing to do, and either way the first symptom is a search that quietly does not
+find a file.
+
+- Each component takes an **optional logger** and runs silent without one. Abstractions only: this
+  library records what it survives, and takes the logger to record it with from whoever hosts it
+  rather than choosing a logging implementation on its host's behalf. Nothing composes these
+  components yet, so there is no one place that hands them a logger; that arrives with the
+  composition, and until then each is given one directly or left silent.
+- **Logging never changes control flow.** Every survival specified above stays exactly as specified.
+  It is recorded, not altered.
+- **Level follows what an operator can act on**, not how alarming the exception looks. A file locked
+  during a reconcile pass, a hash that lost to a live writer, a delivery that will be tried again, and
+  a write-ahead-log checkpoint that could not be taken are **debug** — they are the ordinary
+  consequence of indexing a folder somebody is using, and at any louder level an afternoon of editing
+  would bury everything else. A reconcile pass that failed, a change the pipeline dropped, a file
+  given up on after its attempt limit, and a drain of the outbox that failed are **warning**. A
+  delivery abandoned after `MaxAttempts` is **error**, and it is the only error raised here: that
+  operation is retired, the file is recorded as failed, nothing will try it again, and its one other
+  symptom is a search that does not find a file that is plainly there.
+
 ## Non-functional requirements
 
 - **A lost event must not be fatal.** The overflow notification tears down nothing; a reconciler is
@@ -314,6 +341,12 @@ has started — run one at a time, the first would time out. The checkpoint rule
 invitations across a real run: one for a burst, none for a dispatcher that never delivered, one more for
 each later burst, none while the store is failing every drain, and deliveries continuing past a
 checkpoint that throws.
+
+What each loop survives is asserted through a logger that records instead of writing, because the
+survival has no other observable: a pass that failed and a pass with nothing to do leave the same
+state behind them. The assertions are on the **level** as much as the text, since the level is what
+decides whether anyone ever reads the line, and the debug cases additionally assert that nothing
+louder was written — that is what keeps an ordinary editing session from being reported as a fault.
 
 ## Open questions
 

@@ -133,6 +133,17 @@ Properties worth stating because they are easy to "simplify" away:
   so skipping on the hash alone leaves the new model with a silently empty index. Only
   embedding is skipped; chunking runs every pass, because the content has already been read
   and a corpus-fitted embedder needs the whole chunk set regardless.
+- **What these loops survive is recorded, or it is invisible.** Each of them keeps
+  converging through its own faults, which is precisely what makes a loop failing every
+  pass look like one with nothing to do. So each component takes an optional logger and
+  runs silent without one — abstractions only, because a library should take a logger
+  from its host rather than choose one for it — and logging never changes control flow.
+  Levels follow what an operator can act on: a locked file, a hash that lost to a live
+  writer, a delivery that will be retried and a checkpoint that could not be taken are
+  **debug**; a failed reconcile pass, a dropped change, a file given up on after its
+  attempt limit and a failed drain are **warning**; a delivery abandoned after
+  `MaxAttempts` is **error**, and the only one, because that file is recorded as failed
+  and its one other symptom is a search that quietly does not find it.
 - Indexing runs **off** the startup path; the web host does not wait for it.
 
 ### Retrieval

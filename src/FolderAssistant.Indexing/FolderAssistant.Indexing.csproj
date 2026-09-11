@@ -19,6 +19,13 @@
 	<ItemGroup>
 		<!-- Change detection only, not a security boundary; see Directory.Packages.props. -->
 		<PackageReference Include="System.IO.Hashing" />
+		<!--
+			Abstractions only. Every loop in this assembly is built to survive a fault and keep
+			converging, which is exactly what makes a loop failing every pass look like one with
+			nothing to do — so the survivals are recorded. Which logger records them is the host's
+			decision, not this library's: without one it runs silent.
+		-->
+		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
 	</ItemGroup>
 
 	<ItemGroup>

@@ -20,6 +20,12 @@
 			downstream relies on.
 		-->
 		<PackageVersion Include="System.IO.Hashing" Version="10.0.0" />
+		<!--
+			Logging abstractions for the indexing library. Abstractions only, and that is the whole
+			point of the entry: the library records what its loops survive, and takes the logger from
+			whoever hosts it rather than choosing a logging implementation on its host's behalf.
+		-->
+		<PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
 		<PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.9" />
 		<!--
 			Security pin, and the reason it is a direct reference rather than left transitive.
