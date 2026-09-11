@@ -77,9 +77,10 @@ public sealed class Reconciler
                 try
                 {
                     string hash = await _hasher.HashAsync(absolutePath, token).ConfigureAwait(false);
-                    long size = new FileInfo(absolutePath).Length;
+                    FileInfo info = new(absolutePath);
 
-                    onDisk[relativePath] = new FileRecord(relativePath, hash, size);
+                    onDisk[relativePath] = new FileRecord(
+                        relativePath, hash, info.Length, FileTimestamps.ReadCreatedUtc(info));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -109,7 +110,8 @@ public sealed class Reconciler
             }
             else if (!string.Equals(previous.ContentHash, current.ContentHash, StringComparison.Ordinal))
             {
-                changes.Add(new ReconciledChange(relativePath, FileDelta.Modified, current));
+                changes.Add(new ReconciledChange(
+                    relativePath, FileDelta.Modified, FileTimestamps.KeepRecordedCreation(current, previous)));
             }
         }
 

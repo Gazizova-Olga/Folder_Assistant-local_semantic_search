@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-11 |
 
@@ -198,6 +198,23 @@ A folder created, moved in or deleted arrives as one event for the folder, not o
 There is no file at that path to hash, so the change is a removal if the index held a file there and
 nothing otherwise; the files beneath the folder are found by the next reconcile.
 
+## A file's timestamps are the file's
+
+A record carries the file's **creation time as the filesystem reports it** — never the moment a writer
+ran. A creation date that really means "when this folder was first indexed" is not metadata about the
+file, and every file in a folder indexed at once would share it.
+
+- **Where no creation time is reported**, the file API gives the 1601 file-time epoch. The write time
+  stands in: it is the closest true statement available about the file's age, where the epoch would
+  date every such file to the same impossible moment.
+- **A modified file keeps the creation time already recorded for it.** Editing a file does not create
+  it.
+- **Both writers use one rule.** If the reconciler and the per-change path derived it differently, a
+  file's recorded age would depend on which of them discovered it.
+
+Nothing reads the value yet. It is recorded state, like a record's size, and it is recorded correctly
+from the first writer that sees a file rather than corrected after the fact.
+
 ## Non-functional requirements
 
 - **A lost event must not be fatal.** The overflow notification tears down nothing; a reconciler is
@@ -228,6 +245,13 @@ probe and the hash cannot be staged on demand at all, so the pipeline's retry is
 that loses a set number of times. The pipeline's tests require a run to **finish on its own** rather
 than cancelling it after a deadline: a run that never finished would otherwise stop quietly and leave
 its assertions to pass or fail on whatever it managed first.
+
+The creation-time rule is asserted as a function, including the no-creation-time fallback, which no
+filesystem can be made to produce on demand. Each writer is then tested against a backdated file, so
+its own clock cannot coincide with the value it should record. Setting a creation time is not supported
+everywhere, so those tests compare exactly against what the filesystem reports — which a clock reading
+cannot match — and additionally against the backdated value wherever the backdating took, since the
+first comparison uses the rule itself as its expected value and cannot see the rule being wrong.
 
 ## Open questions
 

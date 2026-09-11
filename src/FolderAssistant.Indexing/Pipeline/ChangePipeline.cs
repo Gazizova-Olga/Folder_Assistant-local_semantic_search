@@ -212,7 +212,8 @@ public sealed class ChangePipeline
         try
         {
             string hash = await _hasher.HashAsync(change.Path, cancellationToken).ConfigureAwait(false);
-            current = new FileRecord(relativePath, hash, new FileInfo(change.Path).Length);
+            FileInfo info = new(change.Path);
+            current = new FileRecord(relativePath, hash, info.Length, FileTimestamps.ReadCreatedUtc(info));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -227,7 +228,9 @@ public sealed class ChangePipeline
         }
         else if (!string.Equals(recorded.ContentHash, current.ContentHash, StringComparison.Ordinal))
         {
-            await ApplyAsync(new ReconciledChange(relativePath, FileDelta.Modified, current), cancellationToken).ConfigureAwait(false);
+            await ApplyAsync(
+                new ReconciledChange(relativePath, FileDelta.Modified, FileTimestamps.KeepRecordedCreation(current, recorded)),
+                cancellationToken).ConfigureAwait(false);
         }
 
         // Identical content — a touch, or a save that changed nothing — costs no write.

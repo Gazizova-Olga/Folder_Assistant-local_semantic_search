@@ -16,7 +16,11 @@ namespace FolderAssistant.Indexing.Scanning;
 /// copy of it.
 /// </param>
 /// <param name="Size">Length in bytes at the time it was recorded.</param>
-public sealed record FileRecord(string RelativePath, string ContentHash, long Size);
+/// <param name="CreatedUtc">
+/// The file's own creation time as the filesystem reports it, recorded when the file is first seen and
+/// kept across edits. Never the time a writer ran.
+/// </param>
+public sealed record FileRecord(string RelativePath, string ContentHash, long Size, DateTime CreatedUtc);
 
 /// <summary>What comparing one file on disk against the index concluded.</summary>
 public enum FileDelta

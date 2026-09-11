@@ -46,6 +46,43 @@ public sealed class ChangePipelineTests
 		store.Applied.Should().ContainSingle().Which.Delta.Should().Be(FileDelta.Modified);
 	}
 
+	/// <summary>
+	/// The per-change path records creation time exactly as the reconciler does; otherwise a file's
+	/// recorded age would depend on which of the two discovered it.
+	/// </summary>
+	[Fact]
+	public async Task A_New_File_Is_Recorded_With_Its_Own_Creation_Time_Not_The_Time_Of_The_Change()
+	{
+		using TempFolder folder = new();
+		string path = folder.Combine("aged.md");
+		await File.WriteAllTextAsync(path, "written long ago");
+		TimestampFixture.TryBackdate(path);
+
+		RecordingStore store = new();
+
+		await Run(Pipeline(folder, store), Changed(folder, "aged.md", FileChangeKind.Created));
+
+		DateTime recorded = store.Applied.Should().ContainSingle().Which.Current!.CreatedUtc;
+		recorded.Should().Be(FileTimestamps.ReadCreatedUtc(new FileInfo(path)));
+		TimestampFixture.ShouldBeTheBackdatedTimeWhereItTook(path, recorded);
+	}
+
+	[Fact]
+	public async Task An_Edited_File_Keeps_The_Creation_Time_Already_Recorded()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("doc.md"), "after the edit");
+
+		DateTime recordedCreation = new(2015, 6, 7, 8, 9, 10, DateTimeKind.Utc);
+		RecordingStore store = new();
+		store.Seed("doc.md", "a-hash-from-before-the-edit", recordedCreation);
+
+		await Run(Pipeline(folder, store), Changed(folder, "doc.md", FileChangeKind.Modified));
+
+		store.Applied.Should().ContainSingle()
+			.Which.Current!.CreatedUtc.Should().Be(recordedCreation, "editing a file does not create it");
+	}
+
 	[Fact]
 	public async Task A_Save_With_Identical_Content_Costs_No_Write()
 	{
@@ -296,8 +333,8 @@ public sealed class ChangePipelineTests
 
 		public int FailApplyCalls { get; init; }
 
-		public void Seed(string relativePath, string contentHash)
-			=> Records[relativePath] = new FileRecord(relativePath, contentHash, 0);
+		public void Seed(string relativePath, string contentHash, DateTime createdUtc = default)
+			=> Records[relativePath] = new FileRecord(relativePath, contentHash, 0, createdUtc);
 
 		public Task<IReadOnlyDictionary<string, FileRecord>> ReadAllAsync(CancellationToken cancellationToken = default)
 			=> Task.FromResult<IReadOnlyDictionary<string, FileRecord>>(Records);

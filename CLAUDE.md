@@ -121,7 +121,9 @@ Properties worth stating because they are easy to "simplify" away:
   stored with an empty hash. An empty hash becomes the file's identity and makes every
   other unhashable file look like its move source.
 - **A file's timestamps are the file's, not the crawl's.** Recording the moment a scan ran
-  as a file's creation date is not metadata about the file.
+  as a file's creation date is not metadata about the file. Read from the filesystem when a
+  file is first seen (write time where none is reported), kept across edits, and derived
+  through one rule because both writers record it.
 - **Write the columns you own, not the row you read.** A writer that reads a row, does
   something slow (an embedding round-trip), then writes the whole row back will silently
   revert whatever another writer recorded in between.
