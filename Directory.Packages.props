@@ -82,9 +82,11 @@
 			Runs on every build in every project. GlobalPackageReference rather than a per-project
 			reference, so a new project cannot be created without it.
 
-			Its findings are triaged in docs/ANALYZER-WARNINGS.md against a recorded baseline. There is no
-			TreatWarningsAsErrors here yet, so the baseline is the gate: a build reporting more than it has
-			introduced something new.
+			The gate is TreatWarningsAsErrors in Directory.Build.props: a finding fails the build, for
+			whoever introduced it, at the moment they introduce it. So docs/ANALYZER-WARNINGS.md records
+			why each deliberate suppression is deliberate — it is not a count for a human to remember to
+			compare a build against, which is what it was before the gate and is the arrangement that let
+			a real defect sit in the noise of a green build.
 		-->
 		<GlobalPackageReference Include="SonarAnalyzer.CSharp" Version="10.8.0.113526">
 			<PrivateAssets>All</PrivateAssets>
