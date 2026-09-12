@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.11.0 |
+| Version | 0.12.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -346,6 +346,49 @@ burst is over. The invitation is advisory: a store with no such concept ignores 
 take it right now may fail without consequence — a checkpoint reclaims disk and delivers nothing, so it
 must not end the loop. What a checkpoint is for, and what it was measured to reclaim, is in
 [SPEC-130](SPEC-130-persistence.md).
+
+## Writing a file's record: own your columns
+
+Nothing in this library writes back a record it read. A pass states conclusions — added, modified,
+removed, and what the scan saw — and every delivery write either names one operation by its id or
+states a condition (`TryMarkSyncedAsync`, above). That is a requirement on whatever implements these
+seams, not a description of taste, and it binds an implementation harder than it binds this library,
+because the implementation is where the columns actually are.
+
+**The rule: write the columns you own, not the row you read.** A writer that reads a record, does
+something slow, and writes the whole thing back reverts whatever another writer recorded in between —
+silently, since the row it writes is entirely plausible. The **delivery mark** is the column where
+this costs something, because it is what decides whether a queued operation still has work to do.
+Two ways to lose it, both reachable through the conclusions this library states:
+
+- **A pass that classifies must not touch the delivery mark.** A reconciliation pass compares a
+  snapshot taken at its start against the disk. By the time it writes, a delivery may have finished
+  and recorded what it embedded; applying a `Modified` conclusion must update what the scan observed
+  — content hash, size — and leave the mark alone. Re-reading immediately before writing is not a
+  substitute: the mark can land between the read and the write. The only safe version is not to
+  write that column from this path at all.
+- **An insert that turns out to be an update must not clear a mark it never set.** A writer states
+  `Added` because the index had no record when it looked, and carries no mark for a file it believes
+  is new. The row existing proves that belief stale — and the file may already have been delivered.
+  Taking the incoming absence over the stored mark un-marks an indexed file, the queued operation
+  no longer sees its work as done, and the file is embedded a second time. The hold guarantee above
+  is broken by a writer that was only trying to insert.
+
+**A third way exists and is currently unreachable, which is a property of this design rather than
+luck.** Preserving a stored mark under conflict is *wrong* when the conflicting row is a different
+file: a record read for one path and written under another would take the destination's mark onto
+content that was never delivered, the queued operation would retire without embedding, and the file
+would be silently absent from every search while each later pass classified it as unchanged. That is
+the worse failure of the two above — a duplicate embed wastes a round trip; an unindexed file
+answers nothing. It cannot arise here while two properties hold: a record's identity is a pure
+function of its relative path, and no writer states a conclusion for one path from a record read at
+another. A rename is a removal and an addition, each under its own path. **Anything that adds move
+detection re-opens this**, and must then condition the preserve on identity rather than on absence.
+
+No store implements any of this yet, and the rule is recorded against the seams rather than against
+an implementation because it is a property of the contract: a store can satisfy `ApplyAsync` and
+`TryMarkSyncedAsync` with whole-row upserts, be wrong in both ways above, and look correct from
+everywhere inside this library.
 
 ## The vectorization seam, as implemented
 

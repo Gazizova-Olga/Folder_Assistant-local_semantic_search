@@ -120,6 +120,14 @@ Properties worth stating because they are easy to "simplify" away:
   a hold nobody releases stops suppressing after two minutes, timed from the first — the same
   rule as a reconcile loop surviving a bad pass, since an index that stops converging for the
   life of the process is the one outcome none of this may produce.
+- **Whatever writes a file's record writes the columns it owns, not the row it read.** The
+  library states conclusions and names operations by id; it never hands back a record it
+  fetched. That rule binds the store harder than it binds the library: a pass classifying from
+  a snapshot must not touch the delivery mark, and an insert that turns out to be an update
+  must not clear a mark it never set — either one un-marks an indexed file and embeds it
+  twice. Preserving under conflict would be wrong for a *different* file being written onto
+  that path, which nothing can do here while identity is a pure function of the path and a
+  rename is a removal plus an addition. Move detection would re-open it.
 - **A scheduled reconcile waits for the hold.** It is the one path that reaches the index
   without going through the debouncer, so a pass landing mid-hold would index a half-finished
   edit and defeat the hold entirely — bounded, because the hold expires whether or not anyone
