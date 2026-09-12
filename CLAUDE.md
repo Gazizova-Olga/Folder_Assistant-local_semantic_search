@@ -99,11 +99,14 @@ A durable **outbox indexer** in its own assembly (`src/FolderAssistant.Indexing`
 filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
 delivers one changed file at a time to the embedding pipeline with retry and backoff.
 
-**The watcher, the reconciler, the per-change pipeline, the outbox dispatcher and the bridge to
-embedding exist so far** (`SPEC-121`) — the store behind the writers and the dispatcher is not
-built, so nothing drives the bridge and nothing composes the stages yet. The assembly boundary is
-one-way on purpose: the library knows nothing of chunking, embedding or retrieval and cannot come
-to depend on them by accident.
+A writer inside this process reports what it changed instead of waiting to be told about it
+(`IIndexChangeNotifier`), which is latency the discovery round-trip has no reason to cost.
+
+**The watcher and its write-through entry point, the reconciler, the per-change pipeline, the
+outbox dispatcher and the bridge to embedding exist so far** (`SPEC-121`) — the store behind the
+writers and the dispatcher is not built, so nothing drives the bridge and nothing composes the
+stages yet. The assembly boundary is one-way on purpose: the library knows nothing of chunking,
+embedding or retrieval and cannot come to depend on them by accident.
 
 The change signal is deliberately coarse — the consumer re-diffs by content hash — which
 makes it robust against the two ways filesystem watching is unreliable: dropped events on
@@ -111,6 +114,11 @@ buffer overflow, and atomic save-via-rename.
 
 Properties worth stating because they are easy to "simplify" away:
 
+- **A reported change feeds the watcher's debouncer, never the per-change path directly**, and
+  that routing is the whole point rather than a detail. Debouncing is what makes a dozen writes
+  to one file cost one index pass; reporting past it would cost a pass per write and race the
+  watcher's own events for that file into a second one — leaving write-through *worse* than
+  being rediscovered. It is a no-op when nothing is running, because nothing would drain it.
 - **A concurrent writer may delay indexing a file but must never stop it.** Every read
   opens share-`Read`, and a live write handle denies it, so per-file failures are skipped
   rather than allowed to abort a pass, a change whose file is busy is retried rather than

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.8.0 |
+| Version | 0.9.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -31,6 +31,7 @@ depend on them by accident. What crosses back is a seam the application implemen
 - Watching the folder: debounced, coalesced, and deliberately coarse.
 - Reconciling periodically, as the safety net for events the watcher never delivers.
 - Processing each settled change against the index, one file at a time.
+- Accepting a change reported by a writer inside this process, onto that same settling path.
 - A durable outbox of per-file operations with at-least-once delivery and retry.
 
 **Out of scope**
@@ -41,12 +42,12 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 ## Implementation status
 
-**The watcher, the reconciler, the per-change pipeline, the outbox dispatcher and now the vectorization
-seam are built. The store is not.** The outbox exists as a contract and a dispatcher that drains it, and
-the application implements the seam that turns a delivered file into embedded content; nothing implements
-the store behind either the writers or the dispatcher, so nothing drives the seam yet and nothing composes
-these stages together. The sections
-below describe only what exists; the rest of the design is named in Scope so the gap is visible, and will
+**The watcher and its write-through entry point, the reconciler, the per-change pipeline, the outbox
+dispatcher and the vectorization seam are built. The store is not.** The outbox exists as a contract
+and a dispatcher that drains it, and the application implements the seam that turns a delivered file
+into embedded content; nothing implements the store behind either the writers or the dispatcher, so
+nothing drives the seam yet and nothing composes these stages together. The sections below describe
+only what exists; the rest of the design is named in Scope so the gap is visible, and will
 be specified as it is built rather than promised here.
 
 ## The signal is deliberately coarse
@@ -114,6 +115,40 @@ between asserting the rule and asserting that the machine was fast enough.
 
 Exclusion matches a **whole path segment**, never a prefix. A folder called `binaries` or `objects`
 is an ordinary folder.
+
+## Reporting a change from inside this process
+
+The front end normally *discovers* changes. That is the only option for an edit made by anything
+outside this process — an editor, a checkout, a build — and it is the wrong one for an edit this
+process makes itself, where the writer knows the path the moment its handle closes. Waiting to be
+told about its own write buys a discovery round-trip and nothing else: the file is already settled.
+
+`IIndexChangeNotifier` is that entry point, and its surface is two reports — a file written in
+place, and a file deleted. What matters about it is **where a report feeds**, not that it exists: a
+reported change is recorded in the same debouncer the watcher's own events are recorded in, and from
+there is indistinguishable from one.
+
+- **Several writes to one file cost one pass.** A writer applying a dozen edits, or a burst of
+  separate calls, settles as one change — exactly as an editor saving repeatedly does. Reporting
+  straight to the per-change path instead would give that case a settle-hash-embed cycle per write,
+  which is *worse* than not reporting at all and letting the watcher find it.
+- **A report merges with the watcher's own events for that file.** The write raises those events
+  too. Both land on one pending entry; two would mean reporting bought a duplicate pass rather than
+  an earlier one.
+- **The exclusions apply unchanged.** A report is not a way around them, least of all for the
+  metadata folder — a writer reporting the index's own bookkeeping would feed exactly the loop the
+  watcher exists to refuse.
+- **A path is a key, so it is canonicalised.** The watcher reports a full path and a caller reports
+  whatever it built; two spellings of one file would be two pending entries, and the merging above
+  would fail with nothing to see.
+
+Reporting is **advisory**: it changes when a change is indexed, never whether. A report made while
+nothing is running is dropped rather than held — nothing would drain it, and the reconcile that
+follows a start compares the whole folder regardless. A caller must not fail its own operation
+because a report was refused.
+
+**Writes further apart than the quiet window are separate changes.** That is correct for an editor.
+Whether it is correct for a caller that pauses between its own writes is an open question below.
 
 ## Reconciliation, and why its own failures matter more than most
 
@@ -397,6 +432,14 @@ state behind them. The assertions are on the **level** as much as the text, sinc
 decides whether anyone ever reads the line, and the debug cases additionally assert that nothing
 louder was written — that is what keeps an ordinary editing session from being reported as a fault.
 
+
+Reporting a change needs no filesystem: the host is told a path changed and never looks at it, so
+those tests assert the routing and the settling rather than the machine. The exception is the case
+the routing exists for and which cannot be staged any other way — a real write and a report racing
+each other for the same file, which has to settle as one change. Every assertion that something is
+*not* reported is made behind a tracer that is: once the tracer arrives, whatever should have been
+refused has had at least as long and did not, so the test cannot pass by waiting alone.
+
 The vectorization seam is tested against a real database, and most of its tests are about what it
 refuses, because every refusal is a failure that would otherwise be silent. One of them can only be seen
 on the native backend: the explicit deletion of vectors is invisible under the blob store, where the
@@ -414,10 +457,13 @@ contention at this scale, and that is said in the test rather than left looking 
 - Whether a folder moved in or deleted should be expanded into per-file changes on the event path. Today
   its files wait for the next reconcile, which bounds the delay by the reconcile interval rather than by
   the debounce window.
-- Whether an in-process writer should report changes directly. The application's own file tools will
-  write into this folder, and rediscovering their writes through the operating system is wasteful —
-  but a direct path must feed the settling rule rather than bypass it, or a batch of edits stops
-  being coalesced at all.
+- **Whether a caller should be able to hold indexing until it has finished.** Coalescing covers writes
+  closer together than the quiet window. It does not cover a caller that pauses between its own
+  writes: each then lands in its own window and costs its own pass, which is the shape of a
+  multi-step edit driven by something that stops to think between steps. Raising the window is the
+  blunt answer, and it delays every ordinary external edit by the same amount. A scope that holds
+  flushing until it is released is the precise one, but it needs a caller that knows where its own
+  work begins and ends, which is not this module.
 
 ## Related specs
 

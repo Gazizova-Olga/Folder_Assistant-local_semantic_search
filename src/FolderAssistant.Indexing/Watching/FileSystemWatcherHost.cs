@@ -19,8 +19,15 @@ namespace FolderAssistant.Indexing.Watching;
 /// means to an index keyed on path, and it is also the shape an atomic save takes — so treating
 /// the two identically means the save path needs no special case.
 /// </para>
+///
+/// <para>
+/// It is also the entry point for a writer inside this process reporting a change it has already
+/// made (<see cref="IIndexChangeNotifier"/>). Those reports join the watcher's own events in the
+/// same debouncer rather than going around it, so a file written several times in one burst still
+/// costs one settled change however the writes were discovered.
+/// </para>
 /// </summary>
-public sealed class FileSystemWatcherHost : IAsyncDisposable
+public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IAsyncDisposable
 {
     private readonly string _rootPath;
     private readonly TimeSpan _quietWindow;
@@ -32,6 +39,7 @@ public sealed class FileSystemWatcherHost : IAsyncDisposable
     private FileSystemWatcher? _watcher;
     private CancellationTokenSource? _stopping;
     private Task? _settleLoop;
+    private bool _running;
 
     /// <param name="rootPath">The folder to watch, including everything beneath it.</param>
     /// <param name="metadataFolderName">
@@ -98,7 +106,52 @@ public sealed class FileSystemWatcherHost : IAsyncDisposable
 
         _watcher.EnableRaisingEvents = true;
 
+        lock (_gate)
+        {
+            _running = true;
+        }
+
         _settleLoop = Task.Run(() => RunSettleLoopAsync(_stopping.Token));
+    }
+
+    /// <inheritdoc/>
+    public ValueTask NotifyChangedAsync(string absolutePath, CancellationToken cancellationToken = default)
+        => Report(absolutePath, FileChangeKind.Modified, cancellationToken);
+
+    /// <inheritdoc/>
+    public ValueTask NotifyDeletedAsync(string absolutePath, CancellationToken cancellationToken = default)
+        => Report(absolutePath, FileChangeKind.Deleted, cancellationToken);
+
+    /// <summary>
+    /// Records a reported change exactly as if the operating system had raised it: the same
+    /// exclusions, the same quiet window, the same folding. A report therefore coalesces with
+    /// itself and with the watcher's own events for that path, instead of costing a pass beside
+    /// them.
+    /// </summary>
+    private ValueTask Report(string absolutePath, FileChangeKind kind, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(absolutePath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Canonicalised, because the debouncer keys on the path string while the watcher reports a
+        // full one. Two spellings of one file are two pending entries, which is the merging this
+        // exists for failing quietly.
+        string fullPath = Path.GetFullPath(absolutePath);
+
+        lock (_gate)
+        {
+            // Nothing drains the debouncer while the host is stopped, so a report taken here would
+            // wait in it indefinitely. Dropping it costs nothing: a change made while nothing was
+            // watching is what the reconcile at the next start is for.
+            if (!_running)
+            {
+                return ValueTask.CompletedTask;
+            }
+        }
+
+        Observe(fullPath, kind);
+
+        return ValueTask.CompletedTask;
     }
 
     private void Observe(string fullPath, FileChangeKind kind)
@@ -164,6 +217,13 @@ public sealed class FileSystemWatcherHost : IAsyncDisposable
         _watcher.EnableRaisingEvents = false;
         _watcher.Dispose();
         _watcher = null;
+
+        // Reports are refused from here on. What is already pending is drained below, but
+        // accepting a new one during shutdown would record a change nothing is left to publish.
+        lock (_gate)
+        {
+            _running = false;
+        }
 
         if (_stopping is not null)
         {
