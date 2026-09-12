@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.10.0 |
+| Version | 0.11.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-12 |
 
@@ -75,6 +75,7 @@ Tables created at baseline:
 | `embedding_model_registry` | One row per embedding model version |
 | `chunk_vector` | The vectors |
 | `embedding_fit_artifact` | The persisted fit for a corpus-dependent model, where there is one |
+| `outbox` | One row per queued delivery: what changed, and what has been tried |
 
 **The schema is created whole rather than grown a table at a time.** One of its invariants
 cannot be retrofitted: `chunk_vector` is keyed `(chunk_id, model_version_id)` so that
@@ -208,6 +209,21 @@ directory containing a database cannot be deleted straight away. `TempFolder` cl
 retries; without that, every test touching a database leaves its folder behind.
 
 ## Migration
+
+**Schema version 4** makes room for deliveries. `file_manifest` gains two nullable columns — the
+file's own creation time, and the content hash of what was last delivered for embedding — and a new
+`outbox` table holds one row per queued delivery. An existing database picks the table up through
+the idempotent `CREATE`; the columns need an `ALTER`, which is what makes this a migration rather
+than a no-op, and the version is bumped only when one is actually added.
+
+**Both columns are nullable, and that is the honest shape rather than a convenience.** A row written
+before either existed has no creation time recorded, and has had nothing delivered under this
+bookkeeping. A default would state something about that row which nobody knows, and the first reader
+would believe it.
+
+**The outbox is keyed on the path, not on a file record.** An operation has to outlive the thing it
+describes: a deletion is deliverable precisely when the record it came from is gone. Ordering is by
+the row id, which is what lets one file's operations run in the order they were queued.
 
 **Schema version 3** stores vectors as packed little-endian `float32` in `chunk_vector.vector`,
 replacing `vector_json TEXT`. **This one is the first real migration**, because an idempotent

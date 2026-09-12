@@ -26,7 +26,7 @@ public sealed class VectorBlobMigrationTests
 
 		new FolderDatabaseBootstrapper().EnsureInitialized(folder.Path, new PersistenceConfig());
 
-		ReadScalar(databasePath, "SELECT version FROM schema_version;").Should().Be(3L);
+		ReadScalar(databasePath, "SELECT version FROM schema_version;").Should().Be(4L);
 
 		SqliteBlobVectorStoreReader reader = new();
 		IReadOnlyList<StoredVector> stored = reader.ReadVectorsByModelVersion(databasePath, "m1");

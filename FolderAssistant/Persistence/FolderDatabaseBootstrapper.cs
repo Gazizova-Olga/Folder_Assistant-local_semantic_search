@@ -47,7 +47,7 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 	// Version 2 adds embedding_fit_artifact. An existing version 1 database picks the table up
 	// through the idempotent CREATE below; what changes here is only the value seeded into a
 	// database created from now on.
-	private const Int32 SchemaVersion = 3;
+	private const Int32 SchemaVersion = 4;
 
 	/// <summary>Ensures the metadata folder, the database and its schema exist. Idempotent.</summary>
 	public DatabaseBootstrapResult EnsureInitialized(String analyzedFolderPath, PersistenceConfig config)
@@ -103,7 +103,14 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 				size_bytes   INTEGER NOT NULL,
 				modified_utc TEXT NOT NULL,
 				status       TEXT NOT NULL DEFAULT 'active',
-				updated_utc  TEXT NOT NULL
+				updated_utc  TEXT NOT NULL,
+
+				-- The file's own creation time, as the filesystem reports it, and the content hash of
+				-- what was last delivered for embedding. Both are null for a row written before either
+				-- was recorded: the first because nothing knew it, the second because nothing has been
+				-- delivered yet, which is the same thing a fresh row means.
+				created_utc      TEXT NULL,
+				last_synced_hash TEXT NULL
 			);
 
 			CREATE TABLE IF NOT EXISTS chunk_manifest (
@@ -150,6 +157,25 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 			);
 
 			CREATE INDEX IF NOT EXISTS idx_chunk_vector_model ON chunk_vector(model_version_id);
+
+			-- One row per queued delivery. Keyed on the path rather than on a file row, so an operation
+			-- outlives the file it describes: a deletion has to be deliverable after the record it came
+			-- from is gone. Ordering is by id, which is what makes one file's operations run in the
+			-- order they were queued.
+			CREATE TABLE IF NOT EXISTS outbox (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				file_path        TEXT NOT NULL,
+				op_type          INTEGER NOT NULL,
+				status           INTEGER NOT NULL,
+				attempts         INTEGER NOT NULL DEFAULT 0,
+				created_utc      TEXT NOT NULL,
+				next_attempt_utc TEXT NOT NULL,
+				error            TEXT NULL
+			);
+
+			-- The claim query reads both columns and nothing else, and the per-file one reads the path.
+			CREATE INDEX IF NOT EXISTS idx_outbox_due ON outbox(status, next_attempt_utc);
+			CREATE INDEX IF NOT EXISTS idx_outbox_path ON outbox(file_path);
 			""";
 		schema.ExecuteNonQuery();
 
@@ -164,6 +190,7 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 		Boolean created = seed.ExecuteNonQuery() > 0;
 
 		MigrateJsonVectorsToBlobs(connection, transaction);
+		AddDeliveryTrackingColumns(connection, transaction);
 
 		transaction.Commit();
 
@@ -264,6 +291,59 @@ internal sealed class FolderDatabaseBootstrapper : IFolderDatabaseBootstrapper
 		bump.Transaction = transaction;
 		bump.CommandText = $"UPDATE schema_version SET version = {SchemaVersion} WHERE id = 1;";
 		bump.ExecuteNonQuery();
+	}
+
+
+	/// <summary>
+	/// Adds the two columns a database created before deliveries were tracked does not have: the
+	/// file's own creation time, and the content hash of what was last delivered for embedding.
+	///
+	/// <para>
+	/// New tables arrive by themselves through the <c>CREATE TABLE IF NOT EXISTS</c> statements
+	/// above; new columns do not. Both are nullable, and that is the honest shape rather than a
+	/// convenience: an existing row has no creation time recorded and has had nothing delivered under
+	/// this bookkeeping, and a default would state something about it that is not known.
+	/// </para>
+	/// </summary>
+	private static void AddDeliveryTrackingColumns(SqliteConnection connection, SqliteTransaction transaction)
+	{
+		Boolean added = AddColumnIfMissing(
+			connection, transaction, "file_manifest", "created_utc",
+			"ALTER TABLE file_manifest ADD COLUMN created_utc TEXT NULL;");
+
+		added |= AddColumnIfMissing(
+			connection, transaction, "file_manifest", "last_synced_hash",
+			"ALTER TABLE file_manifest ADD COLUMN last_synced_hash TEXT NULL;");
+
+		if (!added)
+		{
+			return;
+		}
+
+		using SqliteCommand bump = connection.CreateCommand();
+		bump.Transaction = transaction;
+		bump.CommandText = $"UPDATE schema_version SET version = {SchemaVersion} WHERE id = 1;";
+		bump.ExecuteNonQuery();
+	}
+
+	private static Boolean AddColumnIfMissing(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String table,
+		String column,
+		String alterStatement)
+	{
+		if (HasColumn(connection, transaction, table, column))
+		{
+			return false;
+		}
+
+		using SqliteCommand alter = connection.CreateCommand();
+		alter.Transaction = transaction;
+		alter.CommandText = alterStatement;
+		alter.ExecuteNonQuery();
+
+		return true;
 	}
 
 	private static Boolean HasColumn(

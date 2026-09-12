@@ -50,12 +50,15 @@ public sealed class FolderDatabaseBootstrapperTests
 			"embedding_model_registry",
 			"chunk_vector",
 			"embedding_fit_artifact",
+			"outbox",
 		]);
 
 		ObjectNames(result.DatabasePath, "index").Should().Contain([
 			"idx_file_manifest_path",
 			"idx_chunk_manifest_file",
 			"idx_chunk_vector_model",
+			"idx_outbox_due",
+			"idx_outbox_path",
 		]);
 	}
 
@@ -68,7 +71,7 @@ public sealed class FolderDatabaseBootstrapperTests
 		BootstrapIn(folder.Path);
 
 		ReadScalar(result.DatabasePath, "SELECT COUNT(*) FROM schema_version;").Should().Be(1L);
-		ReadScalar(result.DatabasePath, "SELECT version FROM schema_version;").Should().Be(3L);
+		ReadScalar(result.DatabasePath, "SELECT version FROM schema_version;").Should().Be(4L);
 	}
 
 	/// <summary>
