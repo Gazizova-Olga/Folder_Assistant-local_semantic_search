@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.12.0 |
+| Version | 0.13.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -42,13 +42,13 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 ## Implementation status
 
-**The watcher and its write-through entry point, the reconciler, the per-change pipeline, the outbox
-dispatcher and the vectorization seam are built. The store is not.** The outbox exists as a contract
-and a dispatcher that drains it, and the application implements the seam that turns a delivered file
-into embedded content; nothing implements the store behind either the writers or the dispatcher, so
-nothing drives the seam yet and nothing composes these stages together. The sections below describe
-only what exists; the rest of the design is named in Scope so the gap is visible, and will
-be specified as it is built rather than promised here.
+**Every seam this library defines now has an implementation — the watcher and its write-through
+entry point, the reconciler, the per-change pipeline, the outbox dispatcher, the vectorization seam,
+and the store behind the writers and the dispatcher. Nothing composes them.** What is missing is the
+wiring that starts the watcher, runs the passes and drains the queue; until it exists the subsystem
+is complete and driven by nothing. The sections below describe only what exists; the rest of the
+design is named in Scope so the gap is visible, and will be specified as it is built rather than
+promised here.
 
 ## The signal is deliberately coarse
 
@@ -385,10 +385,16 @@ function of its relative path, and no writer states a conclusion for one path fr
 another. A rename is a removal and an addition, each under its own path. **Anything that adds move
 detection re-opens this**, and must then condition the preserve on identity rather than on absence.
 
-No store implements any of this yet, and the rule is recorded against the seams rather than against
-an implementation because it is a property of the contract: a store can satisfy `ApplyAsync` and
-`TryMarkSyncedAsync` with whole-row upserts, be wrong in both ways above, and look correct from
-everywhere inside this library.
+The store meets this. A classification never names the delivery mark, so it cannot revert one; an
+insert that turns out to be an update keeps the mark it never set; and the mark is cleared in
+exactly one case — a row that was not active when the insert conflicted with it.
+
+**That last case is one this design creates for itself, and it is worth naming.** A removal marks a
+row rather than deleting it, so the row can still be there when the same path comes back. What the
+mark referred to left with the file's chunks when its removal was delivered, so a file restored
+byte-for-byte would look already delivered and would never be embedded again — silently, and for as
+long as it existed. Avoiding one way to hold a stale mark introduced another; the condition on the
+conflict clause is what closes it.
 
 ## The vectorization seam, as implemented
 
@@ -426,17 +432,20 @@ outlive its chunk as a hit resolving to nothing.
 
 ### The sharp edge: two writers of the file table
 
-The corpus pass and this seam both write `file_manifest`, and that is recorded rather than designed
-around. A corpus pass rewrites those rows wholesale and deletes any file its scan did not see, so a pass
-overlapping a delivery can remove a row the delivery just wrote and take that file's chunks with it
-through the cascade.
+The corpus pass and the per-file path both write `file_manifest`, and that is recorded rather than
+designed around. A corpus pass rewrites those rows wholesale and deletes any file its scan did not
+see, so a pass overlapping a delivery can remove a row the delivery just wrote and take that file's
+chunks with it through the cascade. Nothing drives either path yet, so how the two are ordered is
+the composition's to settle.
 
-It cannot happen yet: nothing drives the seam, because no store implementation exists for the dispatcher
-to claim from. The resolution is the split this design already assumes — the indexer owning the file rows
-and the embedding side owning only chunks and vectors — and it arrives with that store. Writing only
-chunks and vectors *now* would not work: the schema's foreign key forbids a chunk with no file row, and
-retrieval resolves a hit through that row, so a delivered file with no row would be stored and
-unreachable.
+**The store settled one half of this and not the other, and the half it did not is worth stating
+plainly.** This spec expected the resolution to be ownership: the indexer owning file rows outright,
+the embedding side owning only chunks and vectors. What was built is narrower, because the schema
+does not permit the clean version — a file's chunks hang from its row, clearing them means clearing
+vectors first, and only the embedding side can do that. So a removal **marks** the row and queues the
+delivery; the delivery clears the vectors, and the row goes with them. The indexer owns everything
+the row says about a file; the embedding side ends the row's life. That is the arrangement, recorded
+in place of the intention it replaced rather than beside it.
 
 ## Observability
 
@@ -534,6 +543,12 @@ timing, so separating them would mean racing the interval and calling the result
 reconciler's deferral is asserted against a hold the test switches by hand, since what is being
 checked is that the pass asks and obeys, not how a real hold decides.
 
+
+The store is tested against a real database rather than a fake, because what is under test is SQL:
+which columns a statement names, and which it leaves alone. Most of its tests assert what is *not*
+written — the delivery mark surviving a classification, surviving an insert that turned out to be an
+update, and going when the row it described did — since every one of those failures is silent and
+shows up only as a file that is in the folder and not in any answer.
 The vectorization seam is tested against a real database, and most of its tests are about what it
 refuses, because every refusal is a failure that would otherwise be silent. One of them can only be seen
 on the native backend: the explicit deletion of vectors is invisible under the blob store, where the
