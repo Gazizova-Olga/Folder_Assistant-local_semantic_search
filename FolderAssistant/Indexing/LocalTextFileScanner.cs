@@ -39,6 +39,12 @@ internal sealed class LocalTextFileScanner
 		=> !String.IsNullOrWhiteSpace(extension) && AllowedExtensions.Contains(extension);
 
 	/// <summary>
+	/// The extensions this system reads, for a walker that takes a list rather than asking per file.
+	/// The same set as <see cref="IsIndexableExtension"/> consults, so the two cannot drift.
+	/// </summary>
+	public static IReadOnlyCollection<String> IndexableExtensions => AllowedExtensions;
+
+	/// <summary>
 	/// Yields indexable files one at a time, reading each one's text only as it is pulled.
 	///
 	/// <para>

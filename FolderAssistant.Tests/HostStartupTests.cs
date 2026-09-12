@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
 using FolderAssistant.Indexing;
+using FolderAssistant.Indexing.Scanning;
+using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Retrieval;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -110,6 +112,55 @@ public sealed class HostStartupTests
 	}
 
 	/// <summary>
+	/// The composition root's wiring of the front end, which nothing below the host can check: the
+	/// store, the bridge and the indexer are constructed there, and a registration that resolved the
+	/// wrong one would boot and serve while the folder quietly stopped being followed. A file written
+	/// after startup is indexed by the running host, with nothing in the test touching any of it.
+	/// </summary>
+	[Fact]
+	public async Task A_File_Written_After_Startup_Is_Indexed_By_The_Running_Host()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma");
+
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:DebounceMilliseconds", "100"));
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+
+		IIndexState state = host.Services.GetRequiredService<IIndexState>();
+		await WaitFor(() => state.Status == IndexStatus.Ready, "the initial index");
+
+		await File.WriteAllTextAsync(folder.Combine("later.md"), "delta epsilon zeta");
+
+		await WaitFor(() => CountIndexedFiles(folder) == 2, "the new file to be recorded");
+		await WaitFor(() => CountVectorsOf(folder, FileIdentity.For("later.md")) > 0, "the new file to be embedded");
+
+		CountIndexedFiles(folder).Should().Be(2);
+		CountVectorsOf(folder, FileIdentity.For("later.md")).Should().BeGreaterThan(0);
+	}
+
+	/// <summary>
+	/// A report is fed into the running front end's own debouncer, so the notifier has to be that
+	/// object and not a second one built from the same registrations — which would accept every report
+	/// and drain none of them.
+	/// </summary>
+	[Fact]
+	public async Task The_Change_Notifier_Is_The_Running_Front_End_Itself()
+	{
+		using TempFolder folder = new();
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"));
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+
+		IIndexChangeNotifier notifier = host.Services.GetRequiredService<IIndexChangeNotifier>();
+		IFolderIndexer indexer = host.Services.GetRequiredService<IFolderIndexer>();
+
+		notifier.Should().BeSameAs(indexer);
+	}
+
+	/// <summary>
 	/// The metrics wiring, which no unit test can reach: the meter name has to be the one registered
 	/// with the host, and the scrape endpoint has to be mapped. Both are strings agreed on in two
 	/// places, and getting either wrong produces an endpoint that serves perfectly well and reports
@@ -153,6 +204,41 @@ public sealed class HostStartupTests
 		command.CommandText = "SELECT COUNT(*) FROM file_manifest;";
 
 		return (Int64)(command.ExecuteScalar() ?? 0L);
+	}
+
+	private static Int64 CountVectorsOf(TempFolder folder, String fileId)
+	{
+		String databasePath = folder.Combine(".folderassistant", "manifest.db");
+
+		using Microsoft.Data.Sqlite.SqliteConnection connection = new($"Data Source={databasePath}");
+		connection.Open();
+
+		using Microsoft.Data.Sqlite.SqliteCommand command = connection.CreateCommand();
+		command.CommandText = """
+			SELECT COUNT(*) FROM chunk_vector cv
+			JOIN chunk_manifest cm ON cm.chunk_id = cv.chunk_id
+			WHERE cm.file_id = $fileId;
+			""";
+		command.Parameters.AddWithValue("$fileId", fileId);
+
+		return (Int64)(command.ExecuteScalar() ?? 0L);
+	}
+
+	private static async Task WaitFor(Func<Boolean> condition, String what)
+	{
+		DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+
+		while (DateTime.UtcNow < deadline)
+		{
+			if (condition())
+			{
+				return;
+			}
+
+			await Task.Delay(25);
+		}
+
+		throw new TimeoutException($"Timed out waiting for {what}.");
 	}
 
 	private sealed record FolderResponse(String Name, String AnalyzedFolder);

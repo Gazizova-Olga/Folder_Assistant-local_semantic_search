@@ -1,21 +1,23 @@
 # Implementation status
 
-What is live, what is built but unreachable, and what is not built — as of 2026-09-10.
+What is live, what is built but unreachable, and what is not built — as of 2026-09-12.
 
-**Three states, not two.** "Built but unreachable" is the largest category here, and a diagram
-with only *done* and *not done* hides it: retrieval is implemented twice over, tested, composed — and it
-still never runs. Colouring those the same as either neighbour would misrepresent the system in
-opposite directions depending on which you chose.
+**Three states, not two.** "Built but unreachable" is the category a diagram with only *done* and
+*not done* hides: retrieval is implemented twice over, tested, composed — and it still never runs.
+Colouring those the same as either neighbour would misrepresent the system in opposite directions
+depending on which you chose.
 
 ```mermaid
 flowchart LR
     subgraph live["Live — runs in the application"]
         direction TB
-        scan["LocalTextFileScanner<br/>walk, filter, hash"]
-        chunk["SimpleTokenizer + TextChunker<br/>overlapping windows"]
-        embed["IVectorizer<br/>programmable · LSA"]
-        store["FolderIndexRepository<br/>SQLite, WAL"]
-        watch["FileSystemWatcherChangeFeed<br/>debounced, coalesced"]
+        pass["Whole-folder pass<br/>scan, chunk, embed, store — once, at start"]
+        watch["FileSystemWatcherHost<br/>debounced, coalesced, holds"]
+        reconcile["Reconciler<br/>periodic safety net"]
+        pipeline["ChangePipeline<br/>settle, hash, record"]
+        outbox["FolderIndexStore<br/>records + durable outbox"]
+        dispatch["OutboxDispatcher<br/>at-least-once delivery"]
+        bridge["RagBridgeVectorizationService<br/>chunk, embed, store one file"]
         state["IndexState<br/>Building · Ready · Failed"]
     end
 
@@ -32,35 +34,39 @@ flowchart LR
         chatui["Chat surface"]
     end
 
-    scan --> chunk --> embed --> store
-    watch --> scan
-    store -.-> state
-    store -.->|"vectors nothing reads"| query
+    pass --> watch
+    watch --> pipeline --> outbox --> dispatch --> bridge
+    reconcile --> outbox
+    pass -.-> state
+    bridge -.->|"vectors nothing reads"| query
     query -.-> tools -.-> agent -.-> chatui
 
     classDef liveCls fill:#1b5e20,stroke:#a5d6a7,color:#ffffff
     classDef builtCls fill:#e65100,stroke:#ffcc80,color:#ffffff
     classDef gapCls fill:#37474f,stroke:#b0bec5,color:#ffffff
 
-    class scan,chunk,embed,store,watch,state liveCls
+    class pass,watch,reconcile,pipeline,outbox,dispatch,bridge,state liveCls
     class query,reducer builtCls
     class tools,agent,chatui gapCls
 ```
 
 ## The gap, stated plainly
 
-`IRetrievalQuery` **is** registered in the composition root now — the active composition profile
-resolves one of two implementations, and either can be pulled out of the container. What is
-still missing is a caller: nothing on the request path asks it anything, so every pass writes
-vectors the running application never reads.
+The indexing side is now whole and live: a whole-folder pass at start, then the file-indexing front
+end keeping the index in step with the folder — every changed file settled, recorded, queued,
+delivered, chunked, embedded and stored, with a periodic comparison healing whatever the watcher
+missed. Nothing in the test suite or the running application calls a stage by hand any more.
 
-The context-assembly stage (`TokenBudgetContextReducer`) has just joined it in the same position:
-built, tested, composed, and with nothing calling it.
+`IRetrievalQuery` **is** registered in the composition root — the active composition profile
+resolves one of two implementations, and either can be pulled out of the container — and the
+context-assembly stage (`TokenBudgetContextReducer`) sits beside it in the same position: built,
+tested, composed, and with nothing calling it. What is still missing is a caller: nothing on the
+request path asks either of them anything, so every vector the pipeline writes is one the running
+application never reads.
 
-That narrows the gap to one edge rather than two. Composition was the prerequisite and it is
-done; the remaining work is a runtime caller, which in the plan means the filesystem tools and
-the agent that calls them. Until that lands, both vector backends, the whole indexing pipeline
-and all the measured performance work are infrastructure with no consumer.
+That narrows the gap to one edge. The remaining work is a runtime caller, which in the plan means
+the filesystem tools and the agent that calls them. Until that lands, both vector backends, the
+whole indexing subsystem and all the measured performance work are infrastructure with no consumer.
 
 ## What each state means here
 

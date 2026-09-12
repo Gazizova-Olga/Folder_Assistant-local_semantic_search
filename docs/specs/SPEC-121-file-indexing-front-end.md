@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.14.0 |
+| Version | 0.15.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -42,12 +42,10 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 ## Implementation status
 
-**Every seam this library defines has an implementation, and the library now composes its own
-loops: `FolderIndexer` starts the watcher, runs the passes and drains the queue, behind
-`IFolderIndexer` (see Composition). The application does not start it yet.** What is missing is the
-host's side: constructing the store, the vectorization seam and the indexer together, and settling
-how the whole-folder pass and this front end share the file table (the sharp edge below). Until that
-exists the subsystem is complete and driven by nothing in the running application. The sections below
+**Live.** Every seam this library defines has an implementation, the library composes its own loops
+(`FolderIndexer`, behind `IFolderIndexer` — see Composition), and the application constructs the
+store, the vectorization seam and the indexer together and starts it once its whole-folder pass has
+succeeded ([SPEC-120](SPEC-120-rag-indexing.md), Keeping up with the folder). The sections below
 describe only what exists.
 
 ## The signal is deliberately coarse
@@ -449,8 +447,11 @@ outlive its chunk as a hit resolving to nothing.
 The corpus pass and the per-file path both write `file_manifest`, and that is recorded rather than
 designed around. A corpus pass rewrites those rows wholesale and deletes any file its scan did not
 see, so a pass overlapping a delivery can remove a row the delivery just wrote and take that file's
-chunks with it through the cascade. Nothing drives either path yet, so how the two are ordered is
-the composition's to settle.
+chunks with it through the cascade. The composition settles it by order: the whole-folder pass runs
+once, before the front end starts, and never while it runs — so the two writers never overlap. One
+consequence is accepted and worth knowing: a delivery left queued when the process stopped is
+delivered again after the next start's pass has already embedded that content. A duplicate embed,
+idempotent, one round trip.
 
 **The store settled one half of this and not the other, and the half it did not is worth stating
 plainly.** This spec expected the resolution to be ownership: the indexer owning file rows outright,
@@ -491,9 +492,11 @@ that knows all four is where the things they share are decided:
 While nothing is running, a report is dropped and a hold holds nothing, for one reason: a change made
 while nothing is watching is what the pass at the next start is for.
 
-**The application does not start it yet.** That is the wiring still owed: constructing the store,
-the vectorization seam and this type together, and deciding how the whole-folder pass and this front
-end share the file table (the sharp edge above).
+**The application starts it once its whole-folder pass has succeeded, and stops it with the host.**
+The start is part of the same attempt as the pass — an attempt whose front end could not start is
+failed and repeated whole, rather than leaving a ready index that has quietly stopped following the
+folder. The pass runs once and never again while the front end runs, which is how the two writers
+of the file table are kept apart (the sharp edge above).
 
 ## Observability
 

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — partly written |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | — |
-| Last updated | 2026-09-10 |
+| Last updated | 2026-09-12 |
 
 ## Purpose
 
@@ -28,9 +28,10 @@ Holds the contracts, records and version metadata that more than one module depe
 and that is a decision rather than a deferral.**
 
 The contracts that cross module boundaries — `IVectorizer`, `IVectorStoreReader` and
-`IVectorStoreWriter`, `IRetrievalQuery`, `IFolderManifestReader`, `IIndexState`,
-`IFileChangeFeed` — sit in the folders of the modules that define them, and every consumer is
-in the same assembly.
+`IVectorStoreWriter`, `IRetrievalQuery`, `IFolderManifestReader`, `IIndexState` — sit in the
+folders of the modules that define them, and every consumer is in the same assembly. The one
+contract that crosses an assembly boundary, the indexing front end's vectorization seam, is defined
+by the library that calls it and implemented here ([SPEC-121](SPEC-121-file-indexing-front-end.md)).
 
 **Why not a `Shared.Abstractions` project.** A separate assembly buys one thing: it makes a
 dependency physically impossible to take rather than merely wrong. That is worth paying for

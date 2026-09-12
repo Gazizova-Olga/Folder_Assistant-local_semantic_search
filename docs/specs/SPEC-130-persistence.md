@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.11.0 |
+| Version | 0.12.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-12 |
 
@@ -127,9 +127,13 @@ not carry.
 
 ## Concurrency rules
 
-- The access pattern is **one writer, many readers**. The indexing service writes on a
-  background thread — its passes serialized ([SPEC-120](SPEC-120-rag-indexing.md)) — while
-  retrieval reads on request threads, against the same database file.
+- The access pattern is **writers on background threads, readers on request threads**, against
+  one file. The writers are the whole-folder pass — once, at start, in a single transaction — and
+  then the front end's record-and-queue writes and the dispatcher's deliveries
+  ([SPEC-121](SPEC-121-file-indexing-front-end.md)), several threads each opening a short-lived
+  connection, serialised by the database's own write lock and the busy timeout every connection
+  sets. The pass and the front end never run at the same time
+  ([SPEC-120](SPEC-120-rag-indexing.md)). Retrieval reads on request threads.
 - **WAL is what makes that legal**, and is the only reason a read does not block behind an
   index in flight. It is set once at bootstrap: `journal_mode` is persisted in the database
   file rather than being a property of a connection.

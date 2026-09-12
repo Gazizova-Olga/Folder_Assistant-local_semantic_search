@@ -180,6 +180,28 @@ public sealed class FolderIndexerTests
 		}
 	}
 
+	/// <summary>
+	/// Disposal stops the loops itself, so a stop arriving afterwards has nothing to do — and it does
+	/// arrive: a host that runs the application's entry point beside its own shutdown disposes the
+	/// container while a hosted service is still being told to stop. Found through the real host,
+	/// where it surfaced as a fault out of shutdown.
+	/// </summary>
+	[Fact]
+	public async Task Stopping_After_Disposal_Does_Nothing_Rather_Than_Faulting()
+	{
+		using TempFolder folder = new();
+		(_, FolderIndexer indexer) = Compose(folder, new RecordingVectorizer());
+
+		await indexer.StartAsync();
+		await indexer.DisposeAsync();
+		await indexer.DisposeAsync();
+
+		Func<Task> stop = () => indexer.StopAsync();
+
+		await stop.Should().NotThrowAsync();
+		indexer.IsRunning.Should().BeFalse();
+	}
+
 	private static (FolderIndexStore Store, FolderIndexer Indexer) Compose(
 		TempFolder folder,
 		IVectorizationService vectorizer,

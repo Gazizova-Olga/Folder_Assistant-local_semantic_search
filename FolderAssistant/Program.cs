@@ -1,6 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
+using FolderAssistant.Indexing.Outbox;
+using FolderAssistant.Indexing.Scanning;
+using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
 using Microsoft.Extensions.Options;
@@ -101,6 +104,65 @@ internal sealed class Program
 			return database;
 		});
 
+		// The store the indexing front end writes its file records and deliveries through. It is the
+		// application's, over the same folder database as the chunks and vectors, so that recording a
+		// change and queuing its delivery are one write.
+		builder.Services.AddSingleton(sp =>
+			new FolderIndexStore(sp.GetRequiredService<DatabaseBootstrapResult>().DatabasePath));
+
+		// The application's half of the seam the front end delivers through: one file in, chunks and
+		// vectors out. It shares the vectorizer and the vector store with the whole-folder pass below,
+		// so a file embeds the same way whichever path indexed it.
+		builder.Services.AddSingleton<IVectorizationService>(sp =>
+		{
+			AgentConfig config = sp.GetRequiredService<AgentConfig>();
+
+			return new RagBridgeVectorizationService(
+				config.ResolveAnalyzedFolderPath(),
+				sp.GetRequiredService<DatabaseBootstrapResult>().DatabasePath,
+				sp.GetRequiredService<IVectorizer>(),
+				new FolderIndexRepository(sp.GetRequiredService<IVectorStoreWriter>()),
+				sp.GetRequiredService<IVectorStoreReader>(),
+				config.Indexing,
+				config.Persistence.MetadataFolderName);
+		});
+
+		// The front end: watcher, reconciler, per-change pipeline and outbox dispatcher, composed by
+		// the library and started by the indexing service once the whole-folder pass has succeeded.
+		builder.Services.AddSingleton<IFolderIndexer>(sp =>
+		{
+			AgentConfig config = sp.GetRequiredService<AgentConfig>();
+			FolderIndexStore store = sp.GetRequiredService<FolderIndexStore>();
+
+			// The extension list and the size bound are the scanner's own, from one source of truth.
+			// Left at the library's defaults, every binary in the folder would be recorded, queued and
+			// delivered to a bridge that refuses each one, and an oversize file would be read whole.
+			FolderIndexerOptions options = new()
+			{
+				RootPath = config.ResolveAnalyzedFolderPath(),
+				MetadataFolderName = config.Persistence.MetadataFolderName,
+				IndexableExtensions = LocalTextFileScanner.IndexableExtensions,
+				MaxContentBytes = config.Indexing.MaxTextFileSizeBytes,
+				QuietWindow = TimeSpan.FromMilliseconds(config.Indexing.DebounceMilliseconds),
+				ReconciliationInterval = TimeSpan.FromSeconds(config.Indexing.ReconciliationIntervalSeconds),
+			};
+
+			// The logger factory is optional to the library and present here: every loop it runs
+			// survives its faults, and the log is the only place a loop failing every pass differs
+			// from one with nothing to do.
+			return new FolderIndexer(
+				options,
+				store,
+				store,
+				sp.GetRequiredService<IVectorizationService>(),
+				new Sha256ContentHasher(),
+				sp.GetService<ILoggerFactory>());
+		});
+
+		// The same instance, not a second one: a report is fed into the running front end's own
+		// debouncer, so it has to be the object that owns it.
+		builder.Services.AddSingleton<IIndexChangeNotifier>(sp => sp.GetRequiredService<IFolderIndexer>());
+
 		// Whether indexing runs at all is decided when this factory executes, which is after the
 		// configuration is final — not while the composition root is being written.
 		builder.Services.AddSingleton<IHostedService>(sp =>
@@ -125,20 +187,12 @@ internal sealed class Program
 				sp.GetRequiredService<IVectorStoreWriter>(),
 				sp.GetRequiredService<IVectorStoreReader>());
 
-			IFileChangeFeed? changeFeed = config.Indexing.WatchEnabled
-				? new FileSystemWatcherChangeFeed(
-					analyzedFolderPath,
-					config.Persistence.MetadataFolderName,
-					TimeSpan.FromMilliseconds(config.Indexing.DebounceMilliseconds),
-					TimeSpan.FromSeconds(config.Indexing.ReconciliationIntervalSeconds))
-				: null;
-
 			// Only a network-bound embedder implements the probe seam; for the in-process ones this is
 			// null and the first pass just starts. The cast is how the composition root avoids knowing
 			// which kind the active profile built.
 			return new FolderIndexingService(
 				() => pipeline.Run(analyzedFolderPath, databasePath, config.Indexing),
-				changeFeed,
+				sp.GetRequiredService<IFolderIndexer>(),
 				indexState,
 				sp.GetRequiredService<IVectorizer>() as IEmbeddingHealthCheck,
 				TimeSpan.FromSeconds(config.Indexing.FailedIndexRetryIntervalSeconds));

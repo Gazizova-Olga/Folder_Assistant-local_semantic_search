@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using FluentAssertions;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
@@ -10,8 +9,9 @@ namespace FolderAssistant.Tests;
 
 /// <summary>
 /// Indexing moved off the startup path, so the guarantee "the host is up, therefore the index is
-/// populated" no longer holds. These cover what replaced it: a state a reader can consult, and a
-/// retrieval path that refuses rather than answering from an index that is not finished.
+/// populated" no longer holds. These cover what replaced it: a state a reader can consult, a
+/// retrieval path that refuses rather than answering from an index that is not finished, and a
+/// front end that starts only once the whole-folder pass has succeeded.
 /// </summary>
 public sealed class BackgroundIndexingTests
 {
@@ -28,7 +28,7 @@ public sealed class BackgroundIndexingTests
 	public async Task A_Completed_Pass_Makes_The_Index_Queryable()
 	{
 		IndexState state = new();
-		using FolderIndexingService service = new(() => EmptyResult, changeFeed: null, state);
+		using FolderIndexingService service = new(() => EmptyResult, indexer: null, state);
 
 		await service.StartAsync(CancellationToken.None);
 		await service.ExecuteTask!;
@@ -47,7 +47,7 @@ public sealed class BackgroundIndexingTests
 	{
 		InvalidOperationException failure = new("the scan could not read the folder");
 		IndexState state = new();
-		using FolderIndexingService service = new(() => throw failure, changeFeed: null, state);
+		using FolderIndexingService service = new(() => throw failure, indexer: null, state);
 
 		await service.StartAsync(CancellationToken.None);
 		await service.ExecuteTask!;
@@ -65,7 +65,7 @@ public sealed class BackgroundIndexingTests
 	public async Task A_Failed_Pass_Does_Not_Fault_The_Host()
 	{
 		IndexState state = new();
-		using FolderIndexingService service = new(() => throw new IOException("locked"), changeFeed: null, state);
+		using FolderIndexingService service = new(() => throw new IOException("locked"), indexer: null, state);
 
 		await service.StartAsync(CancellationToken.None);
 
@@ -129,64 +129,108 @@ public sealed class BackgroundIndexingTests
 		Search(state).Should().BeEmpty();
 	}
 
+	// ── The front end starts after the pass, and only then ────────────────────
+
 	/// <summary>
-	/// A signal from the feed runs another pass. Without this the index is correct exactly once, at
-	/// startup, and drifts from the folder from the first edit onwards.
+	/// The whole-folder pass runs first and once; the front end takes over after it. Started before a
+	/// successful pass, its first reconciliation would find an empty index and queue every file for
+	/// delivery beside the pass embedding them — the two writers of the file table overlapping, which
+	/// is exactly what the order exists to prevent.
 	/// </summary>
 	[Fact]
-	public async Task A_Change_Signal_Runs_Another_Pass()
+	public async Task The_Front_End_Starts_Once_The_First_Pass_Has_Succeeded_And_Not_Before()
 	{
-		using StubChangeFeed feed = new();
+		Int32 attempts = 0;
+		StubIndexer indexer = new();
 		IndexState state = new();
-		Int32 passes = 0;
 
 		using FolderIndexingService service = new(
-			() =>
-			{
-				Interlocked.Increment(ref passes);
-				return EmptyResult;
-			},
-			feed,
-			state);
+			() => ++attempts < 3 ? throw new IOException("the embedding backend is not up yet") : EmptyResult,
+			indexer,
+			state,
+			healthCheck: null,
+			failedRetryInterval: TimeSpan.FromMilliseconds(20));
 
 		await service.StartAsync(CancellationToken.None);
-		await feed.Started;
+		await FinishedWithin(service);
 
-		feed.Signal("a file changed");
+		attempts.Should().Be(3);
+		indexer.Starts.Should().Be(1, "the front end is started by the attempt that succeeded, not by the ones before it");
+		state.Status.Should().Be(IndexStatus.Ready);
+	}
 
-		await WaitUntil(() => Volatile.Read(ref passes) >= 2);
+	[Fact]
+	public async Task A_First_Pass_That_Keeps_Failing_Never_Starts_The_Front_End()
+	{
+		StubIndexer indexer = new();
+		IndexState state = new();
 
-		Volatile.Read(ref passes).Should().BeGreaterThanOrEqualTo(2);
+		using FolderIndexingService service = new(
+			() => throw new IOException("the folder is locked"),
+			indexer,
+			state,
+			healthCheck: null,
+			failedRetryInterval: TimeSpan.Zero);
+
+		await service.StartAsync(CancellationToken.None);
+		await FinishedWithin(service);
+
+		indexer.Starts.Should().Be(0);
+		state.Status.Should().Be(IndexStatus.Failed);
 	}
 
 	/// <summary>
-	/// A refresh that fails leaves the index serving. The stored vectors are going stale, not
-	/// missing, and refusing every query because the folder was briefly unreadable takes a working
-	/// feature out of service for a condition the next pass will clear on its own.
+	/// The front end is part of the attempt, not something done after it. Declaring the index ready
+	/// and then failing to start the front end would leave an index that answers and has quietly
+	/// stopped following the folder — worse than one still building, because nothing reports it.
 	/// </summary>
 	[Fact]
-	public async Task A_Failed_Refresh_Keeps_The_Existing_Index_Queryable()
+	public async Task A_Front_End_That_Cannot_Start_Fails_The_Attempt_And_Is_Tried_Again()
 	{
-		using StubChangeFeed feed = new();
-		IndexState state = new();
 		Int32 passes = 0;
+		Int32 starts = 0;
+		IndexState state = new();
+
+		StubIndexer indexer = new(onStart: () =>
+		{
+			if (++starts < 2)
+			{
+				throw new IOException("the folder could not be compared against the index");
+			}
+		});
 
 		using FolderIndexingService service = new(
-			() => Interlocked.Increment(ref passes) > 1
-				? throw new IOException("the folder went away")
-				: EmptyResult,
-			feed,
-			state);
+			() => { passes++; return EmptyResult; },
+			indexer,
+			state,
+			healthCheck: null,
+			failedRetryInterval: TimeSpan.FromMilliseconds(20));
 
 		await service.StartAsync(CancellationToken.None);
-		await WaitUntil(() => state.Status == IndexStatus.Ready);
+		await FinishedWithin(service);
 
-		await feed.Started;
-		feed.Signal("a file changed");
-
-		await WaitUntil(() => Volatile.Read(ref passes) >= 2);
-
+		starts.Should().Be(2);
+		passes.Should().Be(2, "the attempt is the pass and the start together, and a failed one is repeated whole");
 		state.Status.Should().Be(IndexStatus.Ready);
+	}
+
+	[Fact]
+	public async Task Stopping_The_Service_Stops_The_Front_End()
+	{
+		StubIndexer indexer = new();
+		IndexState state = new();
+
+		using FolderIndexingService service = new(() => EmptyResult, indexer, state);
+
+		await service.StartAsync(CancellationToken.None);
+		await FinishedWithin(service);
+
+		indexer.IsRunning.Should().BeTrue();
+
+		await service.StopAsync(CancellationToken.None);
+
+		indexer.IsRunning.Should().BeFalse();
+		indexer.Stops.Should().Be(1);
 	}
 
 	/// <summary>
@@ -232,18 +276,6 @@ public sealed class BackgroundIndexingTests
 		state.Status.Should().Be(IndexStatus.Failed);
 	}
 
-	private static async Task WaitUntil(Func<Boolean> condition)
-	{
-		DateTime deadline = DateTime.UtcNow.AddSeconds(5);
-
-		while (!condition() && DateTime.UtcNow < deadline)
-		{
-			await Task.Delay(10);
-		}
-	}
-
-	/// <summary>A feed the test drives directly, so no filesystem timing is involved.</summary>
-
 	// ── A failed first index is not permanent ─────────────────────────────────
 
 	/// <summary>
@@ -260,7 +292,7 @@ public sealed class BackgroundIndexingTests
 
 		using FolderIndexingService service = new(
 			() => ++attempts < 3 ? throw new IOException("the embedding backend is not up yet") : EmptyResult,
-			changeFeed: null,
+			indexer: null,
 			state,
 			healthCheck: null,
 			failedRetryInterval: TimeSpan.FromMilliseconds(20));
@@ -293,7 +325,7 @@ public sealed class BackgroundIndexingTests
 
 		using FolderIndexingService service = new(
 			() => { passes++; return EmptyResult; },
-			changeFeed: null,
+			indexer: null,
 			state,
 			probe,
 			TimeSpan.FromMilliseconds(20));
@@ -322,7 +354,7 @@ public sealed class BackgroundIndexingTests
 
 		using FolderIndexingService service = new(
 			() => ++attempts < 3 ? throw new IOException("the folder is locked") : EmptyResult,
-			changeFeed: null,
+			indexer: null,
 			state,
 			probe,
 			TimeSpan.FromMilliseconds(20));
@@ -346,7 +378,7 @@ public sealed class BackgroundIndexingTests
 
 		using FolderIndexingService service = new(
 			() => { attempts++; throw new IOException("the folder is locked"); },
-			changeFeed: null,
+			indexer: null,
 			state,
 			healthCheck: null,
 			failedRetryInterval: TimeSpan.Zero);
@@ -370,7 +402,7 @@ public sealed class BackgroundIndexingTests
 
 		using FolderIndexingService service = new(
 			() => throw new IOException("the folder is locked"),
-			changeFeed: null,
+			indexer: null,
 			state,
 			healthCheck: null,
 			failedRetryInterval: TimeSpan.FromMinutes(5));
@@ -415,23 +447,55 @@ public sealed class BackgroundIndexingTests
 		}
 	}
 
-	private sealed class StubChangeFeed : IFileChangeFeed
+	/// <summary>A front end that only records whether it was started and stopped.</summary>
+	private sealed class StubIndexer(Action? onStart = null) : IFolderIndexer
 	{
-		private readonly Channel<FolderChangeSignal> _channel = Channel.CreateUnbounded<FolderChangeSignal>();
-		private readonly TaskCompletionSource _started =
-			new(TaskCreationOptions.RunContinuationsAsynchronously);
+		public Int32 Starts { get; private set; }
 
-		/// <summary>Completes when the service has started the feed, which it does after its first pass.</summary>
-		public Task Started => this._started.Task;
+		public Int32 Stops { get; private set; }
 
-		public void Start() => this._started.TrySetResult();
+		public Boolean IsRunning { get; private set; }
 
-		public void Signal(String reason) => this._channel.Writer.TryWrite(new FolderChangeSignal(reason));
+		public Task StartAsync(CancellationToken cancellationToken = default)
+		{
+			this.Starts++;
+			onStart?.Invoke();
+			this.IsRunning = true;
 
-		public IAsyncEnumerable<FolderChangeSignal> ReadAllAsync(CancellationToken cancellationToken)
-			=> this._channel.Reader.ReadAllAsync(cancellationToken);
+			return Task.CompletedTask;
+		}
 
-		public void Dispose() => this._channel.Writer.TryComplete();
+		public Task StopAsync(CancellationToken cancellationToken = default)
+		{
+			if (this.IsRunning)
+			{
+				this.Stops++;
+				this.IsRunning = false;
+			}
+
+			return Task.CompletedTask;
+		}
+
+		public ValueTask NotifyCreatedAsync(String absolutePath, CancellationToken cancellationToken = default)
+			=> ValueTask.CompletedTask;
+
+		public ValueTask NotifyChangedAsync(String absolutePath, CancellationToken cancellationToken = default)
+			=> ValueTask.CompletedTask;
+
+		public ValueTask NotifyDeletedAsync(String absolutePath, CancellationToken cancellationToken = default)
+			=> ValueTask.CompletedTask;
+
+		public IDisposable BeginBatch() => new NoHold();
+
+		public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+		private sealed class NoHold : IDisposable
+		{
+			public void Dispose()
+			{
+				// Nothing was held.
+			}
+		}
 	}
 
 	private static readonly IndexingResult EmptyResult = new(0, 0, 0, 0, 0, 0);

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.15.0 |
+| Version | 0.16.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -197,48 +197,37 @@ decided when the hosted-service factory executes, which is after the configurati
 
 ### Keeping up with the folder
 
-After the first pass, a change feed drives the rest. `IFileChangeFeed` emits
-`FolderChangeSignal(Reason)`.
+After the first pass, the file-indexing front end keeps the index in step with the folder
+([SPEC-121](SPEC-121-file-indexing-front-end.md)): a debounced watcher, a periodic comparison as
+the safety net for what the watcher never reports, a durable outbox, and a dispatcher that delivers
+one changed file at a time to the embedding side. Nothing described here runs a second whole-folder
+pass: the corpus pipeline runs **once**, at start.
 
-**The signal is deliberately coarse.** It names no file, and a consumer cannot learn from it what
-was edited. A pass rescans and diffs by content hash regardless, so per-file detail would be
-gathered, carried and then ignored — while making the feed answerable for being complete and
-correct about a set of events that cannot be obtained reliably in the first place.
+**The first pass stays, and runs first.** A corpus-fitted embedder has to see the entire corpus
+before it can embed anything, and a cold folder is cheapest to embed in one batched pass. The front
+end starts only after that pass has succeeded, and the pass never runs again while the front end
+runs. That ordering is the whole of how the two writers of the file table are kept apart: the pass
+writes and deletes rows wholesale, and one overlapping a delivery could take a just-written file's
+chunks with it ([SPEC-121](SPEC-121-file-indexing-front-end.md), the sharp edge).
 
-That is what makes the feed survivable on top of a filesystem watcher, which is unreliable in two
-specific ways:
+**Readiness takes all three.** An attempt is the probe, the pass, and the start of the front end —
+which compares the folder against the index once itself before its loops run, cheaply, since after
+the pass every file it finds is already recorded. The index is `Ready` only after all three. A front
+end that could not start fails the attempt and is retried like anything else: a ready index that had
+quietly stopped following the folder would be worse than one still building, because nothing would
+report it.
 
-- its internal buffer overflows under a burst and the events in it are lost, so an overflow is
-  reported as "assume everything changed" rather than as an attempt to reconstruct what went
-  missing;
-- an editor saving atomically writes a temporary file and renames it over the original, which
-  arrives as delete-then-create rather than as a change — so a feed describing the edit would
-  describe the wrong thing, while a feed that only says "look again" is right either way.
-
-**A burst collapses into one pass.** Signals are debounced, and the pending signal is held in a
-one-slot channel that drops writes when full: ten edits cost one pass, not ten identical ones.
-
-**A periodic rescan backstops the watcher**, for anything it never reported at all.
-
-**Passes are serialized.** The next signal is not read until the current pass returns, so two
-passes cannot write over each other however quickly the folder is being edited.
-
-### The watcher must ignore the metadata folder
-
-The folder database lives inside the analyzed folder, so every pass writes files the watcher can
-see. Unfiltered, each pass would trigger the next one and the folder would index for as long as
-the process ran. Build and VCS directories (`bin`, `obj`, `.git`, `.vs`, `node_modules`) are
-ignored as well.
-
-The configured metadata folder name is passed to the feed rather than assumed, so changing it
-does not quietly reopen the loop.
+What the front end promises — a burst of edits costing one delivery, a change reported by a writer
+inside this process, a hold for a multi-step edit, the metadata folder never indexing itself — is
+specified there rather than here.
 
 ### Configuration
 
-- `LlmAgent:Indexing:WatchEnabled` (default `true`) — watch the folder and re-index on change.
-- `LlmAgent:Indexing:DebounceMilliseconds` (default `750`) — quiet period after a file event.
-- `LlmAgent:Indexing:ReconciliationIntervalSeconds` (default `300`) — periodic full rescan. Zero
-  disables it.
+- `FolderAssistant:Indexing:DebounceMilliseconds` (default `750`) — how long a changed file must
+  go untouched before its change is processed.
+- `FolderAssistant:Indexing:ReconciliationIntervalSeconds` (default `300`) — how often the front
+  end compares the whole folder against the index. Zero disables it; the comparison at start still
+  runs.
 
 ## The embed window
 
@@ -335,14 +324,17 @@ trust.
 - **Fit reuse** — editing a file does not silently refit an existing corpus-fitted model.
 - **Readiness** — retrieval refuses while the first index builds and after a failed build; a
   failed refresh leaves a ready index serving, and unmarked.
-- **Background service** — the initial pass moves `Building` to `Ready`; a change signal runs
-  another pass; a failed pass does not fault the host.
-- **Change feed** — an edit produces a signal; writes inside the metadata folder produce none, for
-  the default name *and* a configured one; build output is ignored; a burst collapses into one
-  signal; the periodic tick fires with no file event, and a zero interval disables it.
-- **The watcher end to end** — a real filesystem event reaching a real re-index, asserting that
-  indexing *stops*. Asserting on file counts alone does not catch a self-triggering loop: it
-  re-indexes the same files and leaves the counts and the status looking correct.
+- **Background service** — the initial pass moves `Building` to `Ready`; the front end starts once
+  the first pass has succeeded and not before; a front end that cannot start fails the attempt and
+  is tried again, pass included; stopping the service stops it; a failed pass does not fault the
+  host.
+- **End to end** — a whole-folder pass, then a file written to the folder is embedded and a deleted
+  one's vectors go, with nothing in the test calling any stage; and the outbox goes quiet once the
+  folder does, with no queued operation ever naming the metadata folder. That last assertion is the
+  one that catches the index feeding itself, which file counts alone do not: a self-triggering loop
+  re-indexes the same files and leaves every count looking correct. The same path is driven once
+  more through the real composition root, since a registration that resolved the wrong thing would
+  boot and serve while the folder quietly stopped being followed.
 - **Scanner filters** — a file over `MaxTextFileSizeBytes` is excluded and one exactly on the
   limit is kept; `bin`, `obj`, `.git`, `.vs`, `node_modules` and the metadata folder are not
   scanned, nested or otherwise; an extension outside the allowlist is excluded; empty and

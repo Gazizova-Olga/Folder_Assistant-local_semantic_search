@@ -4,7 +4,8 @@ using Microsoft.Extensions.Hosting;
 namespace FolderAssistant.Indexing;
 
 /// <summary>
-/// Runs the folder index off the startup path.
+/// Runs the folder index off the startup path: one whole-folder pass, and then the front end that
+/// keeps the index in step with the folder.
 ///
 /// <para>
 /// Indexing used to run inline before the web host was built, so startup blocked for as long as a
@@ -16,25 +17,33 @@ namespace FolderAssistant.Indexing;
 /// </para>
 ///
 /// <para>
-/// After the first pass it keeps indexing from the change feed. Passes are serialized by the loop
-/// itself: the next signal is not read until the current pass returns, so two passes cannot write
-/// over each other however quickly the folder is being edited.
+/// <strong>The whole-folder pass comes first and runs once.</strong> A corpus-fitted embedder has to
+/// see the entire corpus before it can embed anything, and a cold folder is cheapest to embed in one
+/// batched pass. After it the front end (<see cref="IFolderIndexer"/>) takes over — it watches,
+/// reconciles and delivers one changed file at a time — and nothing runs the whole-folder pass again
+/// while it runs. That ordering is what keeps the two writers of the file table apart: the pass
+/// writes and deletes rows wholesale, and one overlapping a delivery could take a just-written
+/// file's chunks with it.
 /// </para>
 /// </summary>
 internal sealed class FolderIndexingService : BackgroundService
 {
 	private readonly Func<IndexingResult> _runIndex;
-	private readonly IFileChangeFeed? _changeFeed;
+	private readonly IFolderIndexer? _indexer;
 	private readonly IndexState _state;
 	private readonly IEmbeddingHealthCheck? _healthCheck;
 	private readonly TimeSpan _failedRetryInterval;
 
 	private Boolean _probePassed;
 
-	/// <summary>
-	/// <paramref name="healthCheck"/> is null for every in-process embedder — they cannot be
-	/// unreachable, so there is nothing to probe and the first pass simply begins.
-	/// </summary>
+	/// <param name="indexer">
+	/// The front end, started once the first pass has succeeded and stopped with the host. Null runs
+	/// the pass alone, for a caller that wants nothing incremental.
+	/// </param>
+	/// <param name="healthCheck">
+	/// Null for every in-process embedder — they cannot be unreachable, so there is nothing to probe
+	/// and the first pass simply begins.
+	/// </param>
 	/// <param name="failedRetryInterval">
 	/// How long to wait before trying a failed first pass again. Zero, the default here, means the
 	/// first attempt is the only one — a caller says how long it wants to keep trying rather than
@@ -42,7 +51,7 @@ internal sealed class FolderIndexingService : BackgroundService
 	/// </param>
 	public FolderIndexingService(
 		Func<IndexingResult> runIndex,
-		IFileChangeFeed? changeFeed,
+		IFolderIndexer? indexer,
 		IndexState state,
 		IEmbeddingHealthCheck? healthCheck = null,
 		TimeSpan failedRetryInterval = default)
@@ -51,60 +60,49 @@ internal sealed class FolderIndexingService : BackgroundService
 		ArgumentNullException.ThrowIfNull(state);
 
 		this._runIndex = runIndex;
-		this._changeFeed = changeFeed;
+		this._indexer = indexer;
 		this._state = state;
 		this._healthCheck = healthCheck;
 		this._failedRetryInterval = failedRetryInterval;
 	}
 
-	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+	protected override Task ExecuteAsync(CancellationToken stoppingToken)
+		=> this.RunFirstPassUntilItSucceedsAsync(stoppingToken);
+
+	public override async Task StopAsync(CancellationToken cancellationToken)
 	{
-		await this.RunFirstPassUntilItSucceedsAsync(stoppingToken).ConfigureAwait(false);
+		// The attempt loop is told to stop before the front end is, never after: the front end is
+		// started at the end of a successful attempt, and stopping it while one could still start it
+		// would leave it running past the host.
+		await base.StopAsync(cancellationToken).ConfigureAwait(false);
 
-		if (this._changeFeed is null)
+		if (this._indexer is not null)
 		{
-			return;
-		}
-
-		// Started after the first pass, not before it: signals raised while that pass was running
-		// would describe a folder it has already read.
-		this._changeFeed.Start();
-
-		try
-		{
-			await foreach (FolderChangeSignal signal in
-				this._changeFeed.ReadAllAsync(stoppingToken).ConfigureAwait(false))
-			{
-				await this.IndexAsync(signal.Reason, stoppingToken).ConfigureAwait(false);
-			}
-		}
-		catch (OperationCanceledException)
-		{
-			// The host is shutting down.
+			await this._indexer.StopAsync(cancellationToken).ConfigureAwait(false);
 		}
 	}
 
 	/// <summary>
-	/// Runs the first pass, and keeps running it while it fails.
+	/// Runs the first attempt, and keeps running it while it fails.
 	///
 	/// <para>
-	/// What fails a first pass is usually outside this process and usually temporary: an embedding
+	/// What fails a first index is usually outside this process and usually temporary: an embedding
 	/// backend still starting, a model still being pulled. Without this the state says
 	/// <see cref="IndexStatus.Failed"/> for the life of the process, a search refuses for as long,
 	/// and the fix is to restart an application that would have recovered by itself a minute later.
 	/// </para>
 	///
 	/// <para>
-	/// The probe is not repeated once it has passed. A pass can fail on either side of it, and
+	/// The probe is not repeated once it has passed. An attempt can fail on either side of it, and
 	/// re-asking a backend that already answered costs a round trip for an answer that will not have
-	/// changed — where the pass that failed after it is the part worth trying again.
+	/// changed — where the part that failed after it is the part worth trying again.
 	/// </para>
 	/// </summary>
 	private async Task RunFirstPassUntilItSucceedsAsync(CancellationToken stoppingToken)
 	{
 		while (!stoppingToken.IsCancellationRequested)
 		{
-			await this.IndexAsync("startup", stoppingToken, probeFirst: true).ConfigureAwait(false);
+			await this.AttemptAsync(stoppingToken).ConfigureAwait(false);
 
 			if (this._state.Status != IndexStatus.Failed || this._failedRetryInterval <= TimeSpan.Zero)
 			{
@@ -125,15 +123,16 @@ internal sealed class FolderIndexingService : BackgroundService
 		}
 	}
 
-	private async Task IndexAsync(String reason, CancellationToken cancellationToken, Boolean probeFirst = false)
+	/// <summary>
+	/// One attempt at bringing the index to <see cref="IndexStatus.Ready"/>: the probe, the pass, and
+	/// the start of the front end. All three have to succeed.
+	/// </summary>
+	private async Task AttemptAsync(CancellationToken cancellationToken)
 	{
 		try
 		{
-			if (probeFirst && !this._probePassed && this._healthCheck is not null)
+			if (!this._probePassed && this._healthCheck is not null)
 			{
-				// Before the first pass, not before every one: a backend that was reachable at startup
-				// and has since died fails per file anyway, and re-probing on each refresh would add a
-				// round-trip to every edit for an answer that is almost always yes.
 				await this._healthCheck.CheckAsync(cancellationToken).ConfigureAwait(false);
 
 				this._probePassed = true;
@@ -143,12 +142,22 @@ internal sealed class FolderIndexingService : BackgroundService
 			// what keeps it off the thread the host is starting on.
 			IndexingResult result = await Task.Run(this._runIndex, cancellationToken).ConfigureAwait(false);
 
-			this._state.MarkReady(DateTime.UtcNow);
-
 			Console.WriteLine(
-				$"Indexing ({reason}): scanned={result.FilesScanned}, indexed={result.FilesIndexed}, " +
+				$"Initial index: scanned={result.FilesScanned}, indexed={result.FilesIndexed}, " +
 				$"unchanged={result.FilesUnchanged}, deleted={result.FilesDeleted}, " +
 				$"chunks={result.ChunksIndexed}, vectors={result.VectorsIndexed}");
+
+			// After the pass and before the index is declared ready. A front end that could not start
+			// fails the attempt, and the attempt is tried again — where declaring the index ready first
+			// would leave one that answers and has quietly stopped following the folder. It compares the
+			// folder against the index once itself before its loops run, which after the pass is cheap:
+			// every file it finds is already recorded.
+			if (this._indexer is not null && !this._indexer.IsRunning)
+			{
+				await this._indexer.StartAsync(cancellationToken).ConfigureAwait(false);
+			}
+
+			this._state.MarkReady(DateTime.UtcNow);
 		}
 		catch (OperationCanceledException)
 		{
@@ -158,13 +167,11 @@ internal sealed class FolderIndexingService : BackgroundService
 		}
 		catch (Exception ex)
 		{
-			// Nothing else observes this pass. A background failure that only writes to a log leaves
+			// Nothing else observes this attempt. A background failure that only writes to a log leaves
 			// retrieval answering as though the index were merely empty, so the state carries it.
-			// Keeping a failed refresh from tearing down a serving index is MarkFailed's job, not a
-			// branch here: it refuses to leave Ready, so both callers report unconditionally.
 			this._state.MarkFailed(ex);
 
-			Console.WriteLine($"Indexing ({reason}) failed: {ex.Message}");
+			Console.WriteLine($"Initial index failed: {ex.Message}");
 		}
 	}
 }

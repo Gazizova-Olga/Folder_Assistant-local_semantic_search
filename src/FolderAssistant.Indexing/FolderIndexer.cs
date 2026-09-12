@@ -50,6 +50,7 @@ public sealed class FolderIndexer : IFolderIndexer
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
 
     private volatile Running? _running;
+    private int _disposed;
 
     /// <param name="index">Where file records live. The application supplies it; see <see cref="IIndexStore"/>.</param>
     /// <param name="outbox">Where deliveries queue. Usually the same object as <paramref name="index"/>, and must be the same database.</param>
@@ -161,7 +162,23 @@ public sealed class FolderIndexer : IFolderIndexer
     /// <inheritdoc/>
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Stopping something already disposed is nothing to do, not a fault. Disposal stops the loops
+        // itself, and a host can reach here afterwards: one that runs the application's own entry
+        // point beside its own shutdown disposes the container while a hosted service is still being
+        // told to stop, and that stop arrives here after the semaphore below is gone.
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
 
         try
         {
@@ -226,7 +243,12 @@ public sealed class FolderIndexer : IFolderIndexer
     {
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
 
-        _lifecycle.Dispose();
+        // Once. The container disposes an object once per service type it was registered under, and
+        // the second pass would otherwise dispose a semaphore the first already had.
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _lifecycle.Dispose();
+        }
     }
 
     /// <summary>

@@ -42,7 +42,7 @@ you want for anything you would not commit:
 {
   "FolderAssistant": {
     "Persistence": { "AnalyzedFolderPath": "C:/some/folder" },
-    "Indexing": { "Enabled": true, "WatchEnabled": true }
+    "Indexing": { "Enabled": true }
   }
 }
 ```
@@ -63,8 +63,8 @@ dotnet run --project FolderAssistant
 ```
 
 **This writes to the folder it is pointed at.** It creates a `.folderassistant/` directory
-holding a SQLite database, indexes every text file it finds, and then keeps watching the folder
-and re-indexing when anything changes — until you stop it. With no configuration that folder is
+holding a SQLite database, indexes every text file it finds, and then keeps the index in step with
+the folder — watching for changes and re-embedding each changed file — until you stop it. With no configuration that folder is
 the working directory, so run it from somewhere you meant.
 
 The database is derived state: deleting `.folderassistant/` and running again rebuilds it.

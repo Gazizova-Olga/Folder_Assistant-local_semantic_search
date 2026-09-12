@@ -102,11 +102,13 @@ delivers one changed file at a time to the embedding pipeline with retry and bac
 A writer inside this process reports what it changed instead of waiting to be told about it
 (`IIndexChangeNotifier`), which is latency the discovery round-trip has no reason to cost.
 
-**Every seam has an implementation, and the library composes its own loops** (`FolderIndexer`,
-`SPEC-121`) — **the application does not start it yet.** The whole-folder pass and the outbox
-front end each write `file_manifest`, and how they share it is settled with that wiring rather than
-before it. The assembly boundary is one-way on purpose: the library knows nothing of chunking,
-embedding or retrieval and cannot come to depend on them by accident.
+**It is live.** The library composes its own loops (`FolderIndexer`, `SPEC-121`) and the
+application starts them once its whole-folder pass has succeeded — the pass runs first and once,
+never while the front end runs, which is how the two writers of `file_manifest` are kept apart. A
+front end that cannot start fails the attempt, pass included, rather than leaving a ready index
+that has quietly stopped following the folder. The assembly boundary is one-way on purpose: the
+library knows nothing of chunking, embedding or retrieval and cannot come to depend on them by
+accident.
 
 The change signal is deliberately coarse — the consumer re-diffs by content hash — which
 makes it robust against the two ways filesystem watching is unreliable: dropped events on

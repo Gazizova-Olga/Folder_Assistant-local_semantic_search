@@ -165,12 +165,9 @@ internal record IndexingConfig
 	/// </summary>
 	public Int32 OllamaEmbeddingDimension { get; init; } = 1024;
 
-	/// <summary>Watch the analyzed folder and re-index when it changes.</summary>
-	public Boolean WatchEnabled { get; init; } = true;
-
 	/// <summary>
-	/// Quiet period after a file event before a pass runs, so a burst of edits costs one pass rather
-	/// than one per event.
+	/// How long a changed file must go untouched before its change is processed, so a burst of edits to
+	/// one file costs one delivery rather than one per event.
 	/// </summary>
 	public Int32 DebounceMilliseconds { get; init; } = 750;
 
@@ -184,9 +181,9 @@ internal record IndexingConfig
 	public Int32 FailedIndexRetryIntervalSeconds { get; init; } = 30;
 
 	/// <summary>
-	/// Periodic full rescan, as a safety net for changes the watcher never reports — events dropped
-	/// when its buffer overflows, and edits that arrive in a shape it does not recognise. Zero
-	/// disables it.
+	/// How often the folder is compared in full against the index, as a safety net for changes the
+	/// watcher never reports — events dropped when its buffer overflows, and edits that arrive in a
+	/// shape it does not recognise. Zero disables it; the comparison at start still runs.
 	/// </summary>
 	public Int32 ReconciliationIntervalSeconds { get; init; } = 300;
 }
