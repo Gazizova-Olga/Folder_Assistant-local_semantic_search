@@ -1,5 +1,6 @@
 using System.Text;
 using FluentAssertions;
+using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
 using FolderAssistant.Persistence;
 using Microsoft.Data.Sqlite;
@@ -203,6 +204,184 @@ public sealed class FolderIndexingPipelineTests
 
 		new FileInfo(database.DatabasePath + "-wal").Length.Should().Be(0);
 		Count(reader, "SELECT COUNT(*) FROM file_manifest;").Should().Be(50, "the checkpoint reclaims disk and changes nothing stored");
+	}
+
+	// ── the embed window ──────────────────────────────────────────────────────
+
+	/// <summary>
+	/// The window exists to bound memory, and it is allowed to cut anywhere precisely because cutting
+	/// changes nothing that is stored: every chunk is embedded independently of the others sharing its
+	/// call. If that were ever untrue, the window would silently become a correctness knob — the same
+	/// folder would index to different vectors depending on a number chosen for memory reasons, and
+	/// nothing at query time could tell.
+	/// </summary>
+	[Fact]
+	public void The_Embed_Window_Does_Not_Change_A_Single_Stored_Vector()
+	{
+		Dictionary<String, Byte[]> oneAtATime = VectorsIndexedWithWindow(1);
+		Dictionary<String, Byte[]> wholeCorpusAtOnce = VectorsIndexedWithWindow(1000);
+		Dictionary<String, Byte[]> defaultWindow = VectorsIndexedWithWindow(new IndexingConfig().EmbeddingBatchSizeChunks);
+
+		oneAtATime.Should().NotBeEmpty("the corpus has to produce vectors for the comparison to mean anything");
+		oneAtATime.Keys.Should().BeEquivalentTo(wholeCorpusAtOnce.Keys).And.BeEquivalentTo(defaultWindow.Keys);
+
+		foreach ((String chunkId, Byte[] vector) in oneAtATime)
+		{
+			wholeCorpusAtOnce[chunkId].Should().Equal(vector, "the window may not move a stored vector");
+			defaultWindow[chunkId].Should().Equal(vector, "and the shipped default may not either");
+		}
+	}
+
+	/// <summary>
+	/// Chunks are gathered across files, not flushed at each file boundary. Per file, a folder of small
+	/// files costs one round trip each — and for an embedder reached over a socket the call count is
+	/// very nearly the whole cost of a first index.
+	/// </summary>
+	[Fact]
+	public void Chunks_Are_Gathered_Across_Files_Rather_Than_Flushed_Per_File()
+	{
+		using TempFolder folder = new();
+
+		for (Int32 i = 0; i < 12; i++)
+		{
+			File.WriteAllText(folder.Combine($"file{i:D2}.txt"), $"document number {i} with a little text", Encoding.UTF8);
+		}
+
+		RecordingVectorizer vectorizer = new(new ProgrammableEmbeddingVectorizer("programmable-v1", 32));
+
+		Index(folder, vectorizer, windowSize: 64);
+
+		vectorizer.BatchSizes.Should().ContainSingle(
+			"twelve one-chunk files fit inside one window, so they should cost one call rather than twelve");
+		vectorizer.BatchSizes[0].Should().Be(12);
+	}
+
+	/// <summary>
+	/// A window of one is the per-file behaviour this replaced, and it stays reachable: an embedder that
+	/// cannot take a large array, or a machine where holding one window of text is already too much,
+	/// needs a way back.
+	/// </summary>
+	[Fact]
+	public void A_Window_Of_One_Embeds_Each_Chunk_On_Its_Own()
+	{
+		using TempFolder folder = new();
+
+		for (Int32 i = 0; i < 5; i++)
+		{
+			File.WriteAllText(folder.Combine($"file{i}.txt"), $"document number {i}", Encoding.UTF8);
+		}
+
+		RecordingVectorizer vectorizer = new(new ProgrammableEmbeddingVectorizer("programmable-v1", 32));
+
+		Index(folder, vectorizer, windowSize: 1);
+
+		vectorizer.BatchSizes.Should().HaveCount(5).And.OnlyContain(size => size == 1);
+	}
+
+	/// <summary>
+	/// A window below one is meaningless, and the two nonsense values fail differently without a clamp:
+	/// zero already behaves as one, because the flush test fires as soon as anything is pending, while a
+	/// negative throws out of the buffer's capacity argument. Both are normalised to the per-chunk
+	/// behaviour rather than one of them taking the whole pass down.
+	/// </summary>
+	[Theory]
+	[InlineData(0)]
+	[InlineData(-1)]
+	public void A_Window_Below_One_Falls_Back_To_A_Chunk_At_A_Time(Int32 windowSize)
+	{
+		using TempFolder folder = new();
+
+		for (Int32 i = 0; i < 4; i++)
+		{
+			File.WriteAllText(folder.Combine($"file{i}.txt"), $"document number {i}", Encoding.UTF8);
+		}
+
+		RecordingVectorizer vectorizer = new(new ProgrammableEmbeddingVectorizer("programmable-v1", 32));
+
+		Index(folder, vectorizer, windowSize);
+
+		vectorizer.BatchSizes.Should().HaveCount(4).And.OnlyContain(size => size == 1);
+	}
+
+	private static Dictionary<String, Byte[]> VectorsIndexedWithWindow(Int32 windowSize)
+	{
+		using TempFolder folder = new();
+
+		// Several files, several chunks each, so that a window can fall inside a file as well as between
+		// two — the boundary the per-file version could never produce.
+		for (Int32 i = 0; i < 7; i++)
+		{
+			File.WriteAllText(
+				folder.Combine($"file{i}.txt"),
+				String.Join(' ', Enumerable.Range(0, 40).Select(word => $"file{i}word{word}")),
+				Encoding.UTF8);
+		}
+
+		String databasePath = Index(
+			folder,
+			new ProgrammableEmbeddingVectorizer("programmable-v1", 32),
+			windowSize,
+			chunkSizeTokens: 8,
+			chunkOverlapTokens: 2);
+
+		Dictionary<String, Byte[]> vectors = new(StringComparer.Ordinal);
+
+		using SqliteConnection connection = new($"Data Source={databasePath}");
+		connection.Open();
+
+		using SqliteCommand command = connection.CreateCommand();
+		command.CommandText = "SELECT chunk_id, vector FROM chunk_vector ORDER BY chunk_id;";
+
+		using SqliteDataReader reader = command.ExecuteReader();
+		while (reader.Read())
+		{
+			vectors[reader.GetString(0)] = (Byte[])reader["vector"];
+		}
+
+		return vectors;
+	}
+
+	private static String Index(
+		TempFolder folder,
+		IVectorizer vectorizer,
+		Int32 windowSize,
+		Int32 chunkSizeTokens = 256,
+		Int32 chunkOverlapTokens = 32)
+	{
+		DatabaseBootstrapResult database = new FolderDatabaseBootstrapper()
+			.EnsureInitialized(folder.Path, new PersistenceConfig());
+
+		new FolderIndexingPipeline(vectorizer).Run(
+			folder.Path,
+			database.DatabasePath,
+			new IndexingConfig
+			{
+				ChunkSizeTokens = chunkSizeTokens,
+				ChunkOverlapTokens = chunkOverlapTokens,
+				VectorDimension = 32,
+				ModelVersionId = "programmable-v1",
+				EmbeddingBatchSizeChunks = windowSize,
+			});
+
+		return database.DatabasePath;
+	}
+
+	/// <summary>Passes everything through, and records how many texts each call was handed.</summary>
+	private sealed class RecordingVectorizer(IVectorizer inner) : IVectorizer
+	{
+		public List<Int32> BatchSizes { get; } = [];
+
+		public ModelDescriptor Descriptor => inner.Descriptor;
+
+		public ValueTask<IReadOnlyList<EmbeddingResult>> VectorizeAsync(
+			IReadOnlyList<String> texts,
+			EmbeddingKind kind,
+			CancellationToken cancellationToken = default)
+		{
+			this.BatchSizes.Add(texts.Count);
+
+			return inner.VectorizeAsync(texts, kind, cancellationToken);
+		}
 	}
 
 	private static Int64 Count(SqliteConnection connection, String sql)

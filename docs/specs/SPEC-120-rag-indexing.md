@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.12.0 |
+| Version | 0.13.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-11 |
+| Last updated | 2026-09-12 |
 
 ## Purpose
 
@@ -219,6 +219,40 @@ does not quietly reopen the loop.
 - `LlmAgent:Indexing:ReconciliationIntervalSeconds` (default `300`) — periodic full rescan. Zero
   disables it.
 
+## The embed window
+
+Chunks are gathered across files and embedded a fixed window at a time
+(`Indexing.EmbeddingBatchSizeChunks`, default 64) rather than a file at a time.
+
+**It is a memory bound, and that phrasing is exact rather than modest.** Each chunk is embedded
+independently of the others sharing its call, so where the window cuts changes nothing that gets stored —
+which is precisely what frees it to cut at a fixed count instead of on a file boundary. A call per file
+held one file's entire chunk text, so a single large file had no bound at all; the window caps what is
+alive at one window's worth, however large the folder or the file.
+
+**What it does not buy is speed, and that non-reproduction is the point of recording it.** The obvious
+expectation is that turning twenty calls into one saves twenty round trips. Measured against the local
+server on this machine it does not. First index of the same corpus, windows of 1, 8 and 64, three passes
+each, alternating so that drift lands on all of them:
+
+| Window | Median | Passes |
+|---:|---:|---|
+| 1 (a call per chunk) | 10,959 ms | 10,458 · 11,049 · 10,959 |
+| 8 | 10,527 ms | 10,313 · 10,536 · 10,527 |
+| 64 | 10,519 ms | 10,940 · 10,519 · 10,518 |
+
+Report: [docs/benchmarks/embed-window.md](../benchmarks/embed-window.md).
+
+**The measurement is powered for the claim it refutes and not for the one it makes.** A halving would have
+been unmissable at this sample size — about 5,500 ms against 11,000. The roughly 4% it does show sits
+inside the spread of the passes behind each median, and is not a result; the passes for window 1 and
+window 64 overlap outright.
+
+The reading that fits: the per-call cost here is the model's own inference, around 400 ms per chunk on
+this CPU, and the server works through an array rather than embedding it at once. Batching then saves HTTP
+overhead against a cost that is not HTTP. A backend that embedded a batch in parallel would be a different
+measurement, and this number must not be carried across to one.
+
 ## Sharp edge — deletion is inferred from the scan
 
 The scanned file list is treated as the authoritative current state of the folder. **A scan that
@@ -245,7 +279,9 @@ what it had — breaks this without any test necessarily noticing.
   *Retention*: streaming the text cut peak working set from **794 MB to 289 MB** at 12,000 files
   and **413 MB to 153 MB** at 4,000, while leaving allocation untouched (2,130 MB against 2,135).
   So allocation and footprint are moved by different changes, and only the second one sets the
-  ceiling on how large a folder can be indexed.
+  ceiling on how large a folder can be indexed. The embed window (above) bounds the last unbounded
+  thing on that path: what one embed call holds. It buys no measured speed here, which is why it is
+  described as a bound rather than an optimisation.
 - **Operability** — a pass reports scanned, indexed, unchanged and deleted counts, so "nothing
   happened" and "nothing needed to happen" are distinguishable.
 
@@ -304,6 +340,14 @@ trust.
   corpus large enough for query shape to matter. It is opt-in and asserts nothing: a benchmark
   that fails a build on a timing threshold turns machine variance into a red suite. The numbers
   it produced are in [SPEC-131](SPEC-131-database-options-analysis.md).
+
+The embed window is tested on the property that lets it exist at all: the same corpus indexed at a window
+of one, at the shipped default, and at a window larger than the whole corpus stores byte-identical vectors
+under identical chunk ids. If that were ever untrue the window would silently be a correctness knob — the
+same folder indexing differently depending on a number chosen for memory reasons, with nothing at query
+time able to tell. Two further tests pin what it is for: chunks from many files are shown to arrive in one
+call rather than one call per file, and a window below one is shown to fall back to a chunk at a time
+rather than throwing, since zero and a negative fail differently without the clamp.
 
 ## Open questions
 

@@ -135,7 +135,9 @@ tables and the method).
 What it costs is the other half, and it is not small: **386 ms per chunk** on this machine's CPU, against
 0.7 ms for the placeholder and 5.5 ms for the fitted embedder. A first index of a real folder is therefore
 almost entirely this embedder, and nothing else in the pipeline is worth optimising until that is true no
-longer.
+longer — including the obvious one. Gathering chunks into one call instead of twenty does not reduce it
+measurably here (`SPEC-120`), because what is being paid for is the model's inference and not the round
+trip.
 
 ## Decision: a local embedding server becomes a prerequisite (2026-09-12)
 

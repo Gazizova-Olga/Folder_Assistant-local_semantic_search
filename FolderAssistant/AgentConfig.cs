@@ -119,6 +119,25 @@ internal record IndexingConfig
 	/// <summary>Token overlap between consecutive chunks.</summary>
 	public Int32 ChunkOverlapTokens { get; init; } = 32;
 
+	/// <summary>
+	/// How many chunks the corpus pass gathers into one embed call, coalesced across files rather than
+	/// one call per file.
+	///
+	/// <para>
+	/// It is a round-trip lever, not a throughput trick. An embedder reached over a socket charges per
+	/// call and can embed a whole array in one, so the number of calls is what a first index costs;
+	/// measured on this machine, the embedder is essentially the entire cost of that first pass. An
+	/// in-process embedder is indifferent to the value.
+	/// </para>
+	///
+	/// <para>
+	/// Bounded on purpose. Only this many chunks' text is ever held at once, so the pass keeps streaming
+	/// rather than accumulating the corpus, which is the property <c>SPEC-120</c> makes. A value of one
+	/// reproduces the old per-file behaviour.
+	/// </para>
+	/// </summary>
+	public Int32 EmbeddingBatchSizeChunks { get; init; } = 64;
+
 	/// <summary>Vector dimension produced by the programmable vectorizer.</summary>
 	public Int32 VectorDimension { get; init; } = 64;
 

@@ -402,6 +402,154 @@ public sealed class SemanticSearchBenchmark
 		this.ReportColdStart(stages, documents.Length);
 	}
 
+	// ── 3b. what the embed window actually buys ───────────────────────────────────────────────────
+
+	/// <summary>Embed windows compared, smallest first. One reproduces a call per chunk.</summary>
+	private static readonly Int32[] EmbedWindows = [1, 8, 64];
+
+	/// <summary>How many times each window is measured. Passes alternate, so machine drift hits every window.</summary>
+	private const Int32 EmbedWindowPasses = 3;
+
+	/// <summary>
+	/// Whether gathering chunks into one call is worth anything, measured rather than assumed.
+	///
+	/// <para>
+	/// The comparison is between windows on one tree, in one directory, from one binary — not between two
+	/// commits — because the window is a configuration value and a call per chunk is exactly what the
+	/// smallest one reproduces. That removes every confound except the machine itself, and the passes
+	/// alternate so drift lands on each window rather than on whichever ran last.
+	/// </para>
+	///
+	/// <para>
+	/// It runs only against a reachable server. An in-process embedder has no round trip to save, so
+	/// measuring it here would produce a row that looks like a result and is arithmetic on noise.
+	/// </para>
+	/// </summary>
+	[Fact]
+	[SuppressMessage("Major Code Smell", "S2699:Tests should include assertions",
+		Justification = "See the class comment: an instrument, opt-in, asserting nothing on purpose.")]
+	public void Measure_What_The_Embed_Window_Buys()
+	{
+		if (!Requested())
+		{
+			return;
+		}
+
+		if (!OllamaIsReachable())
+		{
+			this.Log("skipped: the window is a round-trip lever, and there is no server to make round trips to.");
+
+			return;
+		}
+
+		String[] documents = Directory.GetFiles(CorpusDirectory(), "*.txt");
+		Dictionary<Int32, List<Int64>> timings = EmbedWindows.ToDictionary(static w => w, static _ => new List<Int64>());
+
+		for (Int32 pass = 0; pass < EmbedWindowPasses; pass++)
+		{
+			foreach (Int32 window in EmbedWindows)
+			{
+				Int64 elapsed = IndexOnceWithWindow(documents, window);
+				timings[window].Add(elapsed);
+				this.Log($"  pass {pass + 1}, window {window,3}: {elapsed} ms");
+			}
+		}
+
+		List<EmbedWindowResult> results = [.. EmbedWindows.Select(window => new EmbedWindowResult(
+			Window: window,
+			Timings: timings[window],
+			MedianMs: Median(timings[window])))];
+
+		Double slowest = results[0].MedianMs;
+
+		foreach (EmbedWindowResult result in results)
+		{
+			this.Log($"  window {result.Window,3}: median {result.MedianMs:F0} ms " +
+				$"({slowest / Math.Max(result.MedianMs, 1):F2}x against a call per chunk)");
+		}
+
+		this.ReportEmbedWindow(results, documents.Length);
+	}
+
+	private static Int64 IndexOnceWithWindow(String[] documents, Int32 window)
+	{
+		ModuleSet profile = CompositionProfiles.Resolve("ollama-blob");
+
+		using TempFolder folder = new();
+		foreach (String document in documents)
+		{
+			File.Copy(document, folder.Combine(Path.GetFileName(document)));
+		}
+
+		IndexingConfig config = new() { EmbeddingBatchSizeChunks = window };
+		IVectorizer vectorizer = profile.CreateVectorizer(config);
+
+		try
+		{
+			String databasePath = Bootstrap(folder);
+
+			Stopwatch watch = Stopwatch.StartNew();
+			new FolderIndexingPipeline(vectorizer, profile.CreateVectorStoreWriter(), profile.CreateVectorStoreReader())
+				.Run(folder.Path, databasePath, config);
+
+			return watch.ElapsedMilliseconds;
+		}
+		finally
+		{
+			Dispose(vectorizer);
+		}
+	}
+
+	/// <summary>
+	/// The middle value, not the mean. One pass that lands while something else on the machine is busy
+	/// would drag a mean far enough to invent a difference between two windows.
+	/// </summary>
+	private static Double Median(List<Int64> values)
+	{
+		if (values.Count == 0)
+		{
+			return 0;
+		}
+
+		List<Int64> sorted = [.. values.Order()];
+		Int32 middle = sorted.Count / 2;
+
+		if (sorted.Count % 2 == 1)
+		{
+			return sorted[middle];
+		}
+
+		return (sorted[middle - 1] + sorted[middle]) / 2.0;
+	}
+
+	private void ReportEmbedWindow(List<EmbedWindowResult> results, Int32 documents)
+	{
+		StringBuilder builder = Header(
+			"What the embed window buys",
+			$"The {documents}-document curated corpus indexed from nothing at each window, against a local "
+			+ "embedding server. One window size means a call per chunk, which is what the pipeline did before "
+			+ $"it gathered chunks across files. {EmbedWindowPasses} passes, alternating between windows so that "
+			+ "machine drift lands on all of them rather than on whichever ran last.");
+
+		builder.AppendLine("| Window | Median (ms) | Passes (ms) | Against a call per chunk |");
+		builder.AppendLine("|---:|---:|---|---:|");
+
+		Double slowest = results.Count == 0 ? 0 : results[0].MedianMs;
+
+		foreach (EmbedWindowResult result in results)
+		{
+			builder.AppendLine(CultureInfo.InvariantCulture,
+				$"| {result.Window} | {result.MedianMs:F0} | {String.Join(", ", result.Timings)} | "
+				+ $"{slowest / Math.Max(result.MedianMs, 1):F2}x |");
+		}
+
+		builder.AppendLine();
+		builder.AppendLine("_The spread across passes is the thing to read before the ratio: where the passes overlap, "
+			+ "the medians are not separated by this many samples._");
+
+		this.Write("embed-window.md", builder);
+	}
+
 	// ── 4. what the native backend costs on disk ──────────────────────────────────────────────────
 
 	[Fact]
@@ -882,6 +1030,8 @@ public sealed class SemanticSearchBenchmark
 		Double QueryP50Ms,
 		Double QueryP95Ms,
 		Int64 DatabaseBytes);
+
+	private sealed record EmbedWindowResult(Int32 Window, IReadOnlyList<Int64> Timings, Double MedianMs);
 
 	private sealed record ColdStart(String Profile, Int64 BootstrapMs, Int64 IndexMs, Int32 Chunks);
 }

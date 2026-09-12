@@ -113,6 +113,12 @@ internal sealed class FolderIndexingPipeline
 		Dictionary<String, IReadOnlyList<ChunkMetadata>> chunksByFile = new(StringComparer.OrdinalIgnoreCase);
 		Dictionary<String, EmbeddingResult> embeddingsByChunk = new(StringComparer.OrdinalIgnoreCase);
 
+		// Chunks are gathered across files and embedded a window at a time rather than a file at a time.
+		// A file's chunks need not land in one call — each chunk embeds independently of the others in its
+		// call — so the window is free to cut wherever it reaches its size, and that is what bounds how much
+		// chunk text is alive at once.
+		ChunkBatcher batcher = new(vectorizer, embeddingsByChunk, config.EmbeddingBatchSizeChunks);
+
 		// Non-null only while a fit is owed. Otherwise chunk text dies with each iteration.
 		List<(IReadOnlyList<TextChunk> Chunks, Boolean Changed)>? awaitingFit = mustFit ? [] : null;
 
@@ -155,12 +161,13 @@ internal sealed class FolderIndexingPipeline
 
 			if (changed)
 			{
-				Embed(embeddingsByChunk, vectorizer, chunks);
+				batcher.Add(chunks);
 				indexed++;
 			}
 
-			// Nothing above still references file.Content or the chunk text: both are collectable
-			// before the next file is pulled, which is the whole point of the loop's shape.
+			// Nothing above still references file.Content or the chunk text beyond the batch window the
+			// batcher is holding, so both are collectable before the next file is pulled — which is the
+			// whole point of the loop's shape, and why the window has a size rather than growing.
 		}
 
 		String? fitArtifactJson = null;
@@ -181,12 +188,16 @@ internal sealed class FolderIndexingPipeline
 					continue;
 				}
 
-				Embed(embeddingsByChunk, vectorizer, chunks);
+				batcher.Add(chunks);
 				indexed++;
 			}
 
 			awaitingFit.Clear();
 		}
+
+		// Whatever the last window did not fill still has to be embedded, and it has to happen before the
+		// single write below rather than after it.
+		batcher.Flush();
 
 		// Read after fitting: the descriptor's dimension is the rank actually reached, not the one
 		// that was requested.
@@ -214,21 +225,74 @@ internal sealed class FolderIndexingPipeline
 			FilesDeleted: summary.FilesDeleted);
 	}
 
-	private static void Embed(
-		Dictionary<String, EmbeddingResult> target,
-		IVectorizer vectorizer,
-		IReadOnlyList<TextChunk> chunks)
+	/// <summary>
+	/// Gathers chunks across files and embeds them a fixed window at a time.
+	///
+	/// <para>
+	/// The window is a <em>memory</em> bound before it is anything else. Each chunk is embedded
+	/// independently of the others in its call, so where the window happens to cut changes nothing that
+	/// is stored — which is exactly what lets it cut at a fixed count rather than on a file boundary, and
+	/// so caps the chunk text held at one window's worth however large the folder is.
+	/// </para>
+	///
+	/// <para>
+	/// What it buys is round-trips. An embedder reached over a socket charges per call, so a folder of
+	/// small files costs one call each when the caller splits per file, and one call per window when it
+	/// does not. The vectorizer already took an array; this is the caller finally handing it one.
+	/// </para>
+	/// </summary>
+	private sealed class ChunkBatcher
 	{
-		String[] texts = new String[chunks.Count];
-		for (Int32 i = 0; i < chunks.Count; i++)
+		private readonly IVectorizer _vectorizer;
+		private readonly IDictionary<String, EmbeddingResult> _target;
+		private readonly Int32 _windowSize;
+		private readonly List<TextChunk> _pending;
+
+		public ChunkBatcher(IVectorizer vectorizer, IDictionary<String, EmbeddingResult> target, Int32 windowSize)
 		{
-			texts[i] = chunks[i].Content;
+			this._vectorizer = vectorizer;
+			this._target = target;
+
+			// Below one is meaningless rather than dangerous, and it is worth being exact about which: the
+			// flush test fires as soon as anything is pending, so a zero would already behave as a one. What
+			// the clamp actually prevents is a negative reaching the capacity argument below, which throws.
+			this._windowSize = Math.Max(1, windowSize);
+			this._pending = new List<TextChunk>(this._windowSize);
 		}
 
-		IReadOnlyList<EmbeddingResult> vectors = vectorizer.Vectorize(texts, EmbeddingKind.Document);
-		for (Int32 i = 0; i < chunks.Count; i++)
+		public void Add(IReadOnlyList<TextChunk> chunks)
 		{
-			target[chunks[i].ChunkId] = vectors[i];
+			for (Int32 i = 0; i < chunks.Count; i++)
+			{
+				this._pending.Add(chunks[i]);
+
+				if (this._pending.Count >= this._windowSize)
+				{
+					this.Flush();
+				}
+			}
+		}
+
+		public void Flush()
+		{
+			if (this._pending.Count == 0)
+			{
+				return;
+			}
+
+			String[] texts = new String[this._pending.Count];
+			for (Int32 i = 0; i < this._pending.Count; i++)
+			{
+				texts[i] = this._pending[i].Content;
+			}
+
+			IReadOnlyList<EmbeddingResult> vectors = this._vectorizer.Vectorize(texts, EmbeddingKind.Document);
+			for (Int32 i = 0; i < this._pending.Count; i++)
+			{
+				this._target[this._pending[i].ChunkId] = vectors[i];
+			}
+
+			this._pending.Clear();
 		}
 	}
 
