@@ -102,11 +102,11 @@ delivers one changed file at a time to the embedding pipeline with retry and bac
 A writer inside this process reports what it changed instead of waiting to be told about it
 (`IIndexChangeNotifier`), which is latency the discovery round-trip has no reason to cost.
 
-**The watcher and its write-through entry point, the reconciler, the per-change pipeline, the
-outbox dispatcher and the bridge to embedding exist so far** (`SPEC-121`) — the store behind the
-writers and the dispatcher is not built, so nothing drives the bridge and nothing composes the
-stages yet. The assembly boundary is one-way on purpose: the library knows nothing of chunking,
-embedding or retrieval and cannot come to depend on them by accident.
+**The watcher, its write-through entry point and its holds, the reconciler, the per-change
+pipeline, the outbox dispatcher and the bridge to embedding exist so far** (`SPEC-121`) — the
+store behind the writers and the dispatcher is not built, so nothing drives the bridge and nothing
+composes the stages yet. The assembly boundary is one-way on purpose: the library knows nothing
+of chunking, embedding or retrieval and cannot come to depend on them by accident.
 
 The change signal is deliberately coarse — the consumer re-diffs by content hash — which
 makes it robust against the two ways filesystem watching is unreliable: dropped events on
@@ -114,6 +114,12 @@ buffer overflow, and atomic save-via-rename.
 
 Properties worth stating because they are easy to "simplify" away:
 
+- **A hold makes a multi-step edit cost one pass, and expires rather than leaking.** The quiet
+  window cannot merge writes separated by the caller thinking between them, so `BeginBatch`
+  lets whoever knows where its work ends say so. Holds nest and the last release publishes;
+  a hold nobody releases stops suppressing after two minutes, timed from the first — the same
+  rule as a reconcile loop surviving a bad pass, since an index that stops converging for the
+  life of the process is the one outcome none of this may produce.
 - **A reported change feeds the watcher's debouncer, never the per-change path directly**, and
   that routing is the whole point rather than a detail. Debouncing is what makes a dozen writes
   to one file cost one index pass; reporting past it would cost a pass per write and race the

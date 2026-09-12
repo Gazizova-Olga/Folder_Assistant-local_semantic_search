@@ -66,4 +66,24 @@ public interface IIndexChangeNotifier
     /// Reports that <paramref name="absolutePath"/> was deleted.
     /// </summary>
     ValueTask NotifyDeletedAsync(string absolutePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Holds everything back until the returned handle is disposed, and then lets it go as one
+    /// batch.
+    ///
+    /// <para>
+    /// The quiet window merges writes that are close together in time. It cannot merge writes
+    /// separated by the caller stopping to think between them, which is the ordinary shape of a
+    /// multi-step edit: each write then lands in a window of its own and costs its own pass. Only
+    /// the caller knows where its work actually ends, so a hold is how it says so.
+    /// </para>
+    ///
+    /// <para>
+    /// Holds nest and are counted; the last one released is what lets the batch go. A hold that is
+    /// never released <em>expires</em> rather than holding forever — a leaked handle has to cost a
+    /// bounded delay, not an index that stops converging for the life of the process. Disposal is
+    /// idempotent, and disposing one that has already expired does nothing.
+    /// </para>
+    /// </summary>
+    IDisposable BeginBatch();
 }

@@ -35,11 +35,14 @@ public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IAsyncDisposab
     private readonly IndexablePathFilter _filter;
     private readonly Channel<ObservedChange> _settled;
     private readonly Lock _gate = new();
+    private readonly TimeSpan _maxHoldDuration;
 
     private FileSystemWatcher? _watcher;
     private CancellationTokenSource? _stopping;
     private Task? _settleLoop;
     private bool _running;
+    private int _holdCount;
+    private DateTimeOffset _holdStartedUtc;
 
     /// <param name="rootPath">The folder to watch, including everything beneath it.</param>
     /// <param name="metadataFolderName">
@@ -48,20 +51,31 @@ public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IAsyncDisposab
     /// <param name="quietWindow">
     /// How long a path must go untouched before its change is published.
     /// </param>
-    public FileSystemWatcherHost(string rootPath, string metadataFolderName, TimeSpan quietWindow)
+    /// <param name="maxHoldDuration">
+    /// How long a hold may suppress publishing before it expires by itself. A backstop against a
+    /// caller that never releases, not a schedule: a hold released by its owner never reaches it.
+    /// </param>
+    public FileSystemWatcherHost(
+        string rootPath,
+        string metadataFolderName,
+        TimeSpan quietWindow,
+        TimeSpan? maxHoldDuration = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
 
         _rootPath = Path.GetFullPath(rootPath);
         _quietWindow = quietWindow;
+        _maxHoldDuration = maxHoldDuration ?? TimeSpan.FromMinutes(2);
         _debouncer = new ChangeDebouncer(quietWindow);
         _filter = new IndexablePathFilter(metadataFolderName);
 
         // Unbounded, because dropping a settled change is the one failure this stage must not add.
         // The raw event burst is already collapsed by the time anything reaches here, so what
         // accumulates is one item per changed file rather than one per keystroke.
+        // One reader, but not one writer: the settle loop publishes on its poll, and the release of
+        // the last hold publishes on the releasing caller's thread.
         _settled = Channel.CreateUnbounded<ObservedChange>(
-            new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     }
 
     /// <summary>Settled changes, in the order they settled. Completes when the host stops.</summary>
@@ -121,6 +135,75 @@ public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IAsyncDisposab
     /// <inheritdoc/>
     public ValueTask NotifyDeletedAsync(string absolutePath, CancellationToken cancellationToken = default)
         => Report(absolutePath, FileChangeKind.Deleted, cancellationToken);
+
+    /// <inheritdoc/>
+    public IDisposable BeginBatch()
+    {
+        lock (_gate)
+        {
+            // Timed from the first hold, not the latest: if nesting pushed the expiry out, a caller
+            // opening one per step would have exactly the unbounded hold the expiry rules out.
+            if (_holdCount == 0)
+            {
+                _holdStartedUtc = DateTimeOffset.UtcNow;
+            }
+
+            _holdCount++;
+        }
+
+        return new Hold(this);
+    }
+
+    private void ReleaseHold()
+    {
+        bool releasedLast;
+
+        lock (_gate)
+        {
+            if (_holdCount == 0)
+            {
+                return;
+            }
+
+            _holdCount--;
+            releasedLast = _holdCount == 0;
+        }
+
+        if (releasedLast)
+        {
+            // The caller has just said its work is finished, so what it accumulated goes now rather
+            // than sitting out the rest of a poll interval that is no longer waiting for anything.
+            PublishSettled();
+        }
+    }
+
+    /// <summary>
+    /// Whether a hold is suppressing right now. Expiry is decided here rather than by a timer: an
+    /// expired hold simply stops answering yes, which costs no thread and cannot itself be leaked.
+    /// The caller must already hold <c>_gate</c>.
+    /// </summary>
+    private bool IsHeldLocked()
+        => _holdCount > 0 && DateTimeOffset.UtcNow - _holdStartedUtc < _maxHoldDuration;
+
+    /// <summary>
+    /// A handle whose only job is to be disposed. Disposal is idempotent because a caller disposing
+    /// twice would otherwise release a hold belonging to someone else — and let that caller's
+    /// half-finished work out.
+    /// </summary>
+    private sealed class Hold(FileSystemWatcherHost owner) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            owner.ReleaseHold();
+        }
+    }
 
     /// <summary>
     /// Records a reported change exactly as if the operating system had raised it: the same
@@ -187,22 +270,46 @@ public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IAsyncDisposab
             {
                 await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
 
-                IReadOnlyList<ObservedChange> settled;
-
-                lock (_gate)
-                {
-                    settled = _debouncer.DrainSettled(DateTimeOffset.UtcNow);
-                }
-
-                foreach (ObservedChange change in settled)
-                {
-                    await _settled.Writer.WriteAsync(change, cancellationToken).ConfigureAwait(false);
-                }
+                PublishSettled();
             }
         }
         catch (OperationCanceledException)
         {
             // Stopping.
+        }
+    }
+
+    /// <summary>
+    /// Hands every path that has gone quiet to the consumer — unless a hold is open, in which case
+    /// they stay in the debouncer, still coalescing, until it is released.
+    ///
+    /// <para>
+    /// A hold covers everything pending, not only what was reported through this type. A caller's
+    /// own writes reach the debouncer through the watcher as well, so suppressing one source and
+    /// publishing the other would leave the hold suppressing nothing that matters. An editor saving
+    /// during a held window waits out the hold, which is a fair price for not indexing the same file
+    /// once per step of one edit.
+    /// </para>
+    /// </summary>
+    private void PublishSettled()
+    {
+        IReadOnlyList<ObservedChange> settled;
+
+        lock (_gate)
+        {
+            if (IsHeldLocked())
+            {
+                return;
+            }
+
+            settled = _debouncer.DrainSettled(DateTimeOffset.UtcNow);
+        }
+
+        foreach (ObservedChange change in settled)
+        {
+            // Unbounded, so the only refusal is a completed channel — which means disposal, and the
+            // drain there has whatever is left.
+            _settled.Writer.TryWrite(change);
         }
     }
 

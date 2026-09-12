@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.9.0 |
+| Version | 0.10.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -147,8 +147,36 @@ nothing is running is dropped rather than held — nothing would drain it, and t
 follows a start compares the whole folder regardless. A caller must not fail its own operation
 because a report was refused.
 
-**Writes further apart than the quiet window are separate changes.** That is correct for an editor.
-Whether it is correct for a caller that pauses between its own writes is an open question below.
+**Writes further apart than the quiet window are separate changes**, which is correct for an editor
+and wrong for a caller that pauses between its own writes. That case is what a hold answers.
+
+### Holding a batch
+
+The quiet window merges writes that are close together in time. It cannot merge writes separated by
+the caller stopping to think between them, and that is the ordinary shape of a multi-step edit: each
+write lands in a window of its own and costs its own pass. Raising the window is the wrong answer —
+it delays every ordinary external edit by the same amount to fix a case it cannot identify.
+
+`BeginBatch` puts the boundary where the knowledge is. It holds publishing until the returned handle
+is disposed; what accumulates in the meantime keeps coalescing, so a file written five times leaves
+one entry and is published once.
+
+- **A hold covers everything pending, not only what was reported through the seam.** A caller's own
+  writes reach the debouncer through the watcher as well, so a hold that suppressed one source and
+  published the other would suppress nothing that matters. An unrelated editor saving during a held
+  window waits it out, which is the price of not indexing one file once per step of one edit.
+- **Holds nest and are counted**, because the boundaries they mark nest: one around a whole piece of
+  work, one around a step inside it. Releasing the inner must not publish what the outer still
+  holds; the last release is what lets the batch go.
+- **A hold expires by itself** after `MaxHoldDuration` (two minutes), whether or not it is ever
+  released. This is the same rule as a reconcile pass surviving its own failure: a caller that
+  crashes or leaks a handle must cost a bounded delay, never an index that stops converging for the
+  life of the process. The expiry runs from the **first** hold — if nesting extended it, a caller
+  opening one per step would have exactly the unbounded hold it exists to rule out.
+- **Releasing the last hold publishes immediately** rather than waiting out the remaining poll
+  interval, since the caller has just said its work is finished.
+- **Disposal is idempotent.** Disposing one handle twice would otherwise release a hold belonging to
+  someone else, and let that caller's half-finished work out.
 
 ## Reconciliation, and why its own failures matter more than most
 
@@ -457,13 +485,9 @@ contention at this scale, and that is said in the test rather than left looking 
 - Whether a folder moved in or deleted should be expanded into per-file changes on the event path. Today
   its files wait for the next reconcile, which bounds the delay by the reconcile interval rather than by
   the debounce window.
-- **Whether a caller should be able to hold indexing until it has finished.** Coalescing covers writes
-  closer together than the quiet window. It does not cover a caller that pauses between its own
-  writes: each then lands in its own window and costs its own pass, which is the shape of a
-  multi-step edit driven by something that stops to think between steps. Raising the window is the
-  blunt answer, and it delays every ordinary external edit by the same amount. A scope that holds
-  flushing until it is released is the precise one, but it needs a caller that knows where its own
-  work begins and ends, which is not this module.
+- **Where a hold should be opened.** The mechanism is here and nothing opens one: no part of this
+  repository yet knows where a single piece of work ends. Whatever eventually does is what decides
+  whether a hold covers a whole edit or only part of one.
 
 ## Related specs
 
