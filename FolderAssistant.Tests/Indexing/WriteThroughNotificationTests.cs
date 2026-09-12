@@ -17,6 +17,8 @@ namespace FolderAssistant.Tests.Indexing;
 /// </summary>
 public sealed class WriteThroughNotificationTests
 {
+	private static readonly IndexablePathFilter Filter = new(".folderassistant");
+
 	private static readonly TimeSpan Window = TimeSpan.FromMilliseconds(100);
 	private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(20);
 
@@ -24,7 +26,7 @@ public sealed class WriteThroughNotificationTests
 	public async Task A_Reported_Change_Settles_Like_An_Observed_One()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -40,7 +42,7 @@ public sealed class WriteThroughNotificationTests
 	public async Task A_Reported_Delete_Settles_As_A_Delete()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -64,7 +66,7 @@ public sealed class WriteThroughNotificationTests
 		TimeSpan window = TimeSpan.FromSeconds(1);
 
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, window);
 
 		host.Start();
 
@@ -96,7 +98,7 @@ public sealed class WriteThroughNotificationTests
 		TimeSpan window = TimeSpan.FromSeconds(1);
 
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, window);
 
 		host.Start();
 		await LetTheWatcherAttachAsync();
@@ -129,7 +131,7 @@ public sealed class WriteThroughNotificationTests
 		TimeSpan window = TimeSpan.FromSeconds(1);
 
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, window);
 
 		host.Start();
 
@@ -156,7 +158,7 @@ public sealed class WriteThroughNotificationTests
 	public async Task Reports_For_Paths_That_Are_Never_Reported_Are_Refused()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -185,7 +187,7 @@ public sealed class WriteThroughNotificationTests
 	public async Task A_Report_Made_Before_The_Host_Starts_Is_Dropped()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		await host.NotifyChangedAsync(folder.Combine("early.md"));
 
@@ -209,7 +211,7 @@ public sealed class WriteThroughNotificationTests
 	public async Task A_Report_On_A_Cancelled_Token_Is_Not_Recorded()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -235,7 +237,7 @@ public sealed class WriteThroughNotificationTests
 	public async Task A_Reported_Create_Settles_As_A_Create()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -260,7 +262,7 @@ public sealed class WriteThroughNotificationTests
 		TimeSpan window = TimeSpan.FromSeconds(1);
 
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, window);
 
 		host.Start();
 

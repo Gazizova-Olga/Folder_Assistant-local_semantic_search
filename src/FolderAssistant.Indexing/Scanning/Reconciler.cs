@@ -36,6 +36,10 @@ public sealed class Reconciler
     private static readonly TimeSpan HoldPollInterval = TimeSpan.FromMilliseconds(50);
     private readonly ILogger _logger;
 
+    /// <param name="filter">
+    /// What belongs in the corpus. The same instance the watcher and the per-change path use, so
+    /// that a pass here and an event there cannot disagree about a file.
+    /// </param>
     /// <param name="maxDegreeOfParallelism">
     /// How many files are hashed at once. Sizes a disk- and CPU-bound job, so it scales with the
     /// machine — unrelated to how many files are delivered onward at once, which is one network
@@ -52,7 +56,7 @@ public sealed class Reconciler
     /// </param>
     public Reconciler(
         string rootPath,
-        string metadataFolderName,
+        IndexablePathFilter filter,
         IIndexStore store,
         IContentHasher hasher,
         int maxDegreeOfParallelism = 0,
@@ -60,13 +64,14 @@ public sealed class Reconciler
         ILogger<Reconciler>? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ArgumentNullException.ThrowIfNull(filter);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(hasher);
 
         _rootPath = Path.GetFullPath(rootPath);
         _store = store;
         _hasher = hasher;
-        _filter = new IndexablePathFilter(metadataFolderName);
+        _filter = filter;
         _maxDegreeOfParallelism = maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Environment.ProcessorCount;
         _hold = hold;
         _logger = logger ?? NullLogger<Reconciler>.Instance;
@@ -96,11 +101,23 @@ public sealed class Reconciler
 
                 try
                 {
-                    string hash = await _hasher.HashAsync(absolutePath, token).ConfigureAwait(false);
                     FileInfo info = new(absolutePath);
+                    long size = info.Length;
+
+                    // Over the size bound, so not part of the corpus. It is left out the way an
+                    // unreported path is, not the way an unreadable file is: it is absent from the
+                    // picture and not in `skipped`, so a record the index holds for it is removed
+                    // below. A file that grows past the bound leaves the index, and one that shrinks
+                    // back is added again — and neither costs a hash of the whole thing first.
+                    if (!_filter.ShouldIndex(absolutePath, size))
+                    {
+                        return;
+                    }
+
+                    string hash = await _hasher.HashAsync(absolutePath, token).ConfigureAwait(false);
 
                     onDisk[relativePath] = new FileRecord(
-                        relativePath, hash, info.Length, FileTimestamps.ReadCreatedUtc(info));
+                        relativePath, hash, size, FileTimestamps.ReadCreatedUtc(info));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {

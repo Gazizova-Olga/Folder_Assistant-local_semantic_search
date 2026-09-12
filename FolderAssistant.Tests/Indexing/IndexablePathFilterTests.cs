@@ -76,4 +76,52 @@ public sealed class IndexablePathFilterTests
 	[InlineData(@"C:\work\node_modules_old\notes.md")]
 	public void A_Directory_Merely_Prefixed_By_An_Excluded_Name_Is_Still_Reported(string path)
 		=> Filter.ShouldReport(path).Should().BeTrue();
+
+	/// <summary>
+	/// Given the extensions this system reads, everything else is not part of the corpus and is never
+	/// reported — the alternative is recording and delivering every binary in the folder to a consumer
+	/// that refuses each one. Case-insensitive, as the application's own allow-list is.
+	/// </summary>
+	[Theory]
+	[InlineData(@"C:\work\notes.md", true)]
+	[InlineData(@"C:\work\NOTES.MD", true)]
+	[InlineData(@"C:\work\deep\readme.txt", true)]
+	[InlineData(@"C:\work\photo.png", false)]
+	[InlineData(@"C:\work\archive.zip", false)]
+	[InlineData(@"C:\work\Makefile", false)]
+	public void With_An_Extension_List_Only_Those_Extensions_Are_Reported(string path, bool reported)
+	{
+		IndexablePathFilter limited = new(".folderassistant", indexableExtensions: [".md", ".txt"]);
+
+		limited.ShouldReport(path).Should().Be(reported);
+	}
+
+	[Fact]
+	public void Without_An_Extension_List_Every_Extension_Is_Reported()
+		=> Filter.ShouldReport(@"C:\work\photo.png").Should().BeTrue();
+
+	/// <summary>
+	/// Size is a property of a file on disk, so it is a separate question from the path's; a file over
+	/// the bound is not indexed, and one exactly on it is.
+	/// </summary>
+	[Fact]
+	public void A_File_Over_The_Size_Bound_Is_Not_Indexed_And_One_On_It_Is()
+	{
+		IndexablePathFilter bounded = new(".folderassistant", maxContentBytes: 10);
+
+		bounded.ShouldIndex(@"C:\work\notes.md", 11).Should().BeFalse();
+		bounded.ShouldIndex(@"C:\work\notes.md", 10).Should().BeTrue();
+	}
+
+	[Fact]
+	public void A_Small_File_On_An_Unreported_Path_Is_Still_Not_Indexed()
+		=> Filter.ShouldIndex(@"C:\work\bin\notes.md", 1).Should().BeFalse();
+
+	[Fact]
+	public void A_Negative_Size_Bound_Is_Rejected()
+	{
+		Action construct = () => _ = new IndexablePathFilter(".folderassistant", maxContentBytes: -1);
+
+		construct.Should().Throw<ArgumentOutOfRangeException>();
+	}
 }

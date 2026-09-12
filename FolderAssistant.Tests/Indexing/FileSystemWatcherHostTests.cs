@@ -17,6 +17,8 @@ namespace FolderAssistant.Tests.Indexing;
 /// </summary>
 public sealed class FileSystemWatcherHostTests
 {
+	private static readonly IndexablePathFilter Filter = new(".folderassistant");
+
 	private static readonly TimeSpan Window = TimeSpan.FromMilliseconds(100);
 	private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(20);
 
@@ -24,7 +26,7 @@ public sealed class FileSystemWatcherHostTests
 	public async Task A_New_File_Reaches_The_Channel_As_A_Settled_Change()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 		await LetTheWatcherAttachAsync();
@@ -59,7 +61,7 @@ public sealed class FileSystemWatcherHostTests
 		TimeSpan window = TimeSpan.FromSeconds(1);
 
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, window);
 
 		host.Start();
 		await LetTheWatcherAttachAsync();
@@ -92,7 +94,7 @@ public sealed class FileSystemWatcherHostTests
 		using TempFolder folder = new();
 		Directory.CreateDirectory(folder.Combine(".folderassistant"));
 
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 		await LetTheWatcherAttachAsync();
@@ -112,7 +114,7 @@ public sealed class FileSystemWatcherHostTests
 	public async Task Starting_Twice_Is_Refused()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -129,7 +131,7 @@ public sealed class FileSystemWatcherHostTests
 	public async Task Disposing_Completes_The_Channel()
 	{
 		using TempFolder folder = new();
-		FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 		await host.DisposeAsync();

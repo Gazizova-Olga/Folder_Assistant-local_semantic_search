@@ -35,6 +35,7 @@ public sealed class ChangePipeline
     public const int DefaultMaxAttempts = 5;
 
     private readonly string _rootPath;
+    private readonly IndexablePathFilter _filter;
     private readonly IIndexStore _store;
     private readonly IContentHasher _hasher;
     private readonly IFileSettler _settler;
@@ -43,6 +44,11 @@ public sealed class ChangePipeline
     private readonly ILogger _logger;
 
     /// <param name="rootPath">The watched root. Keys are derived from it exactly as the reconciler derives them.</param>
+    /// <param name="filter">
+    /// What belongs in the corpus — the same instance the watcher and the reconciler use. A settled
+    /// change has already passed the watcher's structural rule; what is decided here is the part
+    /// only a file on disk can answer, its size.
+    /// </param>
     /// <param name="settleProbeInterval">How long a file's size and write time must hold still before it is hashed.</param>
     /// <param name="retryDelay">How long a change that met a busy file waits before it is tried again.</param>
     /// <param name="maxAttempts">Total tries for one change, including the first.</param>
@@ -52,18 +58,20 @@ public sealed class ChangePipeline
     /// </param>
     public ChangePipeline(
         string rootPath,
+        IndexablePathFilter filter,
         IIndexStore store,
         IContentHasher hasher,
         TimeSpan settleProbeInterval,
         TimeSpan retryDelay,
         int maxAttempts = DefaultMaxAttempts,
         ILogger<ChangePipeline>? logger = null)
-        : this(rootPath, store, hasher, new FileSettler(settleProbeInterval), retryDelay, maxAttempts, logger)
+        : this(rootPath, filter, store, hasher, new FileSettler(settleProbeInterval), retryDelay, maxAttempts, logger)
     {
     }
 
     internal ChangePipeline(
         string rootPath,
+        IndexablePathFilter filter,
         IIndexStore store,
         IContentHasher hasher,
         IFileSettler settler,
@@ -72,12 +80,14 @@ public sealed class ChangePipeline
         ILogger<ChangePipeline>? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ArgumentNullException.ThrowIfNull(filter);
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(hasher);
         ArgumentNullException.ThrowIfNull(settler);
         ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
 
         _rootPath = Path.GetFullPath(rootPath);
+        _filter = filter;
         _store = store;
         _hasher = hasher;
         _settler = settler;
@@ -230,7 +240,7 @@ public sealed class ChangePipeline
             return false;
         }
 
-        FileRecord current;
+        FileRecord? current = null;
 
         // The settle probe and the hash are separate opens, so a writer can take the file in between.
         // That is a file which is not settled after all, not a failed change: try again. Letting the
@@ -238,14 +248,28 @@ public sealed class ChangePipeline
         // would stay stale until a reconcile happened to pass over it.
         try
         {
-            string hash = await _hasher.HashAsync(change.Path, cancellationToken).ConfigureAwait(false);
             FileInfo info = new(change.Path);
-            current = new FileRecord(relativePath, hash, info.Length, FileTimestamps.ReadCreatedUtc(info));
+            long size = info.Length;
+
+            if (_filter.ShouldIndex(change.Path, size))
+            {
+                string hash = await _hasher.HashAsync(change.Path, cancellationToken).ConfigureAwait(false);
+                current = new FileRecord(relativePath, hash, size, FileTimestamps.ReadCreatedUtc(info));
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogDebug(ex, "Hashing {Path} met a live writer; the change will be tried again.", change.Path);
             return true;
+        }
+
+        // On disk, settled, and not part of the corpus — a file that has grown past the size bound, or
+        // one handed here without passing the watcher's own rule. Whatever the index holds for it goes,
+        // exactly as if the file were not there.
+        if (current is null)
+        {
+            await RemoveAsync(relativePath, cancellationToken).ConfigureAwait(false);
+            return false;
         }
 
         FileRecord? recorded = await _store.ReadAsync(relativePath, cancellationToken).ConfigureAwait(false);

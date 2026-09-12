@@ -17,6 +17,8 @@ namespace FolderAssistant.Tests.Indexing;
 /// </summary>
 public sealed class ReconcilerTests
 {
+	private static readonly IndexablePathFilter Filter = new(".folderassistant");
+
 	[Fact]
 	public async Task Files_On_Disk_And_Absent_From_The_Index_Are_Added()
 	{
@@ -222,7 +224,7 @@ public sealed class ReconcilerTests
 		await File.WriteAllTextAsync(folder.Combine("a.md"), "alpha");
 
 		FailingStore store = new(failCalls: 3);
-		Reconciler reconciler = new(folder.Path, ".folderassistant", store, new XxHash64ContentHasher());
+		Reconciler reconciler = new(folder.Path, Filter, store, new Sha256ContentHasher());
 
 		using CancellationTokenSource stopping = new();
 
@@ -248,7 +250,7 @@ public sealed class ReconcilerTests
 	{
 		using TempFolder folder = new();
 
-		Reconciler reconciler = new(folder.Path, ".folderassistant", new FakeStore(), new XxHash64ContentHasher());
+		Reconciler reconciler = new(folder.Path, Filter, new FakeStore(), new Sha256ContentHasher());
 
 		using CancellationTokenSource stopping = new();
 
@@ -277,7 +279,7 @@ public sealed class ReconcilerTests
 
 		await new Reconciler(
 			folder.Path,
-			".folderassistant",
+			Filter,
 			new FakeStore(),
 			new ThrowingHasher(failFor: "locked.md"),
 			logger: log).ReconcileAsync();
@@ -306,7 +308,7 @@ public sealed class ReconcilerTests
 		CapturingLogger<Reconciler> log = new();
 
 		Reconciler reconciler = new(
-			folder.Path, ".folderassistant", store, new XxHash64ContentHasher(), logger: log);
+			folder.Path, Filter, store, new Sha256ContentHasher(), logger: log);
 
 		using CancellationTokenSource stopping = new();
 
@@ -345,7 +347,7 @@ public sealed class ReconcilerTests
 		SwitchableHold hold = new(held: true);
 
 		Reconciler reconciler = new(
-			folder.Path, ".folderassistant", store, new XxHash64ContentHasher(), hold: hold);
+			folder.Path, Filter, store, new Sha256ContentHasher(), hold: hold);
 
 		using CancellationTokenSource stopping = new();
 
@@ -372,11 +374,68 @@ public sealed class ReconcilerTests
 		store.ReadAllCalls.Should().BeGreaterThan(0, "releasing the hold lets the safety net run again");
 	}
 
+	/// <summary>
+	/// A file over the size bound is not part of the corpus: it is left out of the pass the way an
+	/// unreported path is, not the way an unreadable file is, so a record the index holds for it is
+	/// removed. A file that grew past the bound leaves the index rather than staying stale in it.
+	/// </summary>
+	[Fact]
+	public async Task A_File_Over_The_Size_Bound_Is_Not_Recorded_And_Leaves_The_Index_If_It_Was()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("grown.md"), "now eleven.");
+		await File.WriteAllTextAsync(folder.Combine("small.md"), "tiny");
+
+		FakeStore store = new();
+		store.Seed("grown.md", "hash-of-the-smaller-version");
+
+		Reconciler reconciler = new(
+			folder.Path,
+			new IndexablePathFilter(".folderassistant", maxContentBytes: 10),
+			store,
+			new Sha256ContentHasher());
+
+		ReconcileResult result = await reconciler.ReconcileAsync();
+
+		result.Changes.Should().ContainSingle(change => change.RelativePath == "grown.md")
+			.Which.Delta.Should().Be(FileDelta.Removed);
+		result.Changes.Should().ContainSingle(change => change.RelativePath == "small.md")
+			.Which.Delta.Should().Be(FileDelta.Added);
+		result.Skipped.Should().Be(0, "an oversize file is not an unreadable one");
+	}
+
+	/// <summary>
+	/// An extension outside the list is not hashed at all, not merely refused afterwards: the pass
+	/// repeats on every interval, and hashing every binary in the folder each time is the cost the list
+	/// exists to avoid.
+	/// </summary>
+	[Fact]
+	public async Task A_File_Outside_The_Extension_List_Is_Neither_Hashed_Nor_Recorded()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("notes.md"), "text");
+		await File.WriteAllBytesAsync(folder.Combine("photo.png"), [0x89, 0x50, 0x4E, 0x47]);
+
+		FakeStore store = new();
+		CountingHasher hasher = new();
+
+		Reconciler reconciler = new(
+			folder.Path,
+			new IndexablePathFilter(".folderassistant", indexableExtensions: [".md"]),
+			store,
+			hasher);
+
+		ReconcileResult result = await reconciler.ReconcileAsync();
+
+		result.Changes.Should().ContainSingle().Which.RelativePath.Should().Be("notes.md");
+		hasher.Hashed.Should().ContainSingle().Which.Should().Be(folder.Combine("notes.md"));
+	}
+
 	private static Task<ReconcileResult> Reconcile(TempFolder folder, IIndexStore store, IContentHasher? hasher = null)
-		=> new Reconciler(folder.Path, ".folderassistant", store, hasher ?? new XxHash64ContentHasher())
+		=> new Reconciler(folder.Path, Filter, store, hasher ?? new Sha256ContentHasher())
 			.ReconcileAsync();
 
-	private static Task<string> HashOf(string path) => new XxHash64ContentHasher().HashAsync(path);
+	private static Task<string> HashOf(string path) => new Sha256ContentHasher().HashAsync(path);
 
 
 	/// <summary>
@@ -445,6 +504,24 @@ public sealed class ReconcilerTests
 			=> Task.CompletedTask;
 	}
 
+	/// <summary>Hashes normally and remembers which files it was asked about.</summary>
+	private sealed class CountingHasher : IContentHasher
+	{
+		private readonly Sha256ContentHasher _inner = new();
+
+		public List<string> Hashed { get; } = [];
+
+		public Task<string> HashAsync(string absolutePath, CancellationToken cancellationToken = default)
+		{
+			lock (Hashed)
+			{
+				Hashed.Add(absolutePath);
+			}
+
+			return _inner.HashAsync(absolutePath, cancellationToken);
+		}
+	}
+
 	/// <summary>
 	/// Fails for one named file the way a live writer does, and reads the rest normally. A real lock
 	/// would need a second thread holding a handle, which asserts the operating system's behaviour
@@ -452,7 +529,7 @@ public sealed class ReconcilerTests
 	/// </summary>
 	private sealed class ThrowingHasher(string failFor) : IContentHasher
 	{
-		private readonly XxHash64ContentHasher _inner = new();
+		private readonly Sha256ContentHasher _inner = new();
 
 		public Task<string> HashAsync(string absolutePath, CancellationToken cancellationToken = default)
 			=> Path.GetFileName(absolutePath) == failFor

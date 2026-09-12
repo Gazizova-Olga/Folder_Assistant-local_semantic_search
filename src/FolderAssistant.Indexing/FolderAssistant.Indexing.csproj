@@ -17,8 +17,6 @@
 	-->
 
 	<ItemGroup>
-		<!-- Change detection only, not a security boundary; see Directory.Packages.props. -->
-		<PackageReference Include="System.IO.Hashing" />
 		<!--
 			Abstractions only. Every loop in this assembly is built to survive a fault and keep
 			converging, which is exactly what makes a loop failing every pass look like one with

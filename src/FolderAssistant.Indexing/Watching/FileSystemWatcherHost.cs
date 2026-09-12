@@ -45,8 +45,9 @@ public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IBatchHoldStat
     private DateTimeOffset _holdStartedUtc;
 
     /// <param name="rootPath">The folder to watch, including everything beneath it.</param>
-    /// <param name="metadataFolderName">
-    /// The index's own folder, which must be excluded or indexing feeds itself.
+    /// <param name="filter">
+    /// What is worth reporting. It excludes the index's own folder, which it must, or indexing feeds
+    /// itself — and it is the same instance every other walker over this folder uses.
     /// </param>
     /// <param name="quietWindow">
     /// How long a path must go untouched before its change is published.
@@ -57,17 +58,18 @@ public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IBatchHoldStat
     /// </param>
     public FileSystemWatcherHost(
         string rootPath,
-        string metadataFolderName,
+        IndexablePathFilter filter,
         TimeSpan quietWindow,
         TimeSpan? maxHoldDuration = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
+        ArgumentNullException.ThrowIfNull(filter);
 
         _rootPath = Path.GetFullPath(rootPath);
         _quietWindow = quietWindow;
         _maxHoldDuration = maxHoldDuration ?? TimeSpan.FromMinutes(2);
         _debouncer = new ChangeDebouncer(quietWindow);
-        _filter = new IndexablePathFilter(metadataFolderName);
+        _filter = filter;
 
         // Unbounded, because dropping a settled change is the one failure this stage must not add.
         // The raw event burst is already collapsed by the time anything reaches here, so what

@@ -18,6 +18,8 @@ namespace FolderAssistant.Tests.Indexing;
 /// </summary>
 public sealed class ChangePipelineTests
 {
+	private static readonly IndexablePathFilter Filter = new(".folderassistant");
+
 	[Fact]
 	public async Task A_New_File_Is_Added()
 	{
@@ -166,7 +168,7 @@ public sealed class ChangePipelineTests
 		await File.WriteAllTextAsync(folder.Combine("docs", "deep", "note.md"), "nested");
 
 		RecordingStore store = new();
-		await new Reconciler(folder.Path, ".folderassistant", store, new XxHash64ContentHasher()).ReconcileAsync();
+		await new Reconciler(folder.Path, Filter, store, new Sha256ContentHasher()).ReconcileAsync();
 		store.Applied.Clear();
 
 		await Run(Pipeline(folder, store), Changed(folder, Path.Combine("docs", "deep", "note.md"), FileChangeKind.Modified));
@@ -352,6 +354,34 @@ public sealed class ChangePipelineTests
 			"the change was retried and landed, which is the rule working rather than failing");
 	}
 
+	/// <summary>
+	/// A settled file that is over the size bound is treated like one that is not there: whatever the
+	/// index holds for it goes. Left in place, a file that grew past the bound would stay in the index
+	/// on its last small version, and every later pass would call it unchanged.
+	/// </summary>
+	[Fact]
+	public async Task A_File_That_Grew_Past_The_Size_Bound_Leaves_The_Index()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("grown.md"), "now eleven.");
+
+		RecordingStore store = new();
+		store.Seed("grown.md", "hash-of-the-smaller-version");
+
+		ChangePipeline pipeline = new(
+			folder.Path,
+			new IndexablePathFilter(".folderassistant", maxContentBytes: 10),
+			store,
+			new Sha256ContentHasher(),
+			new FileSettler(TimeSpan.Zero),
+			retryDelay: TimeSpan.FromMilliseconds(10));
+
+		await Run(pipeline, Changed(folder, "grown.md", FileChangeKind.Modified));
+
+		store.Applied.Should().ContainSingle().Which.Delta.Should().Be(FileDelta.Removed);
+		store.Records.Should().NotContainKey("grown.md");
+	}
+
 	private static ChangePipeline Pipeline(
 		TempFolder folder,
 		IIndexStore store,
@@ -361,8 +391,9 @@ public sealed class ChangePipelineTests
 		ILogger<ChangePipeline>? logger = null)
 		=> new(
 			folder.Path,
+			Filter,
 			store,
-			hasher ?? new XxHash64ContentHasher(),
+			hasher ?? new Sha256ContentHasher(),
 			settler ?? new FileSettler(TimeSpan.Zero),
 			retryDelay: TimeSpan.FromMilliseconds(10),
 			maxAttempts,
@@ -392,7 +423,7 @@ public sealed class ChangePipelineTests
 		await run.Should().CompleteWithinAsync(TimeSpan.FromSeconds(20));
 	}
 
-	private static Task<string> HashOf(string path) => new XxHash64ContentHasher().HashAsync(path);
+	private static Task<string> HashOf(string path) => new Sha256ContentHasher().HashAsync(path);
 
 	/// <summary>A store that applies what it is given, so a second writer sees the first one's records.</summary>
 	private sealed class RecordingStore : IIndexStore
@@ -448,7 +479,7 @@ public sealed class ChangePipelineTests
 	/// </summary>
 	private sealed class FlakyHasher(int failures) : IContentHasher
 	{
-		private readonly XxHash64ContentHasher _inner = new();
+		private readonly Sha256ContentHasher _inner = new();
 
 		public int Calls { get; private set; }
 

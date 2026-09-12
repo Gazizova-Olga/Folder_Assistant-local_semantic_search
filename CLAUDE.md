@@ -102,11 +102,11 @@ delivers one changed file at a time to the embedding pipeline with retry and bac
 A writer inside this process reports what it changed instead of waiting to be told about it
 (`IIndexChangeNotifier`), which is latency the discovery round-trip has no reason to cost.
 
-**The watcher, its write-through entry point and its holds, the reconciler, the per-change
-pipeline, the outbox dispatcher and the bridge to embedding exist so far** (`SPEC-121`) — the
-store behind the writers and the dispatcher is not built, so nothing drives the bridge and nothing
-composes the stages yet. The assembly boundary is one-way on purpose: the library knows nothing
-of chunking, embedding or retrieval and cannot come to depend on them by accident.
+**Every seam has an implementation, and the library composes its own loops** (`FolderIndexer`,
+`SPEC-121`) — **the application does not start it yet.** The whole-folder pass and the outbox
+front end each write `file_manifest`, and how they share it is settled with that wiring rather than
+before it. The assembly boundary is one-way on purpose: the library knows nothing of chunking,
+embedding or retrieval and cannot come to depend on them by accident.
 
 The change signal is deliberately coarse — the consumer re-diffs by content hash — which
 makes it robust against the two ways filesystem watching is unreliable: dropped events on
@@ -148,6 +148,11 @@ Properties worth stating because they are easy to "simplify" away:
 - **A file that cannot be hashed is left out of the classification entirely**, never
   stored with an empty hash. An empty hash becomes the file's identity and makes every
   other unhashable file look like its move source.
+- **Both writers of a file's record hash the same bytes with the same digest.** The corpus
+  scanner and the front end each record a content hash in `file_manifest.file_hash`; hashing
+  differently would not fail, it would re-deliver the whole corpus after every whole-folder pass,
+  silently. SHA-256 over the bytes, not the decoded text — decoding drops a byte-order mark — and
+  a test runs the scanner against the library's hasher to hold them to it.
 - **A file's timestamps are the file's, not the crawl's.** Recording the moment a scan ran
   as a file's creation date is not metadata about the file. Read from the filesystem when a
   file is first seen (write time where none is reported), kept across edits, and derived

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.14.0 |
+| Version | 0.15.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -34,6 +34,11 @@ as it changes.
   unreadable that happens to look like text costs an embedding and pollutes the index.
 - Files above a configured size are skipped.
 - Build, VCS and metadata directories are not descended into.
+- The content hash recorded for a file is SHA-256 over its **bytes**, taken before decoding. The
+  indexing front end records its own hash of the same file in the same column
+  ([SPEC-121](SPEC-121-file-indexing-front-end.md)), and the two must agree byte for byte; a hash of
+  the decoded text would differ wherever a byte-order mark or an unreadable sequence was dropped.
+  The file id stays a hash of the path.
 - **The scan fails loudly rather than returning an empty result.** See the sharp edge below.
 
 ## Chunking

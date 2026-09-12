@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.13.0 |
+| Version | 0.14.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -42,13 +42,13 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 ## Implementation status
 
-**Every seam this library defines now has an implementation — the watcher and its write-through
-entry point, the reconciler, the per-change pipeline, the outbox dispatcher, the vectorization seam,
-and the store behind the writers and the dispatcher. Nothing composes them.** What is missing is the
-wiring that starts the watcher, runs the passes and drains the queue; until it exists the subsystem
-is complete and driven by nothing. The sections below describe only what exists; the rest of the
-design is named in Scope so the gap is visible, and will be specified as it is built rather than
-promised here.
+**Every seam this library defines has an implementation, and the library now composes its own
+loops: `FolderIndexer` starts the watcher, runs the passes and drains the queue, behind
+`IFolderIndexer` (see Composition). The application does not start it yet.** What is missing is the
+host's side: constructing the store, the vectorization seam and the indexer together, and settling
+how the whole-folder pass and this front end share the file table (the sharp edge below). Until that
+exists the subsystem is complete and driven by nothing in the running application. The sections below
+describe only what exists.
 
 ## The signal is deliberately coarse
 
@@ -112,9 +112,18 @@ between asserting the rule and asserting that the machine was fast enough.
   corpus is.
 - **`*.tmp`** — the transient file an atomic write leaves beside its target, holding a half-written
   copy of a document that is about to be reported in its own right.
+- **An extension this system does not read**, given the list of the ones it does. The alternative is
+  recording and delivering every binary in the folder to a consumer that refuses each one — churn on
+  every pass rather than a fault. The list is the host's to supply, because only the application
+  knows what it can read; without one, every extension is reported.
+- **A file over the size bound.** Size is a property of a file on disk rather than of a path, so it is
+  decided by the two writers rather than at the watcher: a file over the bound is neither hashed nor
+  recorded, and one the index already holds is removed. A file that grows past the bound leaves the
+  index, and one that shrinks back is added again.
 
 Exclusion matches a **whole path segment**, never a prefix. A folder called `binaries` or `objects`
-is an ordinary folder.
+is an ordinary folder. Every walker over the folder — the watcher, the reconciler, the per-change
+path — asks **one instance** of the rule, so they cannot disagree about what the corpus is.
 
 ## Reporting a change from inside this process
 
@@ -229,11 +238,16 @@ Hashing parallelism is sized independently of anything else. It is a disk- and C
 scales with the machine, unlike delivery onward, which is one round trip per file into a single
 backend. A single knob for both could only ever suit one of them.
 
-**Change detection does not use a cryptographic hash.** The question is whether these bytes differ
-from the last ones seen, nothing downstream treats the answer as an identity or a signature, and it
-is computed for every file on every pass. It is deliberately a different hash from the one the
-indexing subsystem uses to address chunk content, which must be stable across machines because it
-keys stored rows.
+**Change detection uses SHA-256 over the file's bytes — the digest the application's corpus scanner
+records for the same file, over the same bytes.** Change detection alone would be served by a faster
+hash, since the only question is whether these bytes differ from the last ones seen. What decides it
+is that the store this library writes through shares its file records with the corpus scanner, which
+records its own hash of the same file in the same column. Two writers hashing differently would not
+fail: the first comparison after a whole-folder pass would find every file modified and queue the
+entire corpus for delivery again — correctly, silently, at full cost. It is over the bytes rather than
+the decoded text because decoding drops a byte-order mark and replaces what it cannot read, so the two
+would disagree on exactly those files. The content-addressed chunk id is also a SHA-256; the two share
+an algorithm and nothing else — one keys stored rows, the other answers whether a file changed.
 
 ## The per-change path
 
@@ -447,6 +461,40 @@ delivery; the delivery clears the vectors, and the row goes with them. The index
 the row says about a file; the embedding side ends the row's life. That is the arrangement, recorded
 in place of the intention it replaced rather than beside it.
 
+## Composition
+
+`FolderIndexer` owns the four loops and runs them together, behind `IFolderIndexer`; it is the whole
+of the library's surface to a host. Each loop is correct alone and useless alone — the watcher
+publishes to a channel nothing reads, the dispatcher drains a queue nothing fills — so the one type
+that knows all four is where the things they share are decided:
+
+- **One filter.** The watcher, the reconciler and the per-change path decide what is in the corpus
+  with one instance, built once from the metadata folder name, the extension list and the size bound.
+- **One hold.** The reconciler is handed the watcher as the hold it defers for, so a periodic pass
+  waits for the same batch the watcher is holding back. Built without that introduction, both would
+  be correct on their own and the hold would cover nothing that reaches the store through the safety
+  net.
+- **One order of starting.** The folder is compared against the index before anything else runs: the
+  watcher sees only what happens after it attaches, and a folder edited while nothing was running has
+  changes nothing will ever report. The loops start afterwards, so the outbox already holds that
+  pass's deliveries when the dispatcher first looks. That first pass is not caught — a folder that
+  cannot be read at all is the host's to hear about, where the periodic pass survives a bad one
+  because it has a next one.
+- **One order of stopping, and the order is the guarantee.** The watcher goes first and hands over
+  whatever was still inside its quiet window; the pipeline then finishes recording those changes,
+  durably; only then are the loops that stop on cancellation told to. Cancelling everything at once
+  would drop the settled change the pipeline was about to record, and the file would stay stale
+  until a reconciliation happened to notice. The wait is bounded by the host's token, never cut short
+  by the library: a host out of patience cancels it, and what was not recorded by then is the next
+  start's pass to find — which is said, at warning.
+
+While nothing is running, a report is dropped and a hold holds nothing, for one reason: a change made
+while nothing is watching is what the pass at the next start is for.
+
+**The application does not start it yet.** That is the wiring still owed: constructing the store,
+the vectorization seam and this type together, and deciding how the whole-folder pass and this front
+end share the file table (the sharp edge above).
+
 ## Observability
 
 Every loop in this subsystem is built to survive a fault and keep converging: the reconcile loop
@@ -556,6 +604,22 @@ cascade does the same work, so mutating it away kills nothing there — the test
 against `vec0`, and skips where the platform has no binary. The serialisation of concurrent deliveries is
 **not** demonstrated: widening the gate leaves every test passing, because the busy timeout absorbs the
 contention at this scale, and that is said in the test rather than left looking like coverage.
+
+The composition is tested against a real store and a real folder, because what it decides only shows
+when the loops run together: that a change reaches the embedding side with nothing calling any loop;
+that stopping records a change still inside its quiet window, staged through the write-through entry
+point so the change is in the debouncer for certain rather than an event still in flight; and that a
+periodic pass waits for a hold opened on the indexer, asserted with a quiet window long enough that
+only that pass could have recorded the file — the test that fails if the two are built without being
+introduced. The index's own database writes, which land inside the watched folder while the loops
+run, are asserted never to have been delivered.
+
+Change detection is asserted to hash the bytes — a byte-order mark is part of what is hashed — and to
+agree with the application's corpus scanner on the same file, in a test that runs the scanner, so a
+change to either side fails there. The extension and size rules are asserted as functions and then
+through each writer: the reconciler neither hashes nor records a file outside the list, removes a
+recorded file that has grown past the bound, and counts it as neither skipped nor present; the
+per-change path removes such a file when its change settles.
 
 ## Open questions
 

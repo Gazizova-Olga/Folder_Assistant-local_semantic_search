@@ -1,7 +1,7 @@
 namespace FolderAssistant.Indexing.Watching;
 
 /// <summary>
-/// Decides whether a path is worth reporting at all.
+/// Decides whether a path is worth reporting at all, and whether a file on disk is worth indexing.
 ///
 /// <para>
 /// It is a type of its own rather than a branch inside the watcher because the watcher's own input
@@ -17,8 +17,14 @@ namespace FolderAssistant.Indexing.Watching;
 /// Unfiltered, indexing a file causes a write, which causes an event, which causes indexing —
 /// with no idle state to settle into.
 /// </para>
+///
+/// <para>
+/// <strong>One instance serves every walker.</strong> The watcher, the reconciler and the per-change
+/// path each decide what is in the corpus, and if they decided differently a file could be recorded
+/// by one and refused by the next — which looks exactly like a file nobody ever saved.
+/// </para>
 /// </summary>
-internal sealed class IndexablePathFilter
+public sealed class IndexablePathFilter
 {
     /// <summary>
     /// Directories whose contents are build output, version-control internals, or restored
@@ -36,19 +42,51 @@ internal sealed class IndexablePathFilter
     private static readonly char[] PathSeparators = [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar];
 
     private readonly string _metadataFolderName;
+    private readonly HashSet<string>? _indexableExtensions;
+    private readonly long _maxContentBytes;
     private readonly StringComparison _comparison;
 
-    public IndexablePathFilter(string metadataFolderName)
+    /// <param name="metadataFolderName">The index's own folder, by its configured name.</param>
+    /// <param name="indexableExtensions">
+    /// The extensions, with their leading dot, of the files this system reads. <see langword="null"/>
+    /// reports every extension. Given a list, a file outside it is never reported and never indexed
+    /// — the front end would otherwise record and deliver every binary in the folder to a consumer
+    /// that refuses each one, which is churn on every pass rather than a fault.
+    /// </param>
+    /// <param name="maxContentBytes">
+    /// The largest file worth indexing. A larger one is not part of the corpus: it is neither
+    /// recorded nor delivered, and if the index already holds it, it is removed. Size is a property
+    /// of a file on disk rather than of a path, so it is checked by <see cref="ShouldIndex"/> and
+    /// not by <see cref="ShouldReport"/>.
+    /// </param>
+    public IndexablePathFilter(
+        string metadataFolderName,
+        IEnumerable<string>? indexableExtensions = null,
+        long maxContentBytes = long.MaxValue)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(metadataFolderName);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxContentBytes);
 
         _metadataFolderName = metadataFolderName;
+        _maxContentBytes = maxContentBytes;
+
+        // Extensions compare case-insensitively on every platform, matching the application's own
+        // allow-list; only folder names follow the platform's rule.
+        _indexableExtensions = indexableExtensions is null
+            ? null
+            : new HashSet<string>(indexableExtensions, StringComparer.OrdinalIgnoreCase);
 
         // The configured name is compared the way the platform compares paths, for the same reason
         // the debouncer keys on one.
         _comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
     }
 
+    /// <summary>
+    /// Whether a path is one this system could ever index: outside the excluded folders, not a
+    /// transient write, and of an extension it reads. Decided from the path alone, so it can be
+    /// asked of a file that no longer exists — a delete is reported by path, and it has to be
+    /// reported for exactly the files that were ever recorded.
+    /// </summary>
     public bool ShouldReport(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -61,8 +99,20 @@ internal sealed class IndexablePathFilter
             return false;
         }
 
+        if (_indexableExtensions is not null && !_indexableExtensions.Contains(Path.GetExtension(path)))
+        {
+            return false;
+        }
+
         return !path.Split(PathSeparators).Any(IsExcludedSegment);
     }
+
+    /// <summary>
+    /// Whether a file on disk belongs in the index: everything <see cref="ShouldReport"/> requires,
+    /// and a size within the bound.
+    /// </summary>
+    public bool ShouldIndex(string path, long sizeBytes)
+        => sizeBytes <= _maxContentBytes && ShouldReport(path);
 
     private bool IsExcludedSegment(string segment)
         => segment.Equals(_metadataFolderName, _comparison)

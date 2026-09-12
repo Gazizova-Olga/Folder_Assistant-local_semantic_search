@@ -24,6 +24,8 @@ namespace FolderAssistant.Tests.Indexing;
 /// </summary>
 public sealed class IndexHoldTests
 {
+	private static readonly IndexablePathFilter Filter = new(".folderassistant");
+
 	private static readonly TimeSpan Window = TimeSpan.FromMilliseconds(100);
 	private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(20);
 
@@ -34,7 +36,7 @@ public sealed class IndexHoldTests
 	public async Task A_Hold_Keeps_A_Settled_Change_Back_Until_It_Is_Released()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -62,7 +64,7 @@ public sealed class IndexHoldTests
 	public async Task Holds_Nest_And_The_Batch_Goes_On_The_Last_Release()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -95,7 +97,7 @@ public sealed class IndexHoldTests
 		TimeSpan maxHold = TimeSpan.FromMilliseconds(400);
 
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window, maxHold);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window, maxHold);
 
 		host.Start();
 
@@ -116,7 +118,7 @@ public sealed class IndexHoldTests
 	public async Task Disposing_A_Hold_Twice_Does_Not_Release_Another()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 
@@ -149,7 +151,7 @@ public sealed class IndexHoldTests
 	public async Task A_Hold_Covers_The_Watchers_Own_Events_Too()
 	{
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window);
 
 		host.Start();
 		await LetTheWatcherAttachAsync();
@@ -187,7 +189,7 @@ public sealed class IndexHoldTests
 		TimeSpan maxHold = TimeSpan.FromSeconds(2);
 
 		using TempFolder folder = new();
-		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window, maxHold);
+		await using FileSystemWatcherHost host = new(folder.Path, Filter, Window, maxHold);
 
 		host.Start();
 

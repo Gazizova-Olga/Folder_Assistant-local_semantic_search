@@ -108,10 +108,10 @@ internal sealed class LocalTextFileScanner
 				continue;
 			}
 
-			String content;
+			Byte[] bytes;
 			try
 			{
-				content = File.ReadAllText(filePath, Encoding.UTF8);
+				bytes = File.ReadAllBytes(filePath);
 			}
 			catch (IOException)
 			{
@@ -123,6 +123,8 @@ internal sealed class LocalTextFileScanner
 				continue;
 			}
 
+			String content = DecodeText(bytes);
+
 			if (String.IsNullOrWhiteSpace(content))
 			{
 				continue;
@@ -130,11 +132,17 @@ internal sealed class LocalTextFileScanner
 
 			String relativePath = Path.GetRelativePath(rootPath, filePath).Replace('\\', '/');
 
+			// The content hash is taken over the bytes, before decoding. The indexing front end records
+			// its own hash of the same file in the same column of the same record (SPEC-121), and the
+			// two have to agree byte for byte: decoding drops a byte-order mark and replaces sequences
+			// it cannot read, so a hash of the text would disagree on exactly those files — silently,
+			// as a corpus re-delivered in full the first time the two writers compared notes. The id
+			// stays a hash of the path; only the content hash is over bytes.
 			yield return new ScannedTextFile(
 				FileId: Sha256($"file::{relativePath}"),
 				FullPath: filePath,
 				RelativePath: relativePath,
-				FileHash: Sha256(content),
+				FileHash: Sha256(bytes),
 				SizeBytes: info.Length,
 				ModifiedUtc: info.LastWriteTimeUtc,
 				Content: content,
@@ -142,6 +150,20 @@ internal sealed class LocalTextFileScanner
 		}
 	}
 
+	/// <summary>
+	/// Decodes as <c>File.ReadAllText</c> would: UTF-8 unless a byte-order mark says otherwise, with
+	/// the mark itself left out of the text.
+	/// </summary>
+	private static String DecodeText(Byte[] bytes)
+	{
+		using StreamReader reader = new(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+
+		return reader.ReadToEnd();
+	}
+
 	private static String Sha256(String value)
-		=> Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+		=> Sha256(Encoding.UTF8.GetBytes(value));
+
+	private static String Sha256(Byte[] bytes)
+		=> Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }
