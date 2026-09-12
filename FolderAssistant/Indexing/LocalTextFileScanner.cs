@@ -27,6 +27,18 @@ internal sealed class LocalTextFileScanner
 	};
 
 	/// <summary>
+	/// Whether this system reads files of that extension at all.
+	///
+	/// <para>
+	/// Exposed so that the per-file delivery path asks the same question this scanner does, rather than
+	/// keeping a second list beside it. Two lists would drift, and the drift would be silent: a file
+	/// indexed by one path and ignored by the other looks exactly like a file that was never saved.
+	/// </para>
+	/// </summary>
+	public static Boolean IsIndexableExtension(String? extension)
+		=> !String.IsNullOrWhiteSpace(extension) && AllowedExtensions.Contains(extension);
+
+	/// <summary>
 	/// Yields indexable files one at a time, reading each one's text only as it is pulled.
 	///
 	/// <para>

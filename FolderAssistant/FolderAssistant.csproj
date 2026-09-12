@@ -42,6 +42,14 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<!--
+			The application drives the indexing library; the library knows nothing of this project. That
+			direction is the whole point of the boundary — a reference the other way would let indexing
+			reach into chunking, embedding and retrieval, which is exactly what putting it in its own
+			assembly was meant to prevent. This is the first reference to it: the seam it calls back
+			through is implemented here.
+		-->
+		<ProjectReference Include="..\src\FolderAssistant.Indexing\FolderAssistant.Indexing.csproj" />
 	</ItemGroup>
 
 </Project>

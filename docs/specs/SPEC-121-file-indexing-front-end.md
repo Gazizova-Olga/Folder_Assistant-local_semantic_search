@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -41,10 +41,11 @@ depend on them by accident. What crosses back is a seam the application implemen
 
 ## Implementation status
 
-**The watcher, the reconciler, the per-change pipeline and the outbox dispatcher are built. The store
-and the bridge are not.** The outbox exists as a contract and a dispatcher that drains it; nothing
-implements the store behind either the writers or the dispatcher, and nothing implements the seam that
-turns a delivered file into embedded content. Nothing yet composes these stages together. The sections
+**The watcher, the reconciler, the per-change pipeline, the outbox dispatcher and now the vectorization
+seam are built. The store is not.** The outbox exists as a contract and a dispatcher that drains it, and
+the application implements the seam that turns a delivered file into embedded content; nothing implements
+the store behind either the writers or the dispatcher, so nothing drives the seam yet and nothing composes
+these stages together. The sections
 below describe only what exists; the rest of the design is named in Scope so the gap is visible, and will
 be specified as it is built rather than promised here.
 
@@ -268,6 +269,54 @@ take it right now may fail without consequence — a checkpoint reclaims disk an
 must not end the loop. What a checkpoint is for, and what it was measured to reclaim, is in
 [SPEC-130](SPEC-130-persistence.md).
 
+## The vectorization seam, as implemented
+
+`IVectorizationService` is the whole of what crosses back from this library into the application, and the
+application implements it in `RagBridgeVectorizationService`: one delivered file in, chunks and vectors
+out. It is the per-file counterpart of the corpus pass, and the two share the pieces that must not
+diverge — one tokenizer, one chunker, one embed window. Two definitions of how a file becomes chunks
+would drift, and the symptom would be a file that retrieves differently depending on which path indexed
+it.
+
+**The delivered id is the identity.** Chunks are keyed on the `docId` the library hands over, not on
+anything derived on the far side, so a file that is moved and then edited stays one file under one id
+rather than becoming two.
+
+**Four things end in writing nothing, and none of them is a failure:**
+
+- **The metadata folder.** The database lives inside the watched folder, so indexing it would make every
+  write a change to that folder, and the indexer would never go quiet — each pass triggering the next for
+  as long as the process runs.
+- **An extension this system does not read.** The question is asked of the scanner rather than answered
+  from a second list beside it; two lists would drift silently, and a file indexed by one path and
+  ignored by the other looks exactly like a file that was never saved.
+- **A corpus-fitted embedder with no stored fit.** A fit is taken against a corpus and one delivered file
+  is not one. Embedding anyway would store vectors in a space no query can reach, and no query could
+  detect it: such a vector is not malformed, it simply means something else.
+- **A delete for something never indexed.** Delivery is at-least-once, so a delete can arrive twice or
+  arrive for a file whose upsert was skipped. Treating it as an error would abandon the operation once
+  its attempts ran out and mark a file failed for having nothing to remove.
+
+**Deletion removes vectors explicitly, before the row whose cascade takes the chunks.** Under the blob
+backend this looks redundant, because the chunk rows cascade and take their vectors with them — and a
+test on that backend passes either way. It is not redundant: a native store keeps vectors in a virtual
+table, which cannot be a foreign-key target, so there the cascade cannot fire at all and a vector would
+outlive its chunk as a hit resolving to nothing.
+
+### The sharp edge: two writers of the file table
+
+The corpus pass and this seam both write `file_manifest`, and that is recorded rather than designed
+around. A corpus pass rewrites those rows wholesale and deletes any file its scan did not see, so a pass
+overlapping a delivery can remove a row the delivery just wrote and take that file's chunks with it
+through the cascade.
+
+It cannot happen yet: nothing drives the seam, because no store implementation exists for the dispatcher
+to claim from. The resolution is the split this design already assumes — the indexer owning the file rows
+and the embedding side owning only chunks and vectors — and it arrives with that store. Writing only
+chunks and vectors *now* would not work: the schema's foreign key forbids a chunk with no file row, and
+retrieval resolves a hit through that row, so a delivered file with no row would be stored and
+unreachable.
+
 ## Observability
 
 Every loop in this subsystem is built to survive a fault and keep converging: the reconcile loop
@@ -347,6 +396,14 @@ survival has no other observable: a pass that failed and a pass with nothing to 
 state behind them. The assertions are on the **level** as much as the text, since the level is what
 decides whether anyone ever reads the line, and the debug cases additionally assert that nothing
 louder was written — that is what keeps an ordinary editing session from being reported as a fault.
+
+The vectorization seam is tested against a real database, and most of its tests are about what it
+refuses, because every refusal is a failure that would otherwise be silent. One of them can only be seen
+on the native backend: the explicit deletion of vectors is invisible under the blob store, where the
+cascade does the same work, so mutating it away kills nothing there — the test that catches it runs
+against `vec0`, and skips where the platform has no binary. The serialisation of concurrent deliveries is
+**not** demonstrated: widening the gate leaves every test passing, because the busy timeout absorbs the
+contention at this scale, and that is said in the test rather than left looking like coverage.
 
 ## Open questions
 

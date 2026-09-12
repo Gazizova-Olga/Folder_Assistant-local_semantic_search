@@ -129,6 +129,121 @@ internal sealed class FolderIndexRepository
 	}
 
 	/// <summary>
+	/// Writes one delivered file: its manifest row, its chunks, and their vectors, in one transaction.
+	///
+	/// <para>
+	/// The corpus pass above and this method are <strong>two writers of <c>file_manifest</c></strong>,
+	/// and that is a known sharp edge rather than an oversight. A corpus pass rewrites those rows
+	/// wholesale and deletes any file its scan did not see, so a pass overlapping a delivery can remove
+	/// a row this method just wrote and take that file's chunks with it through the cascade. Nothing
+	/// drives this path yet, so the two cannot overlap today; the split that fixes it — the indexer
+	/// owning the file rows and this side owning only chunks and vectors — needs the outbox store,
+	/// which does not exist here. Until then the hazard is written down rather than designed around.
+	/// </para>
+	///
+	/// <para>
+	/// It cannot write a fit artifact, and does not try. A corpus-fitted embedder is fitted against a
+	/// whole corpus, and one delivered file is not one; the cold pass owns that.
+	/// </para>
+	/// </summary>
+	public IndexWriteSummary UpsertSingleFile(
+		String databasePath,
+		ScannedFile file,
+		IReadOnlyList<ChunkMetadata> chunks,
+		IReadOnlyDictionary<String, EmbeddingResult> embeddingsByChunk,
+		ModelDescriptor descriptor)
+	{
+		ArgumentNullException.ThrowIfNull(file);
+		ArgumentNullException.ThrowIfNull(chunks);
+		ArgumentNullException.ThrowIfNull(embeddingsByChunk);
+		ArgumentNullException.ThrowIfNull(descriptor);
+
+		String modelVersionId = descriptor.ModelVersionId;
+
+		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(
+			databasePath,
+			withVectorExtension: this._vectorStoreWriter.RequiresVectorExtension);
+
+		using SqliteTransaction transaction = connection.BeginTransaction();
+
+		UpsertModel(connection, transaction, descriptor);
+		this._vectorStoreWriter.EnsureSchema(connection, transaction, modelVersionId, descriptor.Dimension);
+
+		UpsertFile(connection, transaction, file);
+
+		// Before the new chunks, exactly as the corpus pass orders it: an edit produces a new
+		// content-addressed id for the same slot, and the unique constraint on (file_id, chunk_index)
+		// would reject it while the old row is still there.
+		this.DeleteSupersededChunks(connection, transaction, file.FileId, chunks);
+
+		Int32 chunkCount = 0;
+		Int32 vectorCount = 0;
+
+		foreach (ChunkMetadata chunk in chunks)
+		{
+			UpsertChunk(connection, transaction, file.FileId, chunk, modelVersionId);
+			chunkCount++;
+
+			if (!embeddingsByChunk.TryGetValue(chunk.ChunkId, out EmbeddingResult? embedding))
+			{
+				continue;
+			}
+
+			this._vectorStoreWriter.UpsertVector(
+				connection, transaction, chunk.ChunkId, modelVersionId, embedding.Vector, descriptor.Dimension);
+			vectorCount++;
+		}
+
+		transaction.Commit();
+
+		return new IndexWriteSummary(1, chunkCount, vectorCount, 0);
+	}
+
+	/// <summary>
+	/// Removes one file from the index: its vectors first, then the row whose cascade takes its chunks.
+	///
+	/// <para>
+	/// The order is the load-bearing part. Vectors go through the store's own contract rather than the
+	/// cascade, because the cascade is a property of the blob backend and a native store keeps vectors
+	/// in a virtual table that cannot be a foreign-key target. Deleting the file row first would leave
+	/// such a store holding vectors for chunks that no longer exist, with nothing left to name them by.
+	/// </para>
+	///
+	/// <para>
+	/// A file that was never indexed is not an error. Delivery is at-least-once, so a delete can arrive
+	/// twice, or arrive for a file whose upsert was skipped.
+	/// </para>
+	/// </summary>
+	public Boolean DeleteFile(String databasePath, String fileId)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(fileId);
+
+		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(
+			databasePath,
+			withVectorExtension: this._vectorStoreWriter.RequiresVectorExtension);
+
+		using SqliteTransaction transaction = connection.BeginTransaction();
+
+		this.DeleteVectorsOf(connection, transaction,
+			"SELECT chunk_id FROM chunk_manifest WHERE file_id = $fileId;",
+			command => command.Parameters.AddWithValue("$fileId", fileId));
+
+		Int32 deleted;
+
+		using (SqliteCommand command = connection.CreateCommand())
+		{
+			command.Transaction = transaction;
+			command.CommandText = "DELETE FROM file_manifest WHERE file_id = $fileId;";
+			command.Parameters.AddWithValue("$fileId", fileId);
+			deleted = command.ExecuteNonQuery();
+		}
+
+		transaction.Commit();
+
+		return deleted > 0;
+	}
+
+	/// <summary>
 	/// Removes chunk rows for a file that the current scan no longer produces.
 	///
 	/// <para>
