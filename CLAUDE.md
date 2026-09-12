@@ -120,6 +120,12 @@ Properties worth stating because they are easy to "simplify" away:
   a hold nobody releases stops suppressing after two minutes, timed from the first — the same
   rule as a reconcile loop surviving a bad pass, since an index that stops converging for the
   life of the process is the one outcome none of this may produce.
+- **A scheduled reconcile waits for the hold.** It is the one path that reaches the index
+  without going through the debouncer, so a pass landing mid-hold would index a half-finished
+  edit and defeat the hold entirely — bounded, because the hold expires whether or not anyone
+  releases it. The kinds reported are load-bearing for the same reason: coalescing drops a
+  create-then-delete pair outright, so a scratch file written and removed inside one hold costs
+  nothing, and reporting that create as a modification reaches the same end state only by luck.
 - **A reported change feeds the watcher's debouncer, never the per-change path directly**, and
   that routing is the whole point rather than a detail. Debouncing is what makes a dozen writes
   to one file cost one index pass; reporting past it would cost a pass per write and race the

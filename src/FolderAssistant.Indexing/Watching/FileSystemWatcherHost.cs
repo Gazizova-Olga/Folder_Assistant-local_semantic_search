@@ -27,7 +27,7 @@ namespace FolderAssistant.Indexing.Watching;
 /// costs one settled change however the writes were discovered.
 /// </para>
 /// </summary>
-public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IAsyncDisposable
+public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IBatchHoldState, IAsyncDisposable
 {
     private readonly string _rootPath;
     private readonly TimeSpan _quietWindow;
@@ -129,6 +129,10 @@ public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IAsyncDisposab
     }
 
     /// <inheritdoc/>
+    public ValueTask NotifyCreatedAsync(string absolutePath, CancellationToken cancellationToken = default)
+        => Report(absolutePath, FileChangeKind.Created, cancellationToken);
+
+    /// <inheritdoc/>
     public ValueTask NotifyChangedAsync(string absolutePath, CancellationToken cancellationToken = default)
         => Report(absolutePath, FileChangeKind.Modified, cancellationToken);
 
@@ -152,6 +156,22 @@ public sealed class FileSystemWatcherHost : IIndexChangeNotifier, IAsyncDisposab
         }
 
         return new Hold(this);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Public because the hold cannot reach every writer by itself: a pass that reads the folder and
+    /// writes the index without passing through here has to check.
+    /// </remarks>
+    public bool IsHoldActive
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return IsHeldLocked();
+            }
+        }
     }
 
     private void ReleaseHold()

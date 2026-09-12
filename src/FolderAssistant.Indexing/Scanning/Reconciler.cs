@@ -30,12 +30,21 @@ public sealed class Reconciler
     private readonly IContentHasher _hasher;
     private readonly IndexablePathFilter _filter;
     private readonly int _maxDegreeOfParallelism;
+    private readonly IBatchHoldState? _hold;
+
+    /// <summary>How often a deferred pass re-asks. Short: the wait ends when the caller says so.</summary>
+    private static readonly TimeSpan HoldPollInterval = TimeSpan.FromMilliseconds(50);
     private readonly ILogger _logger;
 
     /// <param name="maxDegreeOfParallelism">
     /// How many files are hashed at once. Sizes a disk- and CPU-bound job, so it scales with the
     /// machine — unrelated to how many files are delivered onward at once, which is one network
     /// round-trip each into a single backend. One knob for both could only ever suit one of them.
+    /// </param>
+    /// <param name="hold">
+    /// Optional. Given one, a scheduled pass waits while a batch is held. Omitted, passes run on
+    /// their interval regardless — which is right where nothing can hold, and wrong the moment
+    /// something can.
     /// </param>
     /// <param name="logger">
     /// Optional. Omitted, the reconciler runs silent: it records what it survives, but takes the
@@ -47,6 +56,7 @@ public sealed class Reconciler
         IIndexStore store,
         IContentHasher hasher,
         int maxDegreeOfParallelism = 0,
+        IBatchHoldState? hold = null,
         ILogger<Reconciler>? logger = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
@@ -58,6 +68,7 @@ public sealed class Reconciler
         _hasher = hasher;
         _filter = new IndexablePathFilter(metadataFolderName);
         _maxDegreeOfParallelism = maxDegreeOfParallelism > 0 ? maxDegreeOfParallelism : Environment.ProcessorCount;
+        _hold = hold;
         _logger = logger ?? NullLogger<Reconciler>.Instance;
     }
 
@@ -170,6 +181,7 @@ public sealed class Reconciler
             {
                 try
                 {
+                    await WaitForHoldToClearAsync(cancellationToken).ConfigureAwait(false);
                     await ReconcileAsync(cancellationToken).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -192,6 +204,31 @@ public sealed class Reconciler
         catch (OperationCanceledException)
         {
             // Stopping.
+        }
+    }
+
+
+    /// <summary>
+    /// Defers a scheduled pass while a batch is held.
+    ///
+    /// <para>
+    /// This is the one path that reaches the index without going through the debounce engine, so a
+    /// hold cannot reach it the way it reaches everything else. A pass landing inside one reads and
+    /// records a file its caller is still part-way through editing — one extra pass over a
+    /// half-finished state, which is the whole of what the hold was opened to prevent.
+    /// </para>
+    ///
+    /// <para>
+    /// Bounded by construction: a hold stops suppressing once it expires, released or not, so this
+    /// cannot wait longer than that. Delaying a safety net by that much costs nothing worth having —
+    /// it is here to catch what the watcher missed, not to meet a deadline.
+    /// </para>
+    /// </summary>
+    private async Task WaitForHoldToClearAsync(CancellationToken cancellationToken)
+    {
+        while (_hold is not null && _hold.IsHoldActive)
+        {
+            await Task.Delay(HoldPollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 

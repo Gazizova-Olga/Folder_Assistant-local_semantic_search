@@ -1,5 +1,6 @@
 using FluentAssertions;
 using FolderAssistant.Indexing.Scanning;
+using FolderAssistant.Indexing.Watching;
 using Microsoft.Extensions.Logging;
 
 namespace FolderAssistant.Tests.Indexing;
@@ -327,11 +328,69 @@ public sealed class ReconcilerTests
 			"the fault that was survived is the whole content of the report");
 	}
 
+
+	/// <summary>
+	/// The reconciler is the one path that reaches the index without going through the debouncer, so
+	/// a hold cannot reach it the way it reaches everything else. A pass landing inside one reads a
+	/// file its holder is still part-way through editing and records that — an extra pass over a
+	/// half-finished state, which is the whole of what the hold was opened to prevent.
+	/// </summary>
+	[Fact]
+	public async Task A_Scheduled_Pass_Waits_While_A_Batch_Is_Held()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("a.md"), "alpha");
+
+		FakeStore store = new();
+		SwitchableHold hold = new(held: true);
+
+		Reconciler reconciler = new(
+			folder.Path, ".folderassistant", store, new XxHash64ContentHasher(), hold: hold);
+
+		using CancellationTokenSource stopping = new();
+
+		Task loop = reconciler.RunPeriodicallyAsync(TimeSpan.FromMilliseconds(20), stopping.Token);
+
+		// Many intervals. A pass that was merely slow would have run a dozen times by now, so
+		// nothing having run says the hold stopped it rather than that the test was impatient.
+		await Task.Delay(500);
+
+		store.ReadAllCalls.Should().Be(0, "a pass inside a hold would index what its holder is still editing");
+
+		hold.Release();
+
+		DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+
+		while (store.ReadAllCalls == 0 && DateTime.UtcNow < deadline)
+		{
+			await Task.Delay(20);
+		}
+
+		await stopping.CancelAsync();
+		await loop;
+
+		store.ReadAllCalls.Should().BeGreaterThan(0, "releasing the hold lets the safety net run again");
+	}
+
 	private static Task<ReconcileResult> Reconcile(TempFolder folder, IIndexStore store, IContentHasher? hasher = null)
 		=> new Reconciler(folder.Path, ".folderassistant", store, hasher ?? new XxHash64ContentHasher())
 			.ReconcileAsync();
 
 	private static Task<string> HashOf(string path) => new XxHash64ContentHasher().HashAsync(path);
+
+
+	/// <summary>
+	/// A hold the test controls. The real one expires on a clock; what matters here is only that
+	/// the reconciler asks and obeys, so the answer is a field rather than a duration.
+	/// </summary>
+	private sealed class SwitchableHold(bool held) : IBatchHoldState
+	{
+		private volatile bool _held = held;
+
+		public bool IsHoldActive => _held;
+
+		public void Release() => _held = false;
+	}
 
 	private sealed class FakeStore : IIndexStore
 	{
@@ -341,11 +400,17 @@ public sealed class ReconcilerTests
 
 		public int ApplyCalls { get; private set; }
 
+		public int ReadAllCalls { get; private set; }
+
 		public void Seed(string relativePath, string contentHash, DateTime createdUtc = default)
 			=> _records[relativePath] = new FileRecord(relativePath, contentHash, 0, createdUtc);
 
 		public Task<IReadOnlyDictionary<string, FileRecord>> ReadAllAsync(CancellationToken cancellationToken = default)
-			=> Task.FromResult<IReadOnlyDictionary<string, FileRecord>>(_records);
+		{
+			ReadAllCalls++;
+
+			return Task.FromResult<IReadOnlyDictionary<string, FileRecord>>(_records);
+		}
 
 		public Task<FileRecord?> ReadAsync(string relativePath, CancellationToken cancellationToken = default)
 			=> Task.FromResult(_records.GetValueOrDefault(relativePath));

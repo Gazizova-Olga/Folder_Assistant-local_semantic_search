@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.10.0 |
+| Version | 0.11.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -123,8 +123,13 @@ outside this process — an editor, a checkout, a build — and it is the wrong 
 process makes itself, where the writer knows the path the moment its handle closes. Waiting to be
 told about its own write buys a discovery round-trip and nothing else: the file is already settled.
 
-`IIndexChangeNotifier` is that entry point, and its surface is two reports — a file written in
-place, and a file deleted. What matters about it is **where a report feeds**, not that it exists: a
+`IIndexChangeNotifier` is that entry point, and its surface is three reports — a file created, a
+file written in place, and a file deleted. The first two are kept apart because the folding rules
+keep them apart: a create and a delete inside one window annihilate, so a file written and cleaned
+up inside one costs nothing, while the same pair reported as modifications folds to a deletion of a
+path that was never indexed. That ends in the same place only because the consumer looks for a
+record to remove and finds none — luck rather than design, and it runs out the moment either rule
+changes. What matters about it is **where a report feeds**, not that it exists: a
 reported change is recorded in the same debouncer the watcher's own events are recorded in, and from
 there is indistinguishable from one.
 
@@ -177,6 +182,16 @@ one entry and is published once.
   interval, since the caller has just said its work is finished.
 - **Disposal is idempotent.** Disposing one handle twice would otherwise release a hold belonging to
   someone else, and let that caller's half-finished work out.
+- **A scheduled reconcile waits too.** The reconciler is the one path that reaches the index without
+  going through the debouncer, so a hold cannot reach it the way it reaches everything else: a pass
+  landing inside one reads and records a file its holder is still part-way through editing. It
+  waits, bounded by the hold's own expiry — delaying a safety net by at most that costs nothing
+  worth having, since it exists to catch what the watcher missed and not to meet a deadline.
+
+What a hold promises is narrow and worth stating exactly. **No file is published more than once for
+the work one hold covers**, and a file created and removed inside it is never published at all. It
+does not promise one change for the whole batch: four files edited under one hold are four files,
+and cost four passes.
 
 ## Reconciliation, and why its own failures matter more than most
 
@@ -467,6 +482,14 @@ the routing exists for and which cannot be staged any other way — a real write
 each other for the same file, which has to settle as one change. Every assertion that something is
 *not* reported is made behind a tracer that is: once the tracer arrives, whatever should have been
 refused has had at least as long and did not, so the test cannot pass by waiting alone.
+
+A hold is asserted by first asserting a negative — nothing published while it was open — over
+several poll intervals, because a publication that is merely late is indistinguishable from one
+that was suppressed if the wait is short. One property is deliberately not demonstrated: releasing
+the last hold publishes immediately rather than at the next poll, and the two differ only in
+timing, so separating them would mean racing the interval and calling the result a rule. The
+reconciler's deferral is asserted against a hold the test switches by hand, since what is being
+checked is that the pass asks and obeys, not how a real hold decides.
 
 The vectorization seam is tested against a real database, and most of its tests are about what it
 refuses, because every refusal is a failure that would otherwise be silent. One of them can only be seen

@@ -230,6 +230,58 @@ public sealed class WriteThroughNotificationTests
 	/// FileSystemWatcher does not report anything until the OS has registered the subscription, and
 	/// a file created in that gap is simply missed.
 	/// </summary>
+
+	[Fact]
+	public async Task A_Reported_Create_Settles_As_A_Create()
+	{
+		using TempFolder folder = new();
+		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", Window);
+
+		host.Start();
+
+		await host.NotifyCreatedAsync(folder.Combine("new.md"));
+
+		ObservedChange change = await ReadOneAsync(host.Changes);
+
+		Path.GetFileName(change.Path).Should().Be("new.md");
+		change.Kind.Should().Be(FileChangeKind.Created);
+	}
+
+	/// <summary>
+	/// Why a create is reported as a create and not as a modification. A file written and cleaned up
+	/// inside one window never existed as far as anything downstream is concerned, and the folding
+	/// rule that drops the pair is keyed on the create. Reported as a modification, the same pair
+	/// folds to a deletion instead — of a path that was never indexed, which happens to end in the
+	/// same place only because the consumer looks for a record to remove and finds none.
+	/// </summary>
+	[Fact]
+	public async Task A_Create_And_A_Delete_Inside_One_Window_Are_Never_Reported()
+	{
+		TimeSpan window = TimeSpan.FromSeconds(1);
+
+		using TempFolder folder = new();
+		await using FileSystemWatcherHost host = new(folder.Path, ".folderassistant", window);
+
+		host.Start();
+
+		string scratch = folder.Combine("scratch.md");
+
+		await host.NotifyCreatedAsync(scratch);
+		await host.NotifyDeletedAsync(scratch);
+
+		// The tracer again: once it arrives, the pair has had at least as long to surface.
+		await host.NotifyChangedAsync(folder.Combine("notes.md"));
+
+		ObservedChange change = await ReadOneAsync(host.Changes);
+
+		Path.GetFileName(change.Path).Should().Be("notes.md");
+
+		await Task.Delay(window);
+
+		host.Changes.TryRead(out ObservedChange? extra).Should()
+			.BeFalse("a file that came and went inside one window costs nothing", extra?.Path);
+	}
+
 	private static Task LetTheWatcherAttachAsync() => Task.Delay(TimeSpan.FromMilliseconds(300));
 
 	private static async Task<ObservedChange> ReadOneAsync(ChannelReader<ObservedChange> reader)

@@ -58,6 +58,19 @@ public sealed record ObservedChange(string Path, FileChangeKind Kind);
 public interface IIndexChangeNotifier
 {
     /// <summary>
+    /// Reports that <paramref name="absolutePath"/> is a file that did not exist before.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="NotifyChangedAsync"/> because coalescing treats the two differently: a
+    /// create and a delete inside one window annihilate, so a file written and cleaned up inside one
+    /// costs nothing at all. Reported as a modification instead, that same pair folds to a deletion —
+    /// of a path that was never indexed, which ends in the same place only because the consumer looks
+    /// for a record to remove and finds none. That is luck, and it runs out the moment either rule
+    /// changes.
+    /// </remarks>
+    ValueTask NotifyCreatedAsync(string absolutePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reports that <paramref name="absolutePath"/> was written in place.
     /// </summary>
     ValueTask NotifyChangedAsync(string absolutePath, CancellationToken cancellationToken = default);
@@ -86,4 +99,23 @@ public interface IIndexChangeNotifier
     /// </para>
     /// </summary>
     IDisposable BeginBatch();
+}
+
+/// <summary>
+/// Whether a batch is being held back right now.
+///
+/// <para>
+/// Anything that reaches the index without passing through the debouncer has to ask. A hold is
+/// enforced where changes are published, which covers everything that goes through there and
+/// nothing else — so a pass that reads the folder and writes the index directly would run straight
+/// through a hold and record the half-finished state the hold exists to keep out.
+/// </para>
+/// </summary>
+public interface IBatchHoldState
+{
+    /// <summary>
+    /// True while a hold is suppressing. False once the last one is released, and false once a hold
+    /// nobody released has expired.
+    /// </summary>
+    bool IsHoldActive { get; }
 }
