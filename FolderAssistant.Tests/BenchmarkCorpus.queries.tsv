@@ -1,0 +1,25 @@
+# Semantic-search ground truth. Format: query<TAB>relevant file(s), comma separated. Lines starting with # are ignored.
+# Every query is worded to avoid the distinctive words of the document it should find, so ranking it
+# correctly takes meaning rather than shared vocabulary. A lexical matcher should do badly here on purpose.
+how does a ship tell one coastal navigation beacon apart from another	lighthouse.txt
+what did the person living at a shore signal station do through the night	lighthouse.txt
+how do people make greens keep for months by letting microbes sour them	kimchi.txt
+why does a mountainside of packed white suddenly let go and slide	avalanche.txt
+why does a shadow clock disagree with a wristwatch depending on the season	sundial.txt
+how does a pulp slurry become a flat surface you can write on	papermaking.txt
+how do young flocks know where to travel when nobody has shown them	birdmigration.txt
+why is every key on a keyboard instrument left a little off from exact ratios	pianotuning.txt
+why does any flat drawing of the whole globe distort something	cartography.txt
+how does a clinician judge how far under a patient is during an operation	anaesthesia.txt
+what makes a very heavy star tear itself apart at the end of its life	supernova.txt
+where did the heavier elements in the universe come from	supernova.txt
+why must molten material on a pipe be rotated without pause while it is formed	glassblowing.txt
+what happens when long frozen soil begins to soften	permafrost.txt
+how is distance underwater worked out from a returning sound	sonar.txt
+why does a heap of garden waste start to stink instead of breaking down cleanly	composting.txt
+why is a volume stitched through the fold rather than simply stuck at the edge	bookbinding.txt
+why does the wind over a subcontinent switch direction with the seasons	monsoon.txt
+why does the lump that grows inside an oyster have a rainbow sheen	pearl.txt
+how does a kitchen appliance move warmth out of its own interior	refrigeration.txt
+why does colour wash straight back out of fabric unless it is treated first	naturaldye.txt
+why must iron be struck only while it sits in a particular heat range	blacksmithing.txt

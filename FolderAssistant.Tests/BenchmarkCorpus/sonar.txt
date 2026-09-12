@@ -1,0 +1,1 @@
+A pulse is sent out and the delay before its echo returns gives the range, since the speed through the medium is roughly known. Temperature and salinity bend the path, so a layer can hide a target by refracting the beam away from it, and listening without transmitting gives away nothing about your own position.

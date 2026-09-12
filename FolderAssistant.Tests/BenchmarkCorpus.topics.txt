@@ -1,0 +1,167 @@
+# Topic seeds for the generated accuracy-at-scale corpus.
+#
+# Each topic carries paraphrase VARIANTS (V) and paraphrase QUERIES (Q). The generator builds documents by
+# combining a topic's variants, so a document shares its subject with its siblings but not its wording; a
+# query's relevant set is every document of its topic. The variants are deliberately reworded rather than
+# restated, so lexical overlap alone cannot rank them and a corpus-fitted or pretrained model has something
+# real to find. Format: "T <id>" opens a topic, "V " a variant, "Q " a query. Blank and # lines are ignored.
+
+T lighthouse
+V A tower on the point turns its lamp so the beam sweeps the sea for miles.
+V Sailors offshore count the intervals between flares of light to identify the station.
+V The optic revolves on a clockwork bed that a keeper once wound every few hours.
+V Each coastal marker has a signature rhythm that distinguishes it from its neighbours.
+Q which shoreline warning post am I looking at from the deck
+Q who maintained the revolving mechanism before it was automated
+
+T kimchi
+V Salted leaves give up their water, then sit under spice in a sealed crock.
+V Bacteria on the vegetable convert sugar into acid over several warm days.
+V The crock is pressed down so no air sits against the top of the batch.
+V Once the taste turns sharp the container goes into the cold to slow it.
+Q how does brining and waiting preserve a harvest
+Q why is the batch kept away from air while it works
+
+T avalanche
+V Faceted grains form a fragile stratum that later snowfall buries and hides.
+V A slab lets go when the burden above passes what the weak seam can carry.
+V Most releases start on ground pitched between roughly thirty and forty-five degrees.
+V The mass gathers speed downhill and can run well beyond the base of the steeps.
+Q what makes a slope of accumulated winter fall release without warning
+Q which gradients are most prone to a sudden slide
+
+T sundial
+V The pointer must be inclined to match the latitude of the site.
+V Hour lines are laid out by a tangent rule, not at equal spacing.
+V The reading and a mechanical timepiece part company over the course of a year.
+V Without the correct tilt toward the pole the hours come out uneven.
+Q why does a shadow instrument need setting up for its location
+Q why does the shadow reading drift compared with a watch
+
+T papermaking
+V Beaten fibre suspended in a vat is lifted out on a mesh frame.
+V A thin even layer settles on the screen as the liquid drains away.
+V Pressing against felt drives out the remaining moisture before drying.
+V The sheet holds together through fibre bonding rather than any adhesive.
+Q how is a suspension of beaten fibre turned into a usable sheet
+Q what holds the fibres together once the sheet has dried
+
+T birdmigration
+V Birds lay on fat before departure, nearly doubling their mass.
+V Navigation draws on the sun, star patterns and the magnetic field.
+V Hand-reared individuals with no guide still head the right way at the right time.
+V The journey runs for days at a stretch with no chance to feed.
+Q how do first-year travellers find a route they have never flown
+Q what fuels a flight that goes on for days without a stop
+
+T pianotuning
+V Beats between two sounding strings are counted and slowed to a target rate.
+V The octave is split so every key is a little off and none is intolerable.
+V Stiffness in the wire pushes overtones sharp, so the treble is widened to suit.
+V A reference is taken from a fork and the rest is laid out from it.
+Q why is no key on the instrument in perfect ratio
+Q why is the upper register set wider than arithmetic suggests
+
+T cartography
+V A sphere will not lie flat without something being stretched.
+V Every projection sacrifices shape, area or direction, never none of them.
+V Constant-heading straight lines come at the cost of enormous polar exaggeration.
+V Showing relative land area correctly requires giving up something else.
+Q why can no flat rendering of the world be faithful in every respect
+Q what is traded away to make straight courses easy to plot
+
+T anaesthesia
+V Dose is adjusted to the individual, because requirement varies widely.
+V Breathing, pupils and processed brain signals indicate how far under someone is.
+V Going under and coming back up carry more risk than the stable interval between.
+V A fixed quantity would suit almost nobody, so it is titrated to effect.
+Q how is the depth of unconsciousness assessed in theatre
+Q which parts of the procedure are the most dangerous
+
+T supernova
+V With an iron core there is no further fusion to support the star.
+V The centre falls inward in under a second and then rebounds.
+V Outer layers are flung away at a sizeable fraction of light speed.
+V For a short while the event outshines every star in its galaxy combined.
+Q what ends the life of a very massive star
+Q how were the heavy atoms around us manufactured
+
+T glassblowing
+V The gather must be kept rotating or it slumps out of true.
+V Air blown down the pipe opens a cavity inside the mass.
+V A soaked wooden block is used to bring the form back to round.
+V Work returns to the heat each time the material grows too stiff.
+Q why is constant rotation necessary while working the hot mass
+Q how is a hollow formed inside the gathered material
+
+T permafrost
+V Soil frozen for years on end stores plant remains that never decayed.
+V Thawing lets microbes reach that store and release it as gas.
+V The gases released drive further warming, which thaws still more ground.
+V Structures founded on it settle and fail as the support softens.
+Q what is released when ground that never thawed begins to warm
+Q why do roads and buildings fail as the ground softens
+
+T sonar
+V Range follows from the time an emitted pulse takes to come back.
+V Changes in temperature and salt content bend the travel path.
+V A refracting layer can conceal a contact by steering the beam aside.
+V Staying silent and only listening reveals nothing of your own whereabouts.
+Q how is the distance to a submerged object determined
+Q why can a contact vanish even with the equipment working
+
+T composting
+V Nitrogen-rich and carbon-rich material must be kept in balance.
+V Enough air has to reach the middle for the process to stay aerobic.
+V Turning raises the interior to around sixty degrees, destroying weed seed.
+V Left airless and saturated it turns sour and gives off ammonia.
+Q why does a heap begin to smell foul rather than rot down
+Q what temperature does a well managed pile reach and why does it matter
+
+T bookbinding
+V Gathered sections are sewn onto supports so the block opens flat.
+V Glue on its own cracks along the back when the volume is opened.
+V Rounding and backing creates a shoulder for the boards to sit against.
+V Covering material is thinned where it folds so corners stay slim.
+Q why is sewing used rather than sticking the back
+Q why is the spine shaped before the boards go on
+
+T monsoon
+V The interior warms faster than the sea as spring goes on.
+V The pressure contrast pulls damp air inland for months together.
+V In winter the land cools below the ocean and the flow turns around.
+V Planting calendars for a large share of humanity depend on its arrival.
+Q why does the prevailing flow reverse twice a year
+Q what happens to food supply when the rains come late
+
+T pearl
+V A foreign particle inside the shell is coated by the lining tissue.
+V Deposits build up as fine alternating sheets of mineral and protein.
+V The spacing of those sheets is near the wavelength of visible light.
+V Interference across the layers produces the sheen rather than pigment.
+Q why does the growth inside the shell shimmer with colour
+Q how does the creature deal with something it cannot expel
+
+T refrigeration
+V Compressing the fluid raises its temperature so it can shed heat outside.
+V Expansion through a restriction leaves it much colder than its surroundings.
+V Evaporating inside the compartment draws warmth out of the contents.
+V Cold is never made; heat is simply carried from one place to another.
+Q how is the inside of the cabinet made colder than the room
+Q what is actually happening at the coils on the back
+
+T naturaldye
+V Colour from plants needs a mordant to bond fibre and pigment together.
+V The metal chosen changes the resulting shade from the same dyebath.
+V Alum, iron and copper give three distinct outcomes from one dyestuff.
+V Wool and silk take colour far more readily than cotton or linen.
+Q why does the shade differ although the dyestuff was identical
+Q why does colour not stay in untreated cloth
+
+T blacksmithing
+V Struck too cool the bar cracks; taken too hot it crumbles away.
+V Material is redistributed rather than cut off during shaping.
+V Drawing lengthens and narrows; upsetting shortens and thickens.
+V Hardness is fixed afterwards by quenching and then tempering.
+Q why does the work only happen within a narrow temperature band
+Q how is the final hardness of the finished piece controlled

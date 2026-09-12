@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — core implemented and live-verified |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-10 |
+| Last updated | 2026-09-12 |
 
 ## Purpose
 
@@ -118,12 +118,71 @@ implementation able to reach a *remote* service must not be a profile in this as
   is not yet cut off. The configuration key for it is deliberately absent until the code that reads
   it exists.
 
+## What it retrieves, measured (2026-09-12)
+
+The live verification above showed the embedder *works* — one query, one passage, sharing no words.
+`SemanticSearchBenchmark` now says by how much, across a labelled corpus (`SPEC-131` carries the full
+tables and the method).
+
+- On twenty-two paraphrase queries over twenty documents, `qwen3-embedding:0.6b` puts the correct
+  document first **every time** — Recall@1 of 100%, MRR@10 of 1.000. The placeholder embedder, on the
+  identical corpus and queries, manages **none**.
+- On three hundred generated documents with several relevant per query, it reaches **MAP 0.675** against
+  the corpus-fitted embedder's 0.401 and the placeholder's 0.031.
+- Both numbers reproduced exactly across three runs. Accuracy here is a property of the model and the
+  corpus, not of the machine.
+
+What it costs is the other half, and it is not small: **386 ms per chunk** on this machine's CPU, against
+0.7 ms for the placeholder and 5.5 ms for the fitted embedder. A first index of a real folder is therefore
+almost entirely this embedder, and nothing else in the pipeline is worth optimising until that is true no
+longer.
+
+## Decision: a local embedding server becomes a prerequisite (2026-09-12)
+
+The measurement above settles the relevance question, and settles it decisively, so the direction is
+taken: **once this is the better embedder, installing it is a condition of running the assistant**
+rather than an option an operator weighs. What follows is what that does and does not cost.
+
+**What is given up is zero-install, not privacy.** The endpoint is localhost and nothing leaves the
+machine, so the property every other profile has is untouched — a folder's contents still reach no
+network. What stops being true is that a fresh clone runs on its own. That is a real cost and a much
+narrower one than "offline" makes it sound, and the two should not be argued about as though they were
+the same thing.
+
+**The prerequisite is enforceable already**, which is the part that makes it defensible. The startup
+probe above turns an absent or unreachable server into a failed index carrying an actionable message. A
+prerequisite with no check is a trap: the system would otherwise start, index nothing useful, and answer
+badly for a reason no operator could see.
+
+**The other profiles do not go away, and a fallback is the least of why.** `programmable-*` stops being
+the default and becomes the explicit offline floor, for a machine that cannot meet the prerequisite. But
+the load-bearing reason to keep the whole matrix is that **the matrix is the instrument**: every number
+in this spec exists because a semantics-free embedder, a corpus-fitted one and a pretrained one could be
+run over one corpus, and every number in `SPEC-131` exists because two vector backends could be run over
+one set of vectors. A profile deleted for not being the default takes a measurement with it, and the
+questions those measurements serve are open — what a corpus fit actually buys (`SPEC-161`), what a native
+k-NN index actually buys (`SPEC-131`), and what any future embedder would have to beat. **Selecting a
+non-default profile stays a supported thing to do, not a vestige.**
+
+**`ollama-blob`, not `ollama-vec`.** The native k-NN backend would add a second prerequisite, and a
+harder one: it ships no `win-arm64` and no musl binary (`SPEC-131`). The same measurement shows it only
+pays above a few hundred documents and costs more below that, so pairing the two would buy little and
+gate the product on platform coverage. This is a statement about what is *required*, not about what is
+available — `*-vec` stays selectable and stays under measurement, and the corpus size at which it starts
+to pay is exactly the open question `SPEC-131` is holding.
+
+**Not done in this step.** `CompositionProfiles.Default` still resolves to `programmable-blob`. Changing
+it alters what a fresh clone does at runtime and needs its own verification on a machine where the
+prerequisite holds. It is recorded here as the decision, not performed here as a change.
+
 ## Open questions
 
 - Whether the query instruction should ever be configurable. It is a constant today because getting
   it wrong degrades ranking silently, and an operator has no way to tell they have.
-- Whether `ollama-*` should become the default profile. That is a measurement, not a preference, and
-  the benchmark that would settle it has not been run against this embedder.
+- Whether `ollama-*` should become the default profile: **answered above** — it does, and installing
+  the server becomes a prerequisite. What stays open is *when* the default flips, which waits on the
+  cold-start cost coming down far enough that a first index of a real folder is bearable. The
+  per-chunk figure above is the thing to watch.
 
 ## References
 

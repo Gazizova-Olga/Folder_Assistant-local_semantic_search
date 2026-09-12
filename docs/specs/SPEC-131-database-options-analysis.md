@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Reversed on evidence; see the verdict section |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-11 |
+| Last updated | 2026-09-12 |
 
 ## Purpose
 
@@ -269,6 +269,85 @@ into the 100 ms range.
 
 This was invisible at the size the rest of the suite works at, where folders hold three files.
 It is the argument for having a benchmark at all.
+
+## The other axis: which embedder finds the right document (2026-09-12)
+
+Everything above measures the **backend** — how quickly the same vectors come back. It says nothing about
+whether those vectors mean anything, and the two are independent: a fast read over a semantics-free
+embedding is fast nonsense. This section measures the other axis, and measures the two backends against
+each other for *agreement* as well as speed, because two implementations of one metric that disagree are
+not a fast one and a slow one, they are a right one and a wrong one.
+
+Instrument: `SemanticSearchBenchmark`, opt-in behind `RUN_SEMANTIC_BENCHMARK`, separate from the
+large-corpus `CorpusBenchmark` used above. Reports in [docs/benchmarks/](../benchmarks/).
+
+### Twenty documents, twenty-two paraphrase queries
+
+Hand-written single-topic documents, and queries worded to avoid the distinctive vocabulary of the
+document each one should find — so lexical overlap cannot carry them.
+
+| Profile | dim | Recall@1 | Recall@3 | Recall@5 | MRR@10 | Index | Mean query | DB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `programmable-blob` | 64 | 0% | 5% | 14% | 0.105 | 11 ms | 0.2 ms | 92 KB |
+| `ollama-blob` | 1024 | **100%** | 100% | 100% | **1.000** | 6.9 s | 97.4 ms | 176 KB |
+| `programmable-vec` | 64 | 0% | 5% | 14% | 0.105 | 19 ms | 0.8 ms | 388 KB |
+| `ollama-vec` | 1024 | **100%** | 100% | 100% | **1.000** | 7.1 s | 114.8 ms | 4,232 KB |
+
+1. **The placeholder sits at or below chance, which is exactly what makes it usable as a floor.** It puts
+   the right document first for none of the twenty-two queries, where guessing among twenty documents would
+   manage about one. That is the intended result (`SPEC-161`) and this is the first measurement of how far
+   below a real embedder it sits — but note *why* it is this low here: the queries were written to deny it
+   the shared vocabulary a character histogram can accidentally reward. On a corpus where queries quote
+   their targets it would score far better and the number would mean far less.
+2. **The pretrained embedder answers every one.** Recall@1 of 100% and MRR of 1.000 across all
+   twenty-two, for a local CPU model. This is the evidence behind `SPEC-162`'s network dependency.
+3. **The two backends rank identically.** Every accuracy column matches between `*-blob` and its `*-vec`
+   twin. Sharing the vectors and the metric, they should — and this is the check that says so, rather than
+   an assumption that they do.
+
+### Three hundred documents, where a corpus-fitted embedder can fit
+
+Generated from topic seeds: several documents per topic, each pairing differently worded variants of one
+subject over identical neutral filler, so nothing but meaning distinguishes a topic. Every document of a
+topic is relevant to that topic's queries.
+
+| Profile | dim | P@1 | MAP | nDCG@10 | Recall@10 |
+|---|---:|---:|---:|---:|---:|
+| `programmable-blob` | 64 | 7% | 0.031 | 0.071 | 7% |
+| `lsa-blob` | 32 | 45% | 0.401 | 0.451 | 44% |
+| `ollama-blob` | 1024 | **82%** | **0.675** | 0.748 | 72% |
+
+4. **The corpus-fitted embedder is real, and it is weak — which is what `SPEC-161` claims.** Thirteen times
+   the placeholder's mean average precision, and a little over half the pretrained model's. That is the
+   first evidence for the synonymy claim on a corpus of realistic size; everything supporting it before was
+   a nine-document fixture. It does not make LSA a default, and it does establish that fitting buys
+   something real rather than nothing.
+5. **The accuracy columns reproduced exactly across three runs**, while every latency moved. That is the
+   separation worth having: the accuracy figures are properties of the models and the corpus, not of the
+   machine or the hour.
+
+### The backend gap widens with the corpus — and reverses below a threshold
+
+| Docs | `blob` p50 | `vec` p50 | `blob` p95 | `vec` p95 |
+|---:|---:|---:|---:|---:|
+| 20 | 0.2 ms | 0.8 ms | — | — |
+| 500 | 1.4 ms | 0.3 ms | 2.0 ms | 0.5 ms |
+| 2,000 | 6.0 ms | 0.5 ms | 7.3 ms | 1.4 ms |
+| 8,000 | 34.1 ms | 1.7 ms | 47.0 ms | 3.9 ms |
+
+6. **Below a few hundred documents the native backend is the slower one.** At twenty documents `vec` costs
+   more per query than reading every vector does, because its fixed cost has nothing to amortise against.
+   This matters more than the headline ratio for a decision about a per-platform binary: the folder a
+   person actually points this at may well sit on the wrong side of that crossover.
+7. **Above it, the gap grows with the corpus** — roughly an order of magnitude by 8,000 documents. The
+   exact multiple should not be quoted to a significant figure: across three runs of the same commit it
+   measured 12.7x, 16.2x and 20.1x. The direction and the order of magnitude are the findings; the digits
+   are not, and a single run of this would have reported any one of them as though it were the answer.
+8. **The footprint penalty is concentrated on small corpora, not inherent.** At twenty documents and 1,024
+   dimensions the `vec0` table costs 4,232 KB against the blob store's 176 KB — twenty-four times. At 64
+   dimensions across 500 to 8,000 documents it is 1.16x, 0.94x and 0.93x, so at scale it is level with the
+   blob store and then slightly smaller. Only those two cases were measured; nothing here says what 1,024
+   dimensions costs at scale, and it should not be read as if it did.
 
 ## Risks
 

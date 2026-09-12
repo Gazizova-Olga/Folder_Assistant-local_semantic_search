@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-08 |
+| Last updated | 2026-09-12 |
 
 ## Purpose
 
@@ -84,6 +84,28 @@ context, a query for one retrieves the other's documents. Nothing lexical can do
 the baseline is asserted **not** to — which is what makes the comparison mean something
 rather than merely showing that the fitted model runs.
 
+### What it actually bought, measured (2026-09-12)
+
+The synonymy claim above rested on a nine-document fixture, which can show that the mechanism works and
+cannot show that it is worth anything. `SemanticSearchBenchmark` now measures it on three hundred
+documents built so that nothing but meaning separates one topic from another — several differently worded
+documents per topic over identical neutral filler.
+
+| | placeholder | fitted (k = 32) | pretrained |
+|---|---:|---:|---:|
+| MAP | 0.031 | **0.401** | 0.675 |
+| P@1 | 7% | 45% | 82% |
+
+**"Weak synonymy" turns out to be the right phrase for it.** Thirteen times the placeholder's mean average
+precision, so the fit finds something real; a little over half the pretrained model's, so it does not
+replace one. Both halves of that matter — a result near zero would have said the reduction buys nothing on
+a realistic corpus, and a result near the pretrained model's would have said a corpus-fitted embedder makes
+the network dependency unnecessary. Neither is what happened.
+
+It cost 5.5 ms per chunk to index against the placeholder's 0.7 ms and the pretrained model's 386 ms, so
+on cost it sits nearer the floor than the ceiling. This still does not promote it: one corpus, of
+one shape, against one choice of k.
+
 ### Two properties that are load-bearing
 
 **1. `k` must sit well below the corpus rank, and above one.** The compression *is* the
@@ -141,7 +163,9 @@ model version's identity rather than a property of a run.
 ## Open questions
 
 - How `k` should be chosen for a real corpus. The band is real and both edges fail silently;
-  nothing currently derives it from the corpus, and a caller picking badly gets no signal.
+  nothing currently derives it from the corpus, and a caller picking badly gets no signal. The
+  measurement above used k = 32 against 300 documents and scored MAP 0.401 — one point, deliberately
+  chosen well below the corpus rank. It is evidence that a reasonable k works, not a rule for picking one.
 - Whether the baseline should stay selectable now that a fitted implementation exists, or become
   test-only. It is currently the only thing that guarantees an offline default.
 
