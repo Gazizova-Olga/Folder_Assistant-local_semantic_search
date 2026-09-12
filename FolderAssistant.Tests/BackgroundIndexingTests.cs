@@ -243,6 +243,178 @@ public sealed class BackgroundIndexingTests
 	}
 
 	/// <summary>A feed the test drives directly, so no filesystem timing is involved.</summary>
+
+	// ── A failed first index is not permanent ─────────────────────────────────
+
+	/// <summary>
+	/// What fails a first index is usually outside this process and usually temporary — an embedding
+	/// backend that has not finished starting, a model still being pulled. Left at
+	/// <see cref="IndexStatus.Failed"/>, every search refuses for the life of the process, and the
+	/// remedy is restarting an application that would have recovered on its own.
+	/// </summary>
+	[Fact]
+	public async Task A_Failed_First_Pass_Is_Tried_Again_Until_It_Succeeds()
+	{
+		Int32 attempts = 0;
+		IndexState state = new();
+
+		using FolderIndexingService service = new(
+			() => ++attempts < 3 ? throw new IOException("the embedding backend is not up yet") : EmptyResult,
+			changeFeed: null,
+			state,
+			healthCheck: null,
+			failedRetryInterval: TimeSpan.FromMilliseconds(20));
+
+		await service.StartAsync(CancellationToken.None);
+		await FinishedWithin(service);
+
+		attempts.Should().Be(3);
+		state.Status.Should().Be(IndexStatus.Ready);
+	}
+
+	/// <summary>
+	/// The probe is the likeliest thing to fail first and the likeliest to fix itself, since it is
+	/// usually a backend that is merely slower to start than this process.
+	/// </summary>
+	[Fact]
+	public async Task A_Failing_Probe_Is_Tried_Again_Until_It_Passes()
+	{
+		Int32 probes = 0;
+		Int32 passes = 0;
+		IndexState state = new();
+
+		StubHealthCheck probe = new(() =>
+		{
+			if (++probes < 3)
+			{
+				throw new InvalidOperationException("the embedding backend is unreachable");
+			}
+		});
+
+		using FolderIndexingService service = new(
+			() => { passes++; return EmptyResult; },
+			changeFeed: null,
+			state,
+			probe,
+			TimeSpan.FromMilliseconds(20));
+
+		await service.StartAsync(CancellationToken.None);
+		await FinishedWithin(service);
+
+		probes.Should().Be(3);
+		passes.Should().Be(1, "a probe that never passed must not let an index run");
+		state.Status.Should().Be(IndexStatus.Ready);
+	}
+
+	/// <summary>
+	/// A pass can fail on either side of the probe. Re-asking a backend that has already answered
+	/// costs a round trip for an answer that has not changed, where the part worth repeating is the
+	/// pass that failed after it.
+	/// </summary>
+	[Fact]
+	public async Task A_Probe_That_Has_Passed_Is_Not_Asked_Again()
+	{
+		Int32 probes = 0;
+		Int32 attempts = 0;
+		IndexState state = new();
+
+		StubHealthCheck probe = new(() => probes++);
+
+		using FolderIndexingService service = new(
+			() => ++attempts < 3 ? throw new IOException("the folder is locked") : EmptyResult,
+			changeFeed: null,
+			state,
+			probe,
+			TimeSpan.FromMilliseconds(20));
+
+		await service.StartAsync(CancellationToken.None);
+		await FinishedWithin(service);
+
+		attempts.Should().Be(3);
+		probes.Should().Be(1, "the backend already answered; the pass after it is what failed");
+	}
+
+	/// <summary>
+	/// Zero is the opt-out, and it has to keep working: a deployment that would rather see a failure
+	/// stand than have the process keep trying can still say so.
+	/// </summary>
+	[Fact]
+	public async Task Without_An_Interval_The_First_Attempt_Is_The_Only_One()
+	{
+		Int32 attempts = 0;
+		IndexState state = new();
+
+		using FolderIndexingService service = new(
+			() => { attempts++; throw new IOException("the folder is locked"); },
+			changeFeed: null,
+			state,
+			healthCheck: null,
+			failedRetryInterval: TimeSpan.Zero);
+
+		await service.StartAsync(CancellationToken.None);
+		await FinishedWithin(service);
+
+		attempts.Should().Be(1);
+		state.Status.Should().Be(IndexStatus.Failed);
+	}
+
+	/// <summary>
+	/// Stopping must not take as long as the retry schedule. The interval is a statement about how
+	/// long to keep trying to recover, not about how long a host may take to shut down — and a
+	/// generous one is exactly what a deployment would choose.
+	/// </summary>
+	[Fact]
+	public async Task Stopping_Inside_A_Retry_Wait_Does_Not_Wait_It_Out()
+	{
+		IndexState state = new();
+
+		using FolderIndexingService service = new(
+			() => throw new IOException("the folder is locked"),
+			changeFeed: null,
+			state,
+			healthCheck: null,
+			failedRetryInterval: TimeSpan.FromMinutes(5));
+
+		await service.StartAsync(CancellationToken.None);
+
+		// The first attempt has to have failed, or this would stop a service that never began waiting.
+		DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+
+		while (state.Status != IndexStatus.Failed && DateTime.UtcNow < deadline)
+		{
+			await Task.Delay(10);
+		}
+
+		Func<Task> stop = async () => await service.StopAsync(CancellationToken.None);
+
+		await stop.Should().CompleteWithinAsync(TimeSpan.FromSeconds(20));
+	}
+
+
+	/// <summary>
+	/// Waits for the pass loop with a bound rather than forever. A retry loop that stopped
+	/// terminating would otherwise hang the run instead of failing it, and a suite that hangs says
+	/// less than one that goes red — found by mutating the opt-out and watching the run stop
+	/// answering instead of reporting.
+	/// </summary>
+	private static async Task FinishedWithin(FolderIndexingService service)
+	{
+		Func<Task> run = async () => await service.ExecuteTask!;
+
+		await run.Should().CompleteWithinAsync(TimeSpan.FromSeconds(20));
+	}
+
+	/// <summary>A probe whose answer the test decides, call by call.</summary>
+	private sealed class StubHealthCheck(Action onCheck) : IEmbeddingHealthCheck
+	{
+		public ValueTask CheckAsync(CancellationToken cancellationToken = default)
+		{
+			onCheck();
+
+			return ValueTask.CompletedTask;
+		}
+	}
+
 	private sealed class StubChangeFeed : IFileChangeFeed
 	{
 		private readonly Channel<FolderChangeSignal> _channel = Channel.CreateUnbounded<FolderChangeSignal>();

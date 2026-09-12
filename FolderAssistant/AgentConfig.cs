@@ -175,6 +175,15 @@ internal record IndexingConfig
 	public Int32 DebounceMilliseconds { get; init; } = 750;
 
 	/// <summary>
+	/// How long to wait before trying a failed first index again. The cause is usually outside this
+	/// process and usually temporary — an embedding backend that has not finished starting, a model
+	/// still being pulled — and without a retry the index reports <c>Failed</c> for the life of the
+	/// process even though the next attempt would succeed. Zero disables retrying, leaving the first
+	/// attempt the only one.
+	/// </summary>
+	public Int32 FailedIndexRetryIntervalSeconds { get; init; } = 30;
+
+	/// <summary>
 	/// Periodic full rescan, as a safety net for changes the watcher never reports — events dropped
 	/// when its buffer overflows, and edits that arrive in a shape it does not recognise. Zero
 	/// disables it.

@@ -27,16 +27,25 @@ internal sealed class FolderIndexingService : BackgroundService
 	private readonly IFileChangeFeed? _changeFeed;
 	private readonly IndexState _state;
 	private readonly IEmbeddingHealthCheck? _healthCheck;
+	private readonly TimeSpan _failedRetryInterval;
+
+	private Boolean _probePassed;
 
 	/// <summary>
 	/// <paramref name="healthCheck"/> is null for every in-process embedder — they cannot be
 	/// unreachable, so there is nothing to probe and the first pass simply begins.
 	/// </summary>
+	/// <param name="failedRetryInterval">
+	/// How long to wait before trying a failed first pass again. Zero, the default here, means the
+	/// first attempt is the only one — a caller says how long it wants to keep trying rather than
+	/// inheriting a schedule.
+	/// </param>
 	public FolderIndexingService(
 		Func<IndexingResult> runIndex,
 		IFileChangeFeed? changeFeed,
 		IndexState state,
-		IEmbeddingHealthCheck? healthCheck = null)
+		IEmbeddingHealthCheck? healthCheck = null,
+		TimeSpan failedRetryInterval = default)
 	{
 		ArgumentNullException.ThrowIfNull(runIndex);
 		ArgumentNullException.ThrowIfNull(state);
@@ -45,11 +54,12 @@ internal sealed class FolderIndexingService : BackgroundService
 		this._changeFeed = changeFeed;
 		this._state = state;
 		this._healthCheck = healthCheck;
+		this._failedRetryInterval = failedRetryInterval;
 	}
 
 	protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 	{
-		await this.IndexAsync("startup", stoppingToken, probeFirst: true).ConfigureAwait(false);
+		await this.RunFirstPassUntilItSucceedsAsync(stoppingToken).ConfigureAwait(false);
 
 		if (this._changeFeed is null)
 		{
@@ -74,16 +84,59 @@ internal sealed class FolderIndexingService : BackgroundService
 		}
 	}
 
+	/// <summary>
+	/// Runs the first pass, and keeps running it while it fails.
+	///
+	/// <para>
+	/// What fails a first pass is usually outside this process and usually temporary: an embedding
+	/// backend still starting, a model still being pulled. Without this the state says
+	/// <see cref="IndexStatus.Failed"/> for the life of the process, a search refuses for as long,
+	/// and the fix is to restart an application that would have recovered by itself a minute later.
+	/// </para>
+	///
+	/// <para>
+	/// The probe is not repeated once it has passed. A pass can fail on either side of it, and
+	/// re-asking a backend that already answered costs a round trip for an answer that will not have
+	/// changed — where the pass that failed after it is the part worth trying again.
+	/// </para>
+	/// </summary>
+	private async Task RunFirstPassUntilItSucceedsAsync(CancellationToken stoppingToken)
+	{
+		while (!stoppingToken.IsCancellationRequested)
+		{
+			await this.IndexAsync("startup", stoppingToken, probeFirst: true).ConfigureAwait(false);
+
+			if (this._state.Status != IndexStatus.Failed || this._failedRetryInterval <= TimeSpan.Zero)
+			{
+				return;
+			}
+
+			try
+			{
+				await Task.Delay(this._failedRetryInterval, stoppingToken).ConfigureAwait(false);
+			}
+			catch (OperationCanceledException)
+			{
+				// Shutting down. Waiting out the rest of the interval first would make stopping take
+				// as long as the retry schedule, which is a setting about recovery and not about how
+				// long a host may take to stop.
+				return;
+			}
+		}
+	}
+
 	private async Task IndexAsync(String reason, CancellationToken cancellationToken, Boolean probeFirst = false)
 	{
 		try
 		{
-			if (probeFirst && this._healthCheck is not null)
+			if (probeFirst && !this._probePassed && this._healthCheck is not null)
 			{
 				// Before the first pass, not before every one: a backend that was reachable at startup
 				// and has since died fails per file anyway, and re-probing on each refresh would add a
 				// round-trip to every edit for an answer that is almost always yes.
 				await this._healthCheck.CheckAsync(cancellationToken).ConfigureAwait(false);
+
+				this._probePassed = true;
 			}
 
 			// The pipeline is synchronous and both CPU- and IO-bound. Handing it to the thread pool is

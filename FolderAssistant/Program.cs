@@ -140,7 +140,8 @@ internal sealed class Program
 				() => pipeline.Run(analyzedFolderPath, databasePath, config.Indexing),
 				changeFeed,
 				indexState,
-				sp.GetRequiredService<IVectorizer>() as IEmbeddingHealthCheck);
+				sp.GetRequiredService<IVectorizer>() as IEmbeddingHealthCheck,
+				TimeSpan.FromSeconds(config.Indexing.FailedIndexRetryIntervalSeconds));
 		});
 
 		// The bootstrap has to finish before the first request is served. A startup filter is what

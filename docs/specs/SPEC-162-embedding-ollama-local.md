@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — core implemented and live-verified |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | Embedding |
 | Last updated | 2026-09-12 |
 
@@ -111,6 +111,9 @@ implementation able to reach a *remote* service must not be a profile in this as
   errors that each describe a symptom. The probe retries three times, one second apart, so a server
   still paging the model in is not mistaken for an absent one; a width mismatch is passed straight
   through without retrying, because it is a configuration error that will fail identically each time.
+  A probe that fails all three times fails the index — and that is retried on its own schedule
+  rather than standing for the life of the process, since a server starting a minute late is the
+  ordinary case ([SPEC-120](SPEC-120-rag-indexing.md), Readiness).
 
 **Pending:**
 

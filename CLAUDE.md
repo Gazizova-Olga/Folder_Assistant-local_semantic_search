@@ -200,8 +200,11 @@ overlap, and a non-zero default would claim a selectivity the default profile la
 
 While the first index builds, semantic search **refuses** rather than answering from a
 half-built index: results from a partial index are indistinguishable from genuinely poor
-ones. A query vector is compared only against vectors sharing its model version — scoring
-across embedding spaces is meaningless.
+ones. A build that **failed** is reported as failed rather than as still building, and is
+retried on an interval rather than standing for the life of the process — what fails a first
+index is usually an embedding backend that has not finished starting, and a state nothing
+revisits turns that into a restart. A query vector is compared only against vectors sharing
+its model version — scoring across embedding spaces is meaningless.
 
 ### Tools
 

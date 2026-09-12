@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.13.0 |
+| Version | 0.14.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-12 |
 
@@ -162,6 +162,22 @@ that is quietly wrong.
 
 A failed build is reported as a failure, carrying its cause, rather than as "still building".
 One resolves by waiting and the other does not.
+
+**A failed build is not permanent.** What fails a first index is usually outside this process and
+usually temporary — an embedding backend that has not finished starting, a model still being
+pulled. Left at `Failed`, every search refuses for the life of the process and the remedy is
+restarting an application that would have recovered on its own, so the first pass is retried on an
+interval (`FailedIndexRetryIntervalSeconds`, 30 s) until it succeeds or the host stops. Three parts
+of that are the rule rather than the implementation:
+
+- **A probe that has already passed is not repeated.** A pass can fail on either side of it, and
+  re-asking a backend that answered costs a round trip for an answer that will not have changed,
+  where the pass that failed after it is the part worth trying again.
+- **Zero disables retrying**, which is the opt-out for a deployment that would rather a failure
+  stood — and it has to be a real branch rather than a very short interval, because a zero wait
+  would make the retry a busy loop.
+- **Stopping does not wait out an interval.** The interval says how long to keep trying to recover
+  and nothing about how long a host may take to shut down.
 
 **The failure is contained.** A background service that lets its exception escape takes the host
 down with it, which would turn an unreadable folder into a stopped application rather than one
