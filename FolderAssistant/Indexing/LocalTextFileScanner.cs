@@ -138,12 +138,13 @@ internal sealed class LocalTextFileScanner
 
 			String relativePath = Path.GetRelativePath(rootPath, filePath).Replace('\\', '/');
 
-			// The content hash is taken over the bytes, before decoding. The indexing front end records
-			// its own hash of the same file in the same column of the same record (SPEC-121), and the
+			// The content hash is taken over the bytes, before decoding. The pass embeds a file only
+			// when this hash equals the one the indexing front end recorded for it (SPEC-121), so the
 			// two have to agree byte for byte: decoding drops a byte-order mark and replaces sequences
-			// it cannot read, so a hash of the text would disagree on exactly those files — silently,
-			// as a corpus re-delivered in full the first time the two writers compared notes. The id
-			// stays a hash of the path; only the content hash is over bytes.
+			// it cannot read, so a hash of the text would disagree on exactly those files — and every
+			// one of them would be deferred to the front end, quietly, on every start. The id stays a
+			// hash of the path, derived as the front end derives it, because the pass writes chunks
+			// under it against the row the front end recorded.
 			yield return new ScannedTextFile(
 				FileId: Sha256($"file::{relativePath}"),
 				FullPath: filePath,

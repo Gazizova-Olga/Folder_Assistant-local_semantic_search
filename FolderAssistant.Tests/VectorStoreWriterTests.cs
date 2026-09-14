@@ -2,6 +2,7 @@ using System.Text.Json;
 using FluentAssertions;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
+using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Persistence;
 using Microsoft.Data.Sqlite;
 
@@ -11,21 +12,21 @@ public sealed class VectorStoreWriterTests
 {
 	/// <summary>
 	/// The point of the seam: the repository must have no vector-writing path of its own. A recording
-	/// writer that stores nothing leaves <c>chunk_vector</c> empty while the file and chunk rows still
-	/// land — which it could not do if the repository also wrote vectors directly.
+	/// writer that stores nothing leaves <c>chunk_vector</c> empty while the chunk rows still land —
+	/// which it could not do if the repository also wrote vectors directly.
 	/// </summary>
 	[Fact]
 	public void Every_Vector_Goes_Through_The_Injected_Writer_And_No_Other_Path()
 	{
 		using TempFolder folder = new();
 		String databasePath = BootstrapIn(folder);
+		String fileId = RecordFile(databasePath, "a.md");
 
 		RecordingVectorStoreWriter writer = new();
 
 		IndexWriteSummary summary = new FolderIndexRepository(writer).Upsert(
 			databasePath,
-			[OneFile()],
-			new Dictionary<String, IReadOnlyList<ChunkMetadata>> { ["f1"] = [Chunk("c1", 0), Chunk("c2", 1)] },
+			new Dictionary<String, IReadOnlyList<ChunkMetadata>> { [fileId] = [Chunk("c1", 0), Chunk("c2", 1)] },
 			new Dictionary<String, EmbeddingResult>
 			{
 				["c1"] = Embedding([1.0f, 0.0f, 0.0f]),
@@ -52,20 +53,21 @@ public sealed class VectorStoreWriterTests
 	{
 		using TempFolder folder = new();
 		String databasePath = BootstrapIn(folder);
+		String fileId = RecordFile(databasePath, "a.md");
 
 		ThrowingVectorStoreWriter writer = new();
 
 		FluentActions.Invoking(() => new FolderIndexRepository(writer).Upsert(
 				databasePath,
-				[OneFile()],
-				new Dictionary<String, IReadOnlyList<ChunkMetadata>> { ["f1"] = [Chunk("c1", 0)] },
+				new Dictionary<String, IReadOnlyList<ChunkMetadata>> { [fileId] = [Chunk("c1", 0)] },
 				new Dictionary<String, EmbeddingResult> { ["c1"] = Embedding([1.0f]) },
 				Descriptor(1)))
 			.Should().Throw<InvalidOperationException>();
 
 		using SqliteConnection connection = Connect(databasePath);
-		Count(connection, "SELECT COUNT(*) FROM file_manifest;").Should().Be(0);
 		Count(connection, "SELECT COUNT(*) FROM chunk_manifest;").Should().Be(0);
+		Count(connection, "SELECT COUNT(*) FROM file_manifest;")
+			.Should().Be(1, "the file's record is the store's and was never part of this write");
 	}
 
 	[Fact]
@@ -73,11 +75,11 @@ public sealed class VectorStoreWriterTests
 	{
 		using TempFolder folder = new();
 		String databasePath = BootstrapIn(folder);
+		String fileId = RecordFile(databasePath, "a.md");
 
 		new FolderIndexRepository().Upsert(
 			databasePath,
-			[OneFile()],
-			new Dictionary<String, IReadOnlyList<ChunkMetadata>> { ["f1"] = [Chunk("c1", 0)] },
+			new Dictionary<String, IReadOnlyList<ChunkMetadata>> { [fileId] = [Chunk("c1", 0)] },
 			new Dictionary<String, EmbeddingResult> { ["c1"] = Embedding([0.5f, -0.25f]) },
 			Descriptor(2));
 
@@ -165,16 +167,18 @@ public sealed class VectorStoreWriterTests
 	private static String BootstrapIn(TempFolder folder)
 		=> new FolderDatabaseBootstrapper().EnsureInitialized(folder.Path, new PersistenceConfig()).DatabasePath;
 
-	// The repository takes metadata, not text: what it stores is ids, offsets and hashes.
-	private static ScannedFile OneFile()
-		=> new(
-			FileId: "f1",
-			RelativePath: "a.md",
-			FileHash: "filehash",
-			SizeBytes: 10,
-			ModifiedUtc: new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-			FileType: ".md");
+	/// <summary>A file's record is the store's, so it is written there first; the chunks reference it.</summary>
+	private static String RecordFile(String databasePath, String relativePath)
+	{
+		new FolderIndexStore(databasePath)
+			.ApplyAsync([new ReconciledChange(relativePath, FileDelta.Added, new FileRecord(relativePath, "filehash", 10, default))])
+			.GetAwaiter()
+			.GetResult();
 
+		return FileIdentity.For(relativePath);
+	}
+
+	// The repository takes metadata, not text: what it stores is ids, offsets and hashes.
 	private static ChunkMetadata Chunk(String chunkId, Int32 index)
 		=> new(chunkId, index, index, index + 1, $"hash-{chunkId}");
 

@@ -3,6 +3,7 @@ using FluentAssertions;
 using FolderAssistant.Embedding;
 using FolderAssistant.Embedding.Lsa;
 using FolderAssistant.Indexing;
+using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Persistence;
 using Microsoft.Data.Sqlite;
 
@@ -11,6 +12,11 @@ namespace FolderAssistant.Tests;
 /// <summary>
 /// Indexing used to re-embed every file on every run. The file hash was being written and never read
 /// back; these cover reading it, and what has to be true besides the hash.
+///
+/// <para>
+/// A removal is recorded and queued by the pass and delivered by the dispatcher, so the two tests
+/// about deletion drain the outbox before they look — the way the running application would.
+/// </para>
 /// </summary>
 public sealed class ChangeDetectionTests
 {
@@ -79,14 +85,20 @@ public sealed class ChangeDetectionTests
 		File.Delete(folder.Combine("beta.md"));
 		IndexingResult second = Index(folder, databasePath);
 
-		second.FilesDeleted.Should().Be(1);
+		// The pass records the removal and queues it; the delivery is what clears the vectors, then
+		// the chunks, then the row — the order a native vector store needs.
+		second.ChangesRecorded.Should().Be(1);
+		OutboxDrain.Deliver(folder.Path, databasePath, ConfigFor("model-a")).Should().BeGreaterThan(0);
 
 		using SqliteConnection connection = Connect(databasePath);
 		Count(connection, "SELECT COUNT(*) FROM file_manifest;").Should().Be(1);
 
 		// The cascade is the point: chunk and vector rows for the removed file must not survive it.
-		Count(connection, "SELECT COUNT(*) FROM chunk_manifest;").Should().Be(second.ChunksIndexed);
-		Count(connection, "SELECT COUNT(*) FROM chunk_vector;").Should().Be(second.ChunksIndexed);
+		Count(connection, $"SELECT COUNT(*) FROM chunk_manifest WHERE file_id = '{FileIdentity.For("beta.md")}';")
+			.Should().Be(0);
+		Count(connection, "SELECT COUNT(*) FROM chunk_manifest;")
+			.Should().BeGreaterThan(0)
+			.And.Be(Count(connection, "SELECT COUNT(*) FROM chunk_vector;"));
 	}
 
 	[Fact]
@@ -99,7 +111,8 @@ public sealed class ChangeDetectionTests
 		Index(folder, databasePath);
 
 		File.Delete(folder.Combine("alpha.md"));
-		Index(folder, databasePath).FilesDeleted.Should().Be(1);
+		Index(folder, databasePath).ChangesRecorded.Should().Be(1);
+		OutboxDrain.Deliver(folder.Path, databasePath, ConfigFor("model-a"));
 
 		using SqliteConnection connection = Connect(databasePath);
 		Count(connection, "SELECT COUNT(*) FROM file_manifest;").Should().Be(0);

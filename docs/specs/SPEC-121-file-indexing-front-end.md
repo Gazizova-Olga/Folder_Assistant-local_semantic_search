@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.15.0 |
+| Version | 0.16.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-12 |
+| Last updated | 2026-09-14 |
 
 ## Purpose
 
@@ -232,20 +232,29 @@ the next pass re-reads the whole folder from scratch. Letting it escape costs ev
 The walk does not follow reparse points. One can point above the root or back into the tree,
 turning a bounded walk unbounded and putting files from outside the watched folder into its index.
 
+**The walk skips a subtree it cannot enter, and does not count it.** A folder that disappears
+mid-walk is ordinary and must not end the enumeration for everything after it, and the same
+setting is what skips a folder that merely denied access — the two look identical from here. The
+recorded files under either are therefore classified as removed, queued, and cleared, until a later
+comparison can enter the subtree again and records them as added. That is the one way a pass
+removes what is still on disk, and it is recorded here rather than closed, because closing it means
+telling a vanished folder from a forbidden one and the walk does not.
+
 Hashing parallelism is sized independently of anything else. It is a disk- and CPU-bound job that
 scales with the machine, unlike delivery onward, which is one round trip per file into a single
 backend. A single knob for both could only ever suit one of them.
 
 **Change detection uses SHA-256 over the file's bytes — the digest the application's corpus scanner
-records for the same file, over the same bytes.** Change detection alone would be served by a faster
+computes for the same file, over the same bytes.** Change detection alone would be served by a faster
 hash, since the only question is whether these bytes differ from the last ones seen. What decides it
-is that the store this library writes through shares its file records with the corpus scanner, which
-records its own hash of the same file in the same column. Two writers hashing differently would not
-fail: the first comparison after a whole-folder pass would find every file modified and queue the
-entire corpus for delivery again — correctly, silently, at full cost. It is over the bytes rather than
-the decoded text because decoding drops a byte-order mark and replaces what it cannot read, so the two
-would disagree on exactly those files. The content-addressed chunk id is also a SHA-256; the two share
-an algorithm and nothing else — one keys stored rows, the other answers whether a file changed.
+is that the whole-folder pass embeds a file only when the hash its scanner took equals the one this
+library recorded ([SPEC-120](SPEC-120-rag-indexing.md), Delta handling). Hashing differently would not
+fail: every file would be deferred, the pass would embed nothing, and the deliveries would do the whole
+corpus one file at a time — correctly, at full cost, visible only as a pass reporting every file
+deferred. It is over the bytes rather than the decoded text because decoding drops a byte-order mark
+and replaces what it cannot read, so the two would disagree on exactly those files. The
+content-addressed chunk id is also a SHA-256; the two share an algorithm and nothing else — one keys
+stored rows, the other answers whether a file changed.
 
 ## The per-change path
 
@@ -408,18 +417,31 @@ byte-for-byte would look already delivered and would never be embedded again —
 long as it existed. Avoiding one way to hold a stale mark introduced another; the condition on the
 conflict clause is what closes it.
 
+**And there is one writer of what the row says.** The whole-folder pass records the folder through
+this library's own comparison before it embeds anything, and writes only chunks, vectors and —
+through the store's conditional mark — what it delivered; the per-file delivery writes chunks and
+vectors under the id it was handed, and nothing about the row. Both used to write the row too, and
+the delivery's version of that was the race this rule exists to name: a hash read before a slow
+embed, written back afterwards over the newer one the front end had recorded meanwhile — after
+which the delivery's own conditional mark matched the reverted row, the delivery queued for the
+newer content found its work already done and skipped, and the file sat on stale vectors until a
+periodic pass happened to re-hash it. Silent throughout. A chunk row references the row the store
+wrote, so the ownership is held by the schema rather than by discipline: chunks for an id no row
+carries fail on the foreign key.
+
 ## The vectorization seam, as implemented
 
 `IVectorizationService` is the whole of what crosses back from this library into the application, and the
 application implements it in `RagBridgeVectorizationService`: one delivered file in, chunks and vectors
-out. It is the per-file counterpart of the corpus pass, and the two share the pieces that must not
-diverge — one tokenizer, one chunker, one embed window. Two definitions of how a file becomes chunks
-would drift, and the symptom would be a file that retrieves differently depending on which path indexed
-it.
+out, under the id it was handed, and nothing about the file's record. It is the per-file counterpart of
+the corpus pass, and the two share the pieces that must not diverge — one tokenizer, one chunker, one
+embed window. Two definitions of how a file becomes chunks would drift, and the symptom would be a file
+that retrieves differently depending on which path indexed it.
 
 **The delivered id is the identity.** Chunks are keyed on the `docId` the library hands over, not on
 anything derived on the far side, so a file that is moved and then edited stays one file under one id
-rather than becoming two.
+rather than becoming two. The row that id names was written by the store before the delivery was
+queued; the delivery does not write it and could not.
 
 **Four things end in writing nothing, and none of them is a failure:**
 
@@ -442,25 +464,30 @@ test on that backend passes either way. It is not redundant: a native store keep
 table, which cannot be a foreign-key target, so there the cascade cannot fire at all and a vector would
 outlive its chunk as a hit resolving to nothing.
 
-### The sharp edge: two writers of the file table
+### One writer of the file table, and how the whole-folder pass fits
 
-The corpus pass and the per-file path both write `file_manifest`, and that is recorded rather than
-designed around. A corpus pass rewrites those rows wholesale and deletes any file its scan did not
-see, so a pass overlapping a delivery can remove a row the delivery just wrote and take that file's
-chunks with it through the cascade. The composition settles it by order: the whole-folder pass runs
-once, before the front end starts, and never while it runs — so the two writers never overlap. One
-consequence is accepted and worth knowing: a delivery left queued when the process stopped is
-delivered again after the next start's pass has already embedded that content. A duplicate embed,
-idempotent, one round trip.
+The corpus pass and the per-file path used to both write `file_manifest`, kept apart only by order,
+and that arrangement is gone. The whole-folder pass ([SPEC-120](SPEC-120-rag-indexing.md), Delta
+handling) now runs this library's own comparison over the folder before it reads a file, into the
+store: every row it will embed against was written by the store, from the same classifier the loops
+use afterwards. The pass then embeds what the record says lacks vectors, at exactly the content it
+read, writes chunks and vectors through the repository, and reports what it embedded through the
+store's conditional mark — after the vectors have committed, and under the same condition a
+delivery marks under. The deliveries its comparison queued find their work done and skip. A file
+the comparison did not record, or recorded at other content than the pass read, is left to the
+delivery the front end holds for it.
 
-**The store settled one half of this and not the other, and the half it did not is worth stating
-plainly.** This spec expected the resolution to be ownership: the indexer owning file rows outright,
-the embedding side owning only chunks and vectors. What was built is narrower, because the schema
-does not permit the clean version — a file's chunks hang from its row, clearing them means clearing
-vectors first, and only the embedding side can do that. So a removal **marks** the row and queues the
-delivery; the delivery clears the vectors, and the row goes with them. The indexer owns everything
-the row says about a file; the embedding side ends the row's life. That is the arrangement, recorded
-in place of the intention it replaced rather than beside it.
+Two consequences follow. A delivery left queued when the process stopped is no longer embedded
+twice: the next start's pass embeds it and marks it, and the queued delivery skips. And the loops
+still must not run while the pass does — not because of a second writer any more, but because the
+pass embeds against a snapshot of the record and the loops move the record.
+
+**The row's life still ends on the embedding side, and the reason has not changed.** A file's chunks
+hang from its row, clearing them means clearing vectors first, and only the embedding side can reach
+a native store's vectors. So a removal **marks** the row and queues the delivery; the delivery clears
+the vectors, then the row, whose cascade takes the chunks. The store writes everything the row says
+about a file; the embedding side writes nothing to it and ends it once. The pass deletes nothing for
+the same reason.
 
 ## Composition
 
@@ -495,8 +522,8 @@ while nothing is watching is what the pass at the next start is for.
 **The application starts it once its whole-folder pass has succeeded, and stops it with the host.**
 The start is part of the same attempt as the pass — an attempt whose front end could not start is
 failed and repeated whole, rather than leaving a ready index that has quietly stopped following the
-folder. The pass runs once and never again while the front end runs, which is how the two writers
-of the file table are kept apart (the sharp edge above).
+folder. The pass runs once and never again while the front end runs, because it embeds against a
+snapshot of the record and the loops move the record (one writer of the file table, above).
 
 ## Observability
 
@@ -607,6 +634,17 @@ cascade does the same work, so mutating it away kills nothing there — the test
 against `vec0`, and skips where the platform has no binary. The serialisation of concurrent deliveries is
 **not** demonstrated: widening the gate leaves every test passing, because the busy timeout absorbs the
 contention at this scale, and that is said in the test rather than left looking like coverage.
+
+The ownership of the file table is asserted against a real store and a real dispatcher, in three parts.
+A record that moves on while a delivery holds its embed is not reverted by that delivery, its stale
+mark is refused, and the delivery queued for the newer content is the one that embeds it. A pass over a
+fresh folder leaves every row under the id this library derives, with its creation time and its
+delivery mark, and a drain afterwards embeds nothing. And the repository refuses chunks for an id no
+row carries, on the foreign key. The first two are mutation-tested — the write-back restored, the mark
+removed — and each is caught by the test written for it and by no other. The in-flight edit is staged
+on the record rather than on the disk, because the delivery holds the file open share-Read and a
+writer is denied on Windows; the record is what the old write-back reverted, so it is the record that
+has to move.
 
 The composition is tested against a real store and a real folder, because what it decides only shows
 when the loops run together: that a change reaches the embedding side with nothing calling any loop;

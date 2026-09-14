@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.12.0 |
+| Version | 0.13.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-12 |
+| Last updated | 2026-09-14 |
 
 ## Purpose
 
@@ -101,10 +101,16 @@ The registry row is written from the active vectorizer's own descriptor
 metric all come from the implementation rather than from configuration.
 
 **Orphan cleanup is implemented** ([SPEC-120](SPEC-120-rag-indexing.md) delta handling): a
-manifest row whose file is gone is removed and its chunks and vectors cascade away, and chunks
-superseded by an edit are removed before the new ones are written. Foreign keys are enabled on
-the writing connection, since they are per connection in SQLite and what the bootstrap set does
-not carry.
+manifest row whose file is gone is marked by the indexing store and queued, and the delivered
+removal clears its vectors, then the row, whose cascade takes the chunks
+([SPEC-121](SPEC-121-file-indexing-front-end.md)); chunks superseded by an edit are removed before
+the new ones are written. Foreign keys are enabled on the writing connection, since they are per
+connection in SQLite and what the bootstrap set does not carry.
+
+**`file_manifest` has one writer of what a row says: the indexing store.** The embedding side —
+the whole-folder pass and the per-file delivery — writes chunks and vectors under a row's id and ends
+a row on a delivered removal, and has no statement that could create or update one. The foreign key
+from `chunk_manifest` is what enforces it: chunks for an id no row carries are refused, not invented.
 
 ## Configuration
 

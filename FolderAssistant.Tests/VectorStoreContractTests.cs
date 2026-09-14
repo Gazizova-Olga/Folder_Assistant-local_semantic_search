@@ -175,11 +175,12 @@ public sealed class VectorStoreContractTests
 		using (fixture)
 		{
 			File.Delete(fixture.Folder.Combine("cake.md"));
-			fixture.Reindex().FilesDeleted.Should().Be(1);
+			fixture.Reindex().ChangesRecorded.Should().Be(1);
+			fixture.Deliver();
 
 			fixture.Search(Fixture.CakeText, TopK: 3)
 				.Should().NotContain(hit => hit.FilePath == "cake.md",
-					"a deleted file's vectors must not survive the pass that noticed it was gone");
+					"a deleted file's vectors must not survive the delivery of its removal");
 		}
 	}
 
@@ -324,6 +325,16 @@ public sealed class VectorStoreContractTests
 				.CreateRetrievalQuery(other, this._profile.CreateVectorStoreReader(), null)
 				.Search(this.DatabasePath, query, new RetrievalOptions(TopK));
 		}
+
+		/// <summary>Delivers what the last pass queued, through this profile's own store.</summary>
+		public void Deliver()
+			=> OutboxDrain.Deliver(
+				this.Folder.Path,
+				this.DatabasePath,
+				Config(),
+				this.Vectorizer,
+				this._profile.CreateVectorStoreWriter(),
+				this._profile.CreateVectorStoreReader());
 
 		public Int32 CountVectors()
 			=> this.Reader.ReadVectorsByModelVersion(this.DatabasePath, ModelVersionId).Count;

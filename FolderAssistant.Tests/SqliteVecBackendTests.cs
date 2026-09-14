@@ -170,6 +170,8 @@ public sealed class SqliteVecBackendTests
 
 		File.Delete(folder.Combine("drop.md"));
 		VecPipeline(vectorizer).Run(folder.Path, databasePath, Config());
+		OutboxDrain.Deliver(
+			folder.Path, databasePath, Config(), vectorizer, new SqliteVecVectorStoreWriter(), new SqliteVecVectorStoreReader());
 
 		// A virtual table cannot be a foreign-key target, so nothing cascades here. If the explicit
 		// delete were missing the row would simply survive its file.

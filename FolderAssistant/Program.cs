@@ -185,7 +185,8 @@ internal sealed class Program
 			FolderIndexingPipeline pipeline = new(
 				sp.GetRequiredService<IVectorizer>(),
 				sp.GetRequiredService<IVectorStoreWriter>(),
-				sp.GetRequiredService<IVectorStoreReader>());
+				sp.GetRequiredService<IVectorStoreReader>(),
+				config.Persistence.MetadataFolderName);
 
 			// Only a network-bound embedder implements the probe seam; for the in-process ones this is
 			// null and the first pass just starts. The cast is how the composition root avoids knowing

@@ -59,8 +59,11 @@ internal sealed class SqliteFolderManifestReader : IFolderManifestReader
 
 		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
 
+		// Active rows only. A row whose removal is recorded and not yet delivered still has its chunks
+		// and vectors, and is on its way out: a pass must not embed against it. A file that reappears
+		// under that path is the next comparison's to record, and the pass embeds it then.
 		using SqliteCommand command = connection.CreateCommand();
-		command.CommandText = "SELECT file_id, file_hash FROM file_manifest;";
+		command.CommandText = $"SELECT file_id, file_hash FROM file_manifest WHERE status = '{FolderIndexStore.Active}';";
 
 		using SqliteDataReader reader = command.ExecuteReader();
 

@@ -11,7 +11,7 @@ depending on which you chose.
 flowchart LR
     subgraph live["Live — runs in the application"]
         direction TB
-        pass["Whole-folder pass<br/>scan, chunk, embed, store — once, at start"]
+        pass["Whole-folder pass<br/>record, fit, embed, mark delivered — once, at start"]
         watch["FileSystemWatcherHost<br/>debounced, coalesced, holds"]
         reconcile["Reconciler<br/>periodic safety net"]
         pipeline["ChangePipeline<br/>settle, hash, record"]

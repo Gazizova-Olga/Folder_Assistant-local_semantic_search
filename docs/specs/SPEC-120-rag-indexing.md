@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.16.0 |
+| Version | 0.17.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-12 |
+| Last updated | 2026-09-14 |
 
 ## Purpose
 
@@ -34,12 +34,18 @@ as it changes.
   unreadable that happens to look like text costs an embedding and pollutes the index.
 - Files above a configured size are skipped.
 - Build, VCS and metadata directories are not descended into.
-- The content hash recorded for a file is SHA-256 over its **bytes**, taken before decoding. The
-  indexing front end records its own hash of the same file in the same column
-  ([SPEC-121](SPEC-121-file-indexing-front-end.md)), and the two must agree byte for byte; a hash of
-  the decoded text would differ wherever a byte-order mark or an unreadable sequence was dropped.
-  The file id stays a hash of the path.
-- **The scan fails loudly rather than returning an empty result.** See the sharp edge below.
+- The content hash the scanner takes is SHA-256 over the file's **bytes**, before decoding. It is
+  compared against the hash the front end recorded for the same file
+  ([SPEC-121](SPEC-121-file-indexing-front-end.md)), and the two must agree byte for byte: a file
+  whose scanned hash differs from its record is deferred to the front end, so hashing differently
+  would defer the whole corpus — not wrong, but a pass that embeds nothing. A hash of the decoded
+  text would differ wherever a byte-order mark or an unreadable sequence was dropped. The file id
+  stays a hash of the path, the same one the front end derives, because the pass writes chunks
+  under it against the row the front end recorded.
+- **The scan reads and chunks; it records nothing about a file and deletes nothing.** What the
+  folder contains is recorded by the front end's comparison, which the pass runs first (Delta
+  handling, below). The scan still fails loudly on a root it cannot read rather than returning
+  an empty result, but nothing hangs on that any more — see the sharp edge below for where it went.
 
 ## Chunking
 
@@ -94,24 +100,44 @@ the policy governing when a checkpoint may run, in [SPEC-130](SPEC-130-persisten
 
 ## Delta handling
 
-A pass classifies every file into one of four outcomes.
+**The pass records nothing about a file and deletes nothing.** Before it reads a single file it
+runs the front end's own comparison ([SPEC-121](SPEC-121-file-indexing-front-end.md),
+Reconciliation) over the folder, into the store that owns `file_manifest`. Every row — hash,
+size, creation time — and every queued delivery comes from that one classifier, so a row written
+for the pass is indistinguishable from one the front end writes later, and there is exactly one
+derivation of a file's record. The pass then classifies each file it reads against that record:
 
 | Outcome | Condition | Action |
 |---|---|---|
-| **Create** | No manifest row for the file | Chunk and embed |
-| **Update** | Content hash differs from the manifest | Chunk and re-embed; superseded chunks removed |
-| **Skip** | Hash matches **and** the active model has already embedded it | Chunk, do not embed |
-| **Delete** | Manifest row with no file behind it | Remove the row; chunks and vectors cascade |
+| **Embed** | Recorded at the content read, and either the comparison just recorded that content as added or modified, or the active model has no vectors for it | Chunk and embed; superseded chunks removed; marked delivered |
+| **Unchanged** | Recorded at the content read, already embedded by the active model, and not recorded as changed by this comparison | Chunk, rewrite the chunk rows, do not embed |
+| **Deferred** | Not recorded, or recorded at other content than was read | Nothing; the delivery the front end holds for it does the work |
+| **Removed** | Recorded, no file behind it | Recorded and queued by the comparison; delivered by the dispatcher, which clears vectors, then the row, whose cascade takes the chunks |
 
-### Skip needs two conditions, not one
+A deferred file is in flux — locked when the comparison hashed it, or written between the
+comparison and the read — and the pass has nothing it can honestly write for it: chunks under no
+row, or a delivery mark for content the row does not describe. Either way the front end has, or
+will have, a delivery for it.
 
-**Content equality alone is not sufficient.** After switching embedding implementation, every
-file is unchanged — yet none of them has a vector in the new model's space. Skipping on the
-hash alone would leave the new model with a silently empty index and no error anywhere.
+**The pass marks what it embedded as delivered**, through the store's conditional mark
+([SPEC-121](SPEC-121-file-indexing-front-end.md), the outbox) and only after its chunks and vectors
+have committed, so the deliveries the comparison queued find their work already done and skip: a
+cold start costs one embed per file, not two. The order is the safe one. Marked before the vectors,
+a crash between would leave a file believed indexed that is not; the other way round costs one
+duplicate delivery.
 
-So a file is skipped only when its hash matches **and** the active `model_version_id` already
-has vectors for it. The vector-existence check is per model version, which is what makes the
-model-switch case work.
+### Skip needs three conditions, not one
+
+**Content equality alone is not sufficient, in two directions.** After switching embedding
+implementation, every file is unchanged — yet none of them has a vector in the new model's space,
+and skipping on the hash alone would leave the new model with a silently empty index and no error
+anywhere. And a file the comparison just recorded at a new hash has vectors for the content
+*before* the edit, so the vector check alone would skip exactly the file that changed.
+
+So a file is skipped only when its hash matches the record **and** the active `model_version_id`
+already has vectors for it **and** the comparison at the start of the pass did not record it as
+added or modified. The vector-existence check is per model version, which is what makes the
+model-switch case work; the comparison's conclusion is what makes the edit case work.
 
 ### What is skipped, and what is not
 
@@ -120,6 +146,11 @@ model-switch case work.
 - the scanner has already read the content, so the expensive part is paid;
 - chunking is cheap next to an embedding call;
 - a corpus-fitted vectorizer needs the whole chunk set regardless of what changed.
+
+An unchanged file's chunk rows are rewritten as well. The write is idempotent for
+content-addressed ids, and it is what reconciles away a chunk row the current chunker would not
+produce — a stale trailing window from an older chunker, say — without an embed (Superseded
+chunks, below).
 
 Embedding is the expensive stage and the only one avoided, which is what makes restarting over
 an unchanged folder cheap.
@@ -206,14 +237,17 @@ pass: the corpus pipeline runs **once**, at start.
 **The first pass stays, and runs first.** A corpus-fitted embedder has to see the entire corpus
 before it can embed anything, and a cold folder is cheapest to embed in one batched pass. The front
 end starts only after that pass has succeeded, and the pass never runs again while the front end
-runs. That ordering is the whole of how the two writers of the file table are kept apart: the pass
-writes and deletes rows wholesale, and one overlapping a delivery could take a just-written file's
-chunks with it ([SPEC-121](SPEC-121-file-indexing-front-end.md), the sharp edge).
+runs, because the pass embeds against a snapshot of the record and the loops move the record. There
+is no second writer of the file table to keep apart: the pass records through the front end's own
+comparison and writes only chunks, vectors and the delivery mark (Delta handling, above;
+[SPEC-121](SPEC-121-file-indexing-front-end.md), one writer of the file table).
 
 **Readiness takes all three.** An attempt is the probe, the pass, and the start of the front end —
-which compares the folder against the index once itself before its loops run, cheaply, since after
-the pass every file it finds is already recorded. The index is `Ready` only after all three. A front
-end that could not start fails the attempt and is retried like anything else: a ready index that had
+which compares the folder against the index once itself before its loops run, cheaply, since the
+pass's own comparison already recorded every file it will find. That is the same folder hashed
+twice in one start, and it is the accepted cost of the front end owning its own start rather than
+trusting a caller to have compared first. The index is `Ready` only after all three. A front end
+that could not start fails the attempt and is retried like anything else: a ready index that had
 quietly stopped following the folder would be worse than one still building, because nothing would
 report it.
 
@@ -263,15 +297,22 @@ this CPU, and the server works through an array rather than embedding it at once
 overhead against a cost that is not HTTP. A backend that embedded a batch in parallel would be a different
 measurement, and this number must not be carried across to one.
 
-## Sharp edge — deletion is inferred from the scan
+## Sharp edge — deletion is inferred from the comparison
 
-The scanned file list is treated as the authoritative current state of the folder. **A scan that
-silently returned nothing would clear the index.**
+The comparison at the start of a pass, and the periodic one after it, treat their walk as the
+authoritative current state of the folder. **A walk that silently returned nothing would record
+every file as removed** and queue the removal of the whole index — delivered, that clears every
+vector.
 
-This is currently sound because the scanner throws on a bad path rather than returning an empty
-result, and that property is therefore load-bearing rather than defensive. Anything that later
-makes the scan partial — a permissions error swallowed per directory, a cancelled walk returning
-what it had — breaks this without any test necessarily noticing.
+The scan itself no longer deletes anything, so this edge moved with the deletion to the front end's
+reconciler ([SPEC-121](SPEC-121-file-indexing-front-end.md), Reconciliation), where two properties
+hold it: a file that could not be hashed is left out of the picture rather than treated as gone, and
+a root that cannot be enumerated at all throws rather than returning empty. One property does
+*not* hold it and is worth knowing: the walk skips a subtree it cannot enter without counting it,
+so a folder that disappeared mid-walk and a folder that merely denied access look the same, and
+the recorded files under either are classified as removed until the next comparison finds them
+again. Anything that later makes the walk partial in a new way — a cancelled walk returning what
+it had — breaks this without any test necessarily noticing.
 
 ## Non-functional requirements
 

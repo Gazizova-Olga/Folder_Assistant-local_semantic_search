@@ -19,11 +19,12 @@ namespace FolderAssistant.Indexing;
 /// <para>
 /// <strong>The whole-folder pass comes first and runs once.</strong> A corpus-fitted embedder has to
 /// see the entire corpus before it can embed anything, and a cold folder is cheapest to embed in one
-/// batched pass. After it the front end (<see cref="IFolderIndexer"/>) takes over — it watches,
-/// reconciles and delivers one changed file at a time — and nothing runs the whole-folder pass again
-/// while it runs. That ordering is what keeps the two writers of the file table apart: the pass
-/// writes and deletes rows wholesale, and one overlapping a delivery could take a just-written
-/// file's chunks with it.
+/// batched pass. The pass records the folder through the front end's own comparison before it embeds
+/// anything, so every file row is the store's whichever path wrote it; what the pass adds is the
+/// chunks and vectors, and the mark saying they were delivered. After it the front end
+/// (<see cref="IFolderIndexer"/>) takes over — it watches, reconciles and delivers one changed file
+/// at a time — and nothing runs the whole-folder pass again while it runs, because the pass embeds
+/// against a snapshot of the record and the loops move the record.
 /// </para>
 /// </summary>
 internal sealed class FolderIndexingService : BackgroundService
@@ -143,8 +144,8 @@ internal sealed class FolderIndexingService : BackgroundService
 			IndexingResult result = await Task.Run(this._runIndex, cancellationToken).ConfigureAwait(false);
 
 			Console.WriteLine(
-				$"Initial index: scanned={result.FilesScanned}, indexed={result.FilesIndexed}, " +
-				$"unchanged={result.FilesUnchanged}, deleted={result.FilesDeleted}, " +
+				$"Initial index: recorded={result.ChangesRecorded}, scanned={result.FilesScanned}, " +
+				$"indexed={result.FilesIndexed}, unchanged={result.FilesUnchanged}, deferred={result.FilesDeferred}, " +
 				$"chunks={result.ChunksIndexed}, vectors={result.VectorsIndexed}");
 
 			// After the pass and before the index is declared ready. A front end that could not start

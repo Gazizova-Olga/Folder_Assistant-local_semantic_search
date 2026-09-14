@@ -6,6 +6,12 @@ using Microsoft.Data.Sqlite;
 namespace FolderAssistant.Persistence;
 
 /// <summary>
+/// One file the whole-folder pass embedded, as the pass read it: what it asks the store to record as
+/// delivered, under the same condition a delivery is recorded under.
+/// </summary>
+internal sealed record DeliveredContent(String RelativePath, String ContentHash);
+
+/// <summary>
 /// The database behind the indexing library: where file records live, and where deliveries queue.
 ///
 /// <para>
@@ -42,9 +48,22 @@ internal sealed class FolderIndexStore : IIndexStore, IOutboxStore
 	private const Int32 Done = 2;
 	private const Int32 Failed = 3;
 
-	/// <summary>A row whose file is gone keeps its place until its removal has been delivered.</summary>
-	private const String Active = "active";
+	/// <summary>
+	/// A row whose file is gone keeps its place until its removal has been delivered. The active value
+	/// is visible to the manifest reader, which must ask the same question of the same column.
+	/// </summary>
+	internal const String Active = "active";
 	private const String Deleted = "deleted";
+
+	/// <summary>
+	/// The one statement that writes the delivery mark, conditional on the content it describes. Shared
+	/// by the per-delivery path and the whole-folder pass, so the two cannot hold different conditions.
+	/// </summary>
+	private const String MarkSyncedSql = """
+		UPDATE file_manifest
+		SET last_synced_hash = $hash, updated_utc = $now
+		WHERE file_path = $path AND file_hash = $hash;
+		""";
 
 	private readonly String _databasePath;
 
@@ -266,16 +285,59 @@ internal sealed class FolderIndexStore : IIndexStore, IOutboxStore
 		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(this._databasePath);
 		using SqliteCommand command = connection.CreateCommand();
 
-		command.CommandText = """
-			UPDATE file_manifest
-			SET last_synced_hash = $hash, updated_utc = $now
-			WHERE file_path = $path AND file_hash = $hash;
-			""";
+		command.CommandText = MarkSyncedSql;
 		command.Parameters.AddWithValue("$path", relativePath);
 		command.Parameters.AddWithValue("$hash", expectedContentHash);
 		command.Parameters.AddWithValue("$now", UtcNow());
 
 		return Task.FromResult(command.ExecuteNonQuery() > 0);
+	}
+
+	/// <summary>
+	/// Records many deliveries in one transaction, each under exactly the condition
+	/// <see cref="TryMarkSyncedAsync"/> holds one to: a file takes the mark only while its recorded
+	/// content is still what was delivered. Returns how many did.
+	///
+	/// <para>
+	/// The whole-folder pass embeds a corpus in one write and then says so here. One transaction
+	/// rather than one per file because each commit under a write-ahead log is a sync to disk, and
+	/// twelve thousand of them would cost a cold start more than the embedding did. The pass calls
+	/// this after its vectors have committed and never before: a mark without vectors is a file
+	/// believed indexed that is not, where vectors without a mark cost one duplicate delivery.
+	/// </para>
+	/// </summary>
+	public Int32 MarkSynced(IReadOnlyList<DeliveredContent> deliveries)
+	{
+		ArgumentNullException.ThrowIfNull(deliveries);
+
+		if (deliveries.Count == 0)
+		{
+			return 0;
+		}
+
+		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(this._databasePath);
+		using SqliteTransaction transaction = connection.BeginTransaction();
+		using SqliteCommand command = connection.CreateCommand();
+
+		command.Transaction = transaction;
+		command.CommandText = MarkSyncedSql;
+
+		SqliteParameter path = command.Parameters.Add("$path", SqliteType.Text);
+		SqliteParameter hash = command.Parameters.Add("$hash", SqliteType.Text);
+		command.Parameters.AddWithValue("$now", UtcNow());
+
+		Int32 marked = 0;
+
+		foreach (DeliveredContent delivery in deliveries)
+		{
+			path.Value = delivery.RelativePath;
+			hash.Value = delivery.ContentHash;
+			marked += command.ExecuteNonQuery();
+		}
+
+		transaction.Commit();
+
+		return marked;
 	}
 
 	public Task MarkDoneAsync(Int64 opId, CancellationToken cancellationToken)

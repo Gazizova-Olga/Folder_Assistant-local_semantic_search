@@ -498,7 +498,7 @@ public sealed class BackgroundIndexingTests
 		}
 	}
 
-	private static readonly IndexingResult EmptyResult = new(0, 0, 0, 0, 0, 0);
+	private static readonly IndexingResult EmptyResult = new(0, 0, 0, 0, 0, 0, 0);
 
 	private static IReadOnlyList<RetrievalHit> Search(IIndexState state)
 	{

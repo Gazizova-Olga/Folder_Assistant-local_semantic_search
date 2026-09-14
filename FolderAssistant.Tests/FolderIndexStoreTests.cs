@@ -179,6 +179,29 @@ public sealed class FolderIndexStoreTests
 		delivery!.LastSyncedHash.Should().BeNull();
 	}
 
+	/// <summary>
+	/// The whole-folder pass marks a corpus delivered in one transaction, and each file is held to the
+	/// same condition a single delivery is: only while the record still says what was delivered.
+	/// </summary>
+	[Fact]
+	public async Task Marking_Many_Delivered_Holds_Each_To_The_Content_That_Was_Delivered()
+	{
+		using TempFolder folder = new();
+		FolderIndexStore store = StoreIn(folder);
+
+		await store.ApplyAsync([Added("a.md", "ha"), Added("b.md", "hb")]);
+
+		// b.md moved on before the pass could say what it had embedded.
+		await store.ApplyAsync([
+			new ReconciledChange("b.md", FileDelta.Modified, new FileRecord("b.md", "hb2", 9, Created)),
+		]);
+
+		store.MarkSynced([new DeliveredContent("a.md", "ha"), new DeliveredContent("b.md", "hb")]).Should().Be(1);
+
+		(await store.ReadForDeliveryAsync("a.md", default))!.LastSyncedHash.Should().Be("ha");
+		(await store.ReadForDeliveryAsync("b.md", default))!.LastSyncedHash.Should().BeNull();
+	}
+
 	[Fact]
 	public async Task Claiming_Takes_The_Oldest_Work_First_And_Does_Not_Hand_It_Out_Twice()
 	{

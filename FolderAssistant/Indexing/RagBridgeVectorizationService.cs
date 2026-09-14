@@ -131,17 +131,13 @@ internal sealed class RagBridgeVectorizationService : IVectorizationService, IDi
 			batcher.Add(chunks);
 			batcher.Flush();
 
-			ScannedFile file = new(
-				FileId: docId,
-				RelativePath: this.ToRelativePath(metadata.AbsolutePath),
-				FileHash: metadata.ContentHash,
-				SizeBytes: metadata.Size,
-				ModifiedUtc: metadata.CreatedUtc,
-				FileType: NormalizeFileType(metadata.Extension));
-
+			// Chunks and vectors under the delivered id, and nothing about the file's record. The record
+			// is the store's: a delivery that wrote it back here, with the hash it was handed before a
+			// slow embed, reverted whatever the front end had recorded meanwhile — and the delivery
+			// queued for that newer content then found its work already done (SPEC-121).
 			this._repository.UpsertSingleFile(
 				this._databasePath,
-				file,
+				docId,
 				[.. chunks.Select(static chunk => chunk.ToMetadata())],
 				embeddings,
 				this._vectorizer.Descriptor);
@@ -222,12 +218,6 @@ internal sealed class RagBridgeVectorizationService : IVectorizationService, IDi
 			.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
 			.Any(segment => String.Equals(segment, this._metadataFolderName, StringComparison.OrdinalIgnoreCase));
 	}
-
-	private String ToRelativePath(String absolutePath)
-		=> Path.GetRelativePath(this._analyzedFolderPath, absolutePath).Replace('\\', '/');
-
-	private static String NormalizeFileType(String extension)
-		=> String.IsNullOrWhiteSpace(extension) ? "unknown" : extension.TrimStart('.').ToLowerInvariant();
 
 	public void Dispose() => this._gate.Dispose();
 }

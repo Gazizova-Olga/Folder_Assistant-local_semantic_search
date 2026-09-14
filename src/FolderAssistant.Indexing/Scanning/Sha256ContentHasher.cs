@@ -7,12 +7,11 @@ namespace FolderAssistant.Indexing.Scanning;
 ///
 /// <para>
 /// Change detection alone would be served by a faster, non-cryptographic hash. This one is chosen for
-/// a different reason: the store this library writes through shares its file records with the
-/// application's whole-folder pass, which records its own hash of the same file in the same column.
-/// Two writers of one record hashing differently would not fail — the first comparison after a
-/// whole-folder pass would find every file modified and queue the entire corpus for delivery again,
-/// correctly, at full cost, with nothing to say it happened. So the digest is the one the application
-/// already computes, over exactly what it computes it over.
+/// a different reason: the application's whole-folder pass embeds a file only when the hash its own
+/// scanner took equals the one this library recorded for it. Hashing differently would not fail — every
+/// file would be deferred to the front end, the pass would embed nothing, and the deliveries would do
+/// the whole corpus one file at a time, correctly and at full cost. So the digest is the one the
+/// application already computes, over exactly what it computes it over.
 /// </para>
 ///
 /// <para>

@@ -1,6 +1,7 @@
 using FluentAssertions;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
+using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Persistence;
 using Microsoft.Data.Sqlite;
 
@@ -29,17 +30,13 @@ public sealed class VectorDeletionTests
 		String databasePath = BootstrapIn(folder);
 
 		FolderIndexRepository repository = new(writer);
-		Upsert(repository, databasePath, "f1", "c1");
+		String fileId = RecordFile(databasePath, "f1.md");
+		Upsert(repository, databasePath, fileId, "c1");
 
 		writer.Deleted.Clear();
 
-		// A pass that scans nothing: the file is gone from disk.
-		repository.Upsert(
-			databasePath,
-			[],
-			new Dictionary<String, IReadOnlyList<ChunkMetadata>>(),
-			new Dictionary<String, EmbeddingResult>(),
-			Descriptor());
+		// The delivery of the file's removal: the one write that ends a file's row, after its vectors.
+		repository.DeleteFile(databasePath, fileId);
 
 		writer.Deleted.Should().Contain("c1");
 	}
@@ -52,12 +49,13 @@ public sealed class VectorDeletionTests
 		String databasePath = BootstrapIn(folder);
 
 		FolderIndexRepository repository = new(writer);
-		Upsert(repository, databasePath, "f1", "c1");
+		String fileId = RecordFile(databasePath, "f1.md");
+		Upsert(repository, databasePath, fileId, "c1");
 
 		writer.Deleted.Clear();
 
 		// Same file, different content: the chunk id is content-addressed, so c1 is superseded.
-		Upsert(repository, databasePath, "f1", "c2");
+		Upsert(repository, databasePath, fileId, "c2");
 
 		writer.Deleted.Should().Contain("c1");
 		writer.Deleted.Should().NotContain("c2");
@@ -72,20 +70,30 @@ public sealed class VectorDeletionTests
 		String databasePath = BootstrapIn(folder);
 
 		FolderIndexRepository repository = new(writer);
-		Upsert(repository, databasePath, "f1", "c1");
+		String fileId = RecordFile(databasePath, "f1.md");
+		Upsert(repository, databasePath, fileId, "c1");
 
 		writer.Deleted.Clear();
 
-		Upsert(repository, databasePath, "f1", "c1");
+		Upsert(repository, databasePath, fileId, "c1");
 
 		writer.Deleted.Should().BeEmpty();
+	}
+
+	/// <summary>A file's record is the store's, so it is written there first; the chunks reference it.</summary>
+	private static String RecordFile(String databasePath, String relativePath)
+	{
+		new FolderIndexStore(databasePath)
+			.ApplyAsync([new ReconciledChange(relativePath, FileDelta.Added, new FileRecord(relativePath, "hash", 10, default))])
+			.GetAwaiter()
+			.GetResult();
+
+		return FileIdentity.For(relativePath);
 	}
 
 	private static void Upsert(FolderIndexRepository repository, String databasePath, String fileId, String chunkId)
 		=> repository.Upsert(
 			databasePath,
-			[new ScannedTextFile(fileId, $"/tmp/{fileId}.md", $"{fileId}.md", $"hash-{chunkId}", 10,
-				DateTime.UtcNow, "alpha beta", "md").ToMetadata()],
 			new Dictionary<String, IReadOnlyList<ChunkMetadata>>
 			{
 				[fileId] = [new TextChunk(chunkId, 0, 0, 2, $"chash-{chunkId}", "alpha beta").ToMetadata()],

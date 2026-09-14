@@ -1,45 +1,79 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is
 
-**Folder Assistant** — a local-first LLM agent that indexes a folder on disk, exposes
-a confined set of filesystem tools over it, and answers questions about its contents
-using retrieval-augmented generation. A single ASP.NET Core application built on the
+**Folder Assistant** — a local-first LLM agent that indexes a folder on disk, exposes a confined
+set of filesystem tools over it, and answers questions about its contents using
+retrieval-augmented generation. A single ASP.NET Core application on .NET 10, built towards the
 Microsoft Agent Framework (`Microsoft.Agents.AI.*`) and `Microsoft.Extensions.AI`.
 
-The design goal is that the whole loop can run **offline**: embeddings from a local
-Ollama model, vectors in a folder-scoped SQLite database, retrieval by cosine similarity
-or native `sqlite-vec` k-NN. No document text leaves the machine unless the operator
+The design goal is that the whole loop can run **offline**: embeddings from a local Ollama model
+or an in-process embedder, vectors in a folder-scoped SQLite database, retrieval by cosine
+similarity or native `sqlite-vec` k-NN. No document text leaves the machine unless the operator
 points the agent at a hosted chat provider.
 
-## Status: rebuild in progress
+The failure mode the whole design guards against is **a silently plausible wrong answer**. Every
+"fail loudly" rule below — index not ready → refuse; unknown profile → startup failure; empty
+scan → throw — descends from it.
 
-This repository is being built up deliberately, one step at a time. Code lands here only once
-it has been written for this repository rather than carried in, so at any given commit most
-of the architecture below is intent rather than description.
+## Status
 
-Two rules follow from that, and they are load-bearing:
+Developed on its own since 2026-09-12: there is no reference tree, and nothing here is carried in
+from anywhere. `main` is pushed to the private `origin`; plain pushes of `main` and branch + PR
+are both in use.
 
-- **`_staging/` is reference material, not source.** It is gitignored. Nothing in it is
-  ever `git add`ed, committed, or published — not even temporarily, because a commit that
-  contains it keeps containing it after the file is deleted in a later commit.
-- **Nothing is pushed until the rebuild is complete.** The remote exists and is private;
-  it stays empty until the tracked tree stands on its own.
+The tree is in three states, and the middle one is the one to watch
+([docs/diagrams/implementation-status.md](docs/diagrams/implementation-status.md)):
 
-Working notes, sequencing and the current state of the rebuild live in
-`notes/transfer-plan.md` (gitignored, local only). Read it before deciding what to build
-next or what to leave out — it is the authority on scope, not this file.
+- **Live** — the whole-folder indexing pass at start; the file-indexing front end
+  (`src/FolderAssistant.Indexing`) keeping the index in step with the folder afterwards; the index
+  database; embedding and retrieval telemetry served at `GET /metrics`.
+- **Built but unreachable** — retrieval (`IRetrievalQuery`, two backends) and the context reducer
+  are composed in `Program.cs` and called by nothing on the request path. Every vector written is
+  one the running application never reads.
+- **Not built** — the filesystem tools, the agent and provider adapter, the chat surface, the
+  conversation database. The parts of the architecture below that describe them are intent.
+
+Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
+repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
+plan before deciding what to build next or what to leave out — it is the authority on scope, not
+this file, and its §5.1 lists the known defects in this tree with the order they are to be fixed in.
+
+Its working rules bind here:
+
+- **No `git commit` and no `git push` without explicit approval for that specific action.** Do the
+  work, show the proposed message and a diff summary, wait. Nothing is left *out* of a commit
+  without approval either — a step ships its spec, diagram and README changes with its code.
+- One commit identity; `origin` is the only remote. A pre-push hook installed from
+  `notes/tooling/` checks tracked content, messages, identities and remotes; never `--no-verify`
+  past it.
+- Commit messages say what changed and why, in the author's voice — no ticket ids, no review
+  references.
+
+## Spec-first delivery
+
+`AGENTS.md` points at the one canonical skill,
+[.agent/skills/spec-alignment/SKILL.md](.agent/skills/spec-alignment/SKILL.md). Before implementing
+anything that can change behaviour, a data model, an interface or a workflow: find the affected
+spec in `docs/specs/`, state *aligned* / *partially aligned* / *not aligned*, and on a conflict
+**stop and name the requirement by spec and line**, offer both options — satisfy the spec, or
+change it deliberately — and wait. An approved deviation moves the spec **in the same commit** as
+the code; a spec that lands a commit later was wrong in between.
+
+Placeholder specs (`SPEC-140`, `SPEC-163`, `SPEC-900`, `SPEC-920`, `SPEC-930` say so) impose
+nothing; a change that touches one writes the requirement into it before the code. A spec reads as
+*what is true now*, with its changelog at the bottom.
 
 ## Commands
 
 From the repository root:
 
 ```bash
-dotnet build                                  # build the solution
-dotnet test                                   # run all tests (xUnit)
-dotnet run --project FolderAssistant          # agent + web host
+dotnet build --no-incremental -v q --nologo     # expect: succeeded, 0 warnings — enforced
+dotnet test --nologo -l "console;verbosity=detailed" > "$TEMP/run.txt" 2>&1; tail -3 "$TEMP/run.txt"
+dotnet run --project FolderAssistant            # web host + indexer, over the working directory
 ```
 
 Filtered test runs:
@@ -49,8 +83,34 @@ dotnet test --filter "FullyQualifiedName~FolderIndexingPipelineTests"
 dotnet test --filter "DisplayName~Cascades"
 ```
 
-Targets **.NET 10**. NuGet versions are managed centrally in `Directory.Packages.props`
-(Central Package Management) — **do not put versions in `.csproj` files**.
+**Run the suite to a file.** Never `-v q`, never pipe it through `grep`: both discard the stack
+trace of a flake, and a re-run that passes takes the only copy with it.
+
+**Ollama.** The `ollama-*` profiles and `OllamaLiveIntegrationTests` need a running Ollama with
+`ollama pull qwen3-embedding:0.6b`. Without it those tests — and `SqliteVecBackendTests` without
+the native binary — return early and **report green while asserting nothing**; xUnit 2 has no
+dynamic skip. A green run proves nothing unless you know what it covered.
+
+**Opt-in benchmarks** are measuring instruments under `[Fact]`; they return immediately unless
+their variable is set and assert nothing on purpose:
+
+```bash
+BENCHMARK_FILES=4000 dotnet test --filter "FullyQualifiedName~CorpusBenchmark" -l "console;verbosity=detailed"
+RUN_SEMANTIC_BENCHMARK=1 dotnet test --filter "FullyQualifiedName~SemanticSearchBenchmark"   # needs Ollama
+RELEVANCE_FLOOR_BENCH=1 dotnet test --filter "FullyQualifiedName~RelevanceFloorBenchmark"
+```
+
+`BENCHMARK_CORPUS=<path>` points the corpus benchmark at a real folder. Results live in
+`docs/benchmarks/`. **Never carry a number forward** — a commit stating a figure re-measures both
+sides on the tree it produces, and compares trees from the same kind of directory.
+
+**CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)) builds and tests in Release on
+`ubuntu-latest` for every push and PR to `main`. Development is on Windows, so CI is where
+path-separator and case-sensitivity mistakes surface.
+
+NuGet versions are managed centrally in `Directory.Packages.props` (Central Package Management) —
+**do not put versions in `.csproj` files**. `NuGet.config` maps every package to nuget.org and
+nothing else.
 
 `SonarAnalyzer.CSharp` runs as a global analyzer on every build, and **the build fails on any
 warning** — `TreatWarningsAsErrors` in `Directory.Build.props`. The baseline is zero and it is
@@ -65,35 +125,45 @@ warning is correct and the code should change. Never silence a rule repo-wide to
 The gate exists because a real defect has already hidden in the noise here — a `Split` overload
 mis-binding in the watcher's metadata-folder guard, in a fully green build that no test caught.
 
-## Target architecture
+## Architecture
 
-Written down so the rebuild has something to converge on. These sections describe intent;
-they are not a description of code that exists until the code exists.
+Invariants first; each section says whether it describes code or intent. The reasons are written
+down because every one of these is easy to "simplify" away by someone who does not know why it is
+there.
 
-### Composition root
+### Composition root — live
 
 `Program.cs` is a composition root, not a script: it registers factories and lets the host
 resolve them in order. Configuration binds **lazily through `IOptions<T>`**, never eagerly
 off `builder.Configuration` — an eager bind freezes values before the host is built and
 silently discards any configuration source added afterwards, including the one a test host
-injects. Only the listen port and the registered agent name may be read early, because
-they cannot be late-bound.
+injects. Only the listen port may be read early, because it cannot be late-bound. Database
+bootstrap is ordered before the server listens by an `IStartupFilter` taking it as a constructor
+dependency — it cannot go at the end of `Main`, because a test host intercepts at `Build()`.
 
-A composition profile resolved from configuration bundles the vectorizer, the vector store
-reader/writer and the retrieval strategy **together**, so a mismatched combination — a
-lexical query against a neural-embedded store, say — cannot be expressed. An unknown or
-platform-unavailable profile is a startup failure, never a silent fallback. One vectorizer
-instance is shared by indexing and retrieval: a corpus-fitted embedder must be fitted
-identically on the write and the query side.
+A **composition profile** (`FolderAssistant:Profile`, `CompositionProfiles.cs`) bundles the
+vectorizer, the vector store reader/writer and the retrieval strategy **together**, so a mismatched
+combination — a lexical query against a neural-embedded store, or a reader looking in `chunk_vector`
+while the writer fills a `vec0` table — cannot be expressed. An unknown or platform-unavailable
+profile is a startup failure, never a silent fallback. The names are `programmable-blob` (default),
+`programmable-vec`, `lsa-blob`, `lsa-vec`, `ollama-blob`, `ollama-vec`: `-blob` stores vectors as
+BLOBs scored by cosine in managed code; `-vec` uses the native `sqlite-vec` extension, which ships
+no binary for win-arm64 or musl. The default is the profile with no native dependency, not the one
+that retrieves best — `docs/benchmarks/semantic-search-results.md` measures which is which, and
+changing the default is a gated step in the plan, not a one-line edit.
+
+One vectorizer instance is shared by indexing and retrieval: a corpus-fitted embedder must be
+fitted identically on the write and the query side.
 
 Three embedders exist behind that seam. The **programmable** one is a character histogram — a
-deterministic floor with no semantics, and the offline default. The **LSA** one is fitted to the
-corpus and captures weak synonymy within it. The **Ollama** one (`SPEC-162`) is a real pretrained
-model served locally, and is the only one that can retrieve a passage sharing none of the query's
-words. It is also the only one that opens a socket, which is why offline-by-construction is a
-property of *which profiles exist*, not of an operator's choice of endpoint.
+deterministic floor with no semantics. The **LSA** one is fitted to the corpus and captures weak
+synonymy within it (rank `k` well below corpus rank; reduction scaled `1/√λ`, not `1/λ`, which
+cancels `Σ` out — `SPEC-161`). The **Ollama** one (`SPEC-162`) is a real pretrained model served
+locally, and is the only one that can retrieve a passage sharing none of the query's words. It is
+also the only one that opens a socket, which is why offline-by-construction is a property of
+*which profiles exist*, not of an operator's choice of endpoint.
 
-### Indexing
+### Indexing — live
 
 A durable **outbox indexer** in its own assembly (`src/FolderAssistant.Indexing`): a debounced
 filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
@@ -102,13 +172,16 @@ delivers one changed file at a time to the embedding pipeline with retry and bac
 A writer inside this process reports what it changed instead of waiting to be told about it
 (`IIndexChangeNotifier`), which is latency the discovery round-trip has no reason to cost.
 
-**It is live.** The library composes its own loops (`FolderIndexer`, `SPEC-121`) and the
-application starts them once its whole-folder pass has succeeded — the pass runs first and once,
-never while the front end runs, which is how the two writers of `file_manifest` are kept apart. A
-front end that cannot start fails the attempt, pass included, rather than leaving a ready index
-that has quietly stopped following the folder. The assembly boundary is one-way on purpose: the
-library knows nothing of chunking, embedding or retrieval and cannot come to depend on them by
-accident.
+The library composes its own loops (`FolderIndexer`, `SPEC-121`) and the application starts them
+once its whole-folder pass has succeeded — the pass runs first and once, never while the front end
+runs, because it embeds against a snapshot of the record and the loops move the record. The pass
+records the folder through the front end's own comparison before it embeds, and writes only chunks,
+vectors and the delivery mark, so `file_manifest` has one writer of what a row says. A front end that cannot start
+fails the attempt, pass included, rather than leaving a ready index that has quietly stopped
+following the folder. The assembly boundary is one-way on purpose: the library knows nothing of
+chunking, embedding or retrieval and cannot come to depend on them by accident; the application
+implements the seam (`IVectorizationService`, `RagBridgeVectorizationService`) the library delivers
+through.
 
 The change signal is deliberately coarse — the consumer re-diffs by content hash — which
 makes it robust against the two ways filesystem watching is unreliable: dropped events on
@@ -121,15 +194,19 @@ Properties worth stating because they are easy to "simplify" away:
   lets whoever knows where its work ends say so. Holds nest and the last release publishes;
   a hold nobody releases stops suppressing after two minutes, timed from the first — the same
   rule as a reconcile loop surviving a bad pass, since an index that stops converging for the
-  life of the process is the one outcome none of this may produce.
+  life of the process is the one outcome none of this may produce. Its caller is the agent-run
+  boundary, which does not exist yet.
 - **Whatever writes a file's record writes the columns it owns, not the row it read.** The
   library states conclusions and names operations by id; it never hands back a record it
   fetched. That rule binds the store harder than it binds the library: a pass classifying from
   a snapshot must not touch the delivery mark, and an insert that turns out to be an update
   must not clear a mark it never set — either one un-marks an indexed file and embeds it
-  twice. Preserving under conflict would be wrong for a *different* file being written onto
-  that path, which nothing can do here while identity is a pure function of the path and a
-  rename is a removal plus an addition. Move detection would re-open it.
+  twice. A writer that reads a row, does something slow (an embedding round-trip), then writes
+  the whole row back silently reverts whatever another writer recorded in between. The store is
+  built so it cannot express that, and it is the only writer of what a row says: the repository
+  writes chunks and vectors under a row's id, ends a row on a delivered removal, and has no
+  statement that could create or update one — a chunk row's foreign key refuses the attempt.
+  The delivery used to write the row back, and that was exactly this race.
 - **A scheduled reconcile waits for the hold.** It is the one path that reaches the index
   without going through the debouncer, so a pass landing mid-hold would index a half-finished
   edit and defeat the hold entirely — bounded, because the hold expires whether or not anyone
@@ -144,47 +221,40 @@ Properties worth stating because they are easy to "simplify" away:
 - **A concurrent writer may delay indexing a file but must never stop it.** Every read
   opens share-`Read`, and a live write handle denies it, so per-file failures are skipped
   rather than allowed to abort a pass, a change whose file is busy is retried rather than
-  dropped — and the reconcile loop catches everything, because
-  that loop *is* the safety net and a single fault would otherwise end it for the process
-  lifetime.
+  dropped — and the reconcile loop catches everything, because that loop *is* the safety net
+  and a single fault would otherwise end it for the process lifetime.
 - **A file that cannot be hashed is left out of the classification entirely**, never
   stored with an empty hash. An empty hash becomes the file's identity and makes every
   other unhashable file look like its move source.
-- **Both writers of a file's record hash the same bytes with the same digest.** The corpus
-  scanner and the front end each record a content hash in `file_manifest.file_hash`; hashing
-  differently would not fail, it would re-deliver the whole corpus after every whole-folder pass,
-  silently. SHA-256 over the bytes, not the decoded text — decoding drops a byte-order mark — and
-  a test runs the scanner against the library's hasher to hold them to it.
-- **A file's timestamps are the file's, not the crawl's.** Recording the moment a scan ran
-  as a file's creation date is not metadata about the file. Read from the filesystem when a
+- **Both writers of a file's record hash the same bytes with the same digest.** SHA-256 over the
+  bytes, not the decoded text — decoding drops a byte-order mark — and a test runs the scanner
+  against the library's hasher to hold them to it. Hashing differently would not fail; it would
+  re-deliver the whole corpus after every whole-folder pass, silently.
+- **A file's timestamps are the file's, not the crawl's.** Read from the filesystem when a
   file is first seen (write time where none is reported), kept across edits, and derived
   through one rule because both writers record it.
-- **Write the columns you own, not the row you read.** A writer that reads a row, does
-  something slow (an embedding round-trip), then writes the whole row back will silently
-  revert whatever another writer recorded in between.
 - **Skipping an unchanged file takes two conditions, not one.** The content hash must
   match *and* the active model must already have vectors for it. After switching embedding
-  implementation every file is unchanged, yet none has a vector in the new model's space —
-  so skipping on the hash alone leaves the new model with a silently empty index. Only
-  embedding is skipped; chunking runs every pass, because the content has already been read
+  implementation every file is unchanged, yet none has a vector in the new model's space.
+  Only embedding is skipped; chunking runs every pass, because the content has already been read
   and a corpus-fitted embedder needs the whole chunk set regardless.
-- **What these loops survive is recorded, or it is invisible.** Each of them keeps
-  converging through its own faults, which is precisely what makes a loop failing every
-  pass look like one with nothing to do. So each component takes an optional logger and
-  runs silent without one — abstractions only, because a library should take a logger
-  from its host rather than choose one for it — and logging never changes control flow.
-  Levels follow what an operator can act on: a locked file, a hash that lost to a live
-  writer, a delivery that will be retried and a checkpoint that could not be taken are
-  **debug**; a failed reconcile pass, a dropped change, a file given up on after its
-  attempt limit and a failed drain are **warning**; a delivery abandoned after
-  `MaxAttempts` is **error**, and the only one, because that file is recorded as failed
-  and its one other symptom is a search that quietly does not find it.
-- Indexing runs **off** the startup path; the web host does not wait for it.
+- **What these loops survive is recorded, or it is invisible.** Each component takes an optional
+  `ILogger` and runs silent without one — abstractions only, because a library should take a
+  logger from its host rather than choose one for it — and logging never changes control flow.
+  Levels follow what an operator can act on: a locked file, a hash that lost to a live writer, a
+  delivery that will be retried and a checkpoint that could not be taken are **debug**; a failed
+  reconcile pass, a dropped change, a file given up on after its attempt limit and a failed drain
+  are **warning**; a delivery abandoned after `MaxAttempts` is **error**, and the only one,
+  because that file is recorded as failed and its one other symptom is a search that quietly
+  does not find it.
+- Indexing runs **off** the startup path; the web host does not wait for it. A first index that
+  fails is reported as failed, not as still building, and is retried on an interval.
 
-### Retrieval
+### Retrieval — built, no runtime caller
 
 Retrieval is **lazy** — it happens only when the model chooses to call a search tool, not
-as an unconditional pipeline stage. Two tools, deliberately separate:
+as an unconditional pipeline stage. The query and the reducer exist and are composed; the tools
+that would call them do not.
 
 - **Semantic search** embeds the query, ranks chunks by cosine similarity within a single
   embedding space, and rebuilds passage text from disk (chunks store no text). Candidates
@@ -192,30 +262,27 @@ as an unconditional pipeline stage. Two tools, deliberately separate:
   relevance, MMR diversity, and a **relative score-gap cutoff** — the calling model chooses
   how many results to ask for and does not reliably ask for few, so the cutoff drops
   candidates falling below a fraction of *this query's* best hit rather than trusting an
-  absolute floor.
+  absolute floor. A rebuilt snippet is to be verified against `chunk.chunk_hash` before it
+  reaches the model (plan §5.2 item 1) — without that check an edit inside the settle window
+  yields a wrong passage under a real path and a real score.
 - **Text search** is an index-independent exact/regex folder scan, for literal lookups and
   for the window before the first index is ready.
 
 Ahead of that reduction sits a **low-confidence screen**: when even the best candidate
-falls below a floor, the whole set is refused rather than thinned, because a handful of
-weak passages costs context tokens and invites an answer built on text that does not
-address the question. It cannot live inside the reducer, which is contractually obliged to
-return its best candidate even when that one alone busts the budget. **The floor is a
-property of the embedding model, so its default is off** — measured, a real embedder
-separates answerable from unanswerable questions cleanly while the placeholder's scores
-overlap, and a non-zero default would claim a selectivity the default profile lacks.
+falls below a floor, the whole set is refused rather than thinned. It cannot live inside the
+reducer, which is contractually obliged to return its best candidate even when that one alone
+busts the budget. **The floor is a property of the embedding model, so its default is off** — a
+real embedder separates answerable from unanswerable questions cleanly while the placeholder's
+scores overlap, and a non-zero default would claim a selectivity the default profile lacks.
 
 While the first index builds, semantic search **refuses** rather than answering from a
 half-built index: results from a partial index are indistinguishable from genuinely poor
-ones. A build that **failed** is reported as failed rather than as still building, and is
-retried on an interval rather than standing for the life of the process — what fails a first
-index is usually an embedding backend that has not finished starting, and a state nothing
-revisits turns that into a restart. A query vector is compared only against vectors sharing
-its model version — scoring across embedding spaces is meaningless.
+ones. A query vector is compared only against vectors sharing its model version — scoring
+across embedding spaces is meaningless.
 
-### Tools
+### Tools — not built
 
-File tools are split into two holders — **read** (`InspectDirectory`, `ReadFile`,
+File tools are split into two holders — **read** (`InspectDirectory`, `ReadFile`, `Retrieve`,
 `FindFiles`) and **mutation** (`Create`, `Update`, `ReplaceLines`, `Delete`). The split is
 the contract, not file layout: it is what lets a roster grant an agent the ability to read
 the folder without the ability to change it, so "which agent can destroy data" is answerable
@@ -230,15 +297,21 @@ in-place write holds a handle the indexer's share-`Read` opens collide with, and
 replace is reported as either `IOException` or `UnauthorizedAccessException` depending on
 the platform, so both must be retried. Deletion needs the same retry — share-`Read` carries
 no delete permission. Reads deliberately do *not* retry: two readers coexist, so a failing
-read means a genuine external writer and should say so promptly rather than after the full
-retry budget.
+read means a genuine external writer and should say so promptly.
 
-### Persistence
+**Search tool failures are fatal; file tool failures are strings.** A swallowed retrieval fault
+is indistinguishable from "nothing relevant", and the model would answer from prior knowledge
+believing it had searched. A file tool failure returns a `TOOL_FAILED:` string the model must
+report rather than answer around.
 
-Two SQLite databases in the folder's metadata directory, and the split is deliberate:
+### Persistence — index database live, conversation database not built
 
-- **the index** — files, chunks, vectors, the outbox, the embedding model registry;
-- **conversation state** — history and session blobs.
+Two SQLite databases in the folder's metadata directory (`.folderassistant/`), and the split is
+deliberate:
+
+- **the index** (`manifest.db`) — files, chunks, vectors, the outbox, the embedding model
+  registry, the fit artifact;
+- **conversation state** — history and session blobs. Not built.
 
 An index rebuild drops and repopulates the index schema, and conversation history has to
 survive that. They also have opposite access patterns: the index has one writer and many
@@ -254,6 +327,12 @@ Rules that bite:
   which faults when a handle is finalized while another connection prepares a statement,
   and it converts contention into a lock error for which the busy handler is never invoked,
   quietly defeating `busy_timeout`.
+- **The concurrent-bootstrap test goes red about one run in five to ten, and that is not the
+  shared cache.** It is `Microsoft.Data.Sqlite` connection pooling — measured: 70 failures in
+  100,000 pooled bootstraps, 0 in 40,000 unpooled (`SPEC-130` 0.10.0 holds both candidate fixes;
+  neither is chosen yet). Recognise it by `SQLITE_ERROR` (code 1) out of `BeginTransaction`, never
+  `SQLITE_BUSY`. **Do not lower the test's concurrency**; eight concurrent bootstraps is what makes
+  the property testable.
 - **No store runs DDL.** Schema creation lives in one bootstrapper per database, run once
   before the server accepts a request. DDL from the request path costs a round-trip per
   turn and forces read paths onto write-capable connections.
@@ -263,9 +342,10 @@ Rules that bite:
   delivering work — and never per write or on an idle poll. Advisory: one that cannot be taken
   costs disk, never correctness.
 - Vectors are keyed `(chunk_id, model_version_id)` so multiple embedding models can coexist
-  during a migration; exactly one model is active for write.
+  during a migration; exactly one model is active for write. Switching profiles changes the
+  active model version; existing vectors are not invalidated, they stop being the active ones.
 
-### Observability
+### Observability — live
 
 Telemetry sits in **decorators** over the composed seams — one for embedding, one for
 retrieval — so every call is recorded regardless of which backend a profile selected.
@@ -288,26 +368,38 @@ is raised to suppress routine successes. Operator reference:
 
 ## Code conventions
 
-Non-obvious and applied consistently — match them:
+Two conventions, one per assembly, on purpose — `.editorconfig` enforces the split by path.
+**Match the file you are editing.**
 
-- **Indentation is tabs** in the application project.
+The application project (`FolderAssistant/`) and the tests:
+
+- **Indentation is tabs.**
 - **BCL type names are spelled out**: `String`, `Int32`, `Boolean`, `Single`, `Double` —
-  not the C# keywords.
-- The `this.` qualifier is used for instance member access.
+  not the C# keywords. Set to *warning* because it is the rule pasted sample code breaks.
+- The `this.` qualifier is used for instance member access; private fields are `_camelCase`.
+- `var` only where the type is already on the line; braces on every block, even one statement.
 - Domain types are `internal sealed record` / `internal sealed class`; nullable reference
   types and implicit usings are enabled.
-- **The indexing library, once it exists, is standard modern C#** (`string`, `var`,
-  file-scoped namespaces). **Match the file you are editing**; the two conventions coexist on
-  purpose, one per assembly.
-- Tests see application internals via `InternalsVisibleTo`. Keep production types
-  `internal` rather than `private` when they need coverage.
+
+The indexing library (`src/FolderAssistant.Indexing`) is **standard modern C#**: `string`, `var`,
+file-scoped namespaces.
+
+Tests see both assemblies' internals via `InternalsVisibleTo`; the application also grants
+`DynamicProxyGenAssembly2`, because Moq builds proxies in a dynamic assembly and mocking an
+internal interface needs it. Keep production types `internal` rather than `private` when they
+need coverage.
+
+**Comments claim only what the tree can show.** No forward references, no invented rationale, no
+summarising the code — comment the constraint, the measurement, the rejected alternative. A comment
+asserting a mechanism the tree does not have is worse than no comment.
 
 ## Testing
 
-xUnit with FluentAssertions and Moq. Smoke tests boot the real host, so they also trigger
-database bootstrap and indexing.
+xUnit with FluentAssertions and Moq, one test project for both assemblies. Smoke tests boot the
+real host through `WebApplicationFactory<Program>`, so they also trigger database bootstrap and
+indexing; library tests live under `FolderAssistant.Tests/Indexing/`.
 
-Two habits matter more than a coverage number here:
+Habits that matter more than a coverage number here:
 
 - **Assert on the thing directly, not only end to end.** Offset arithmetic and text
   extraction have failure modes an end-to-end retrieval check cannot see, because ranking
@@ -315,12 +407,37 @@ Two habits matter more than a coverage number here:
 - **If a test goes red, capture the output before re-running.** A re-run that passes
   discards the only diagnostic there is — and a test that fails a third of the time and is
   *correct* looks exactly like one that is flaky.
+- **Mutation-test the property a change claims.** Diff the file after patching — an unchanged
+  file is a broken mutation, not a strong test — and a mutation that only fails to *compile*
+  under the zero-warning gate is a weaker kill than a failing test.
+- **Verify a commit standing alone**, in a throwaway `git worktree` at that commit, before
+  believing a stability claim. It has caught defects the tip-only build hid.
+- **A new test whose fixture cannot be staged fails; it never skips green.** The two existing
+  early-return suites (Ollama live, `sqlite-vec` backend) are a documented exception, not a
+  convention to extend — containment tests here once asserted nothing for weeks.
+
+## Documentation
+
+- [`docs/specs/`](docs/specs/) — one versioned spec per module; the requirement a change is
+  written from. Start at `SPEC-000`; the storage choice is `SPEC-131`. `SPEC-000` is known to
+  overclaim on two points (no network reach; an agent that exists) until its rewrite lands.
+- [`docs/diagrams/`](docs/diagrams/) — the architecture as it is meant to hold together, and
+  the live / built / not-built status.
+- [`docs/benchmarks/`](docs/benchmarks/) — figures of the tree that measured them, never of the
+  current one.
+- [`docs/archive/`](docs/archive/) — designs considered and not built, kept for the reasoning
+  that rejected them.
+
+`CLAUDE.md` and the specs carry **invariants and checked negatives** — things that change what the
+next person does. Session narrative goes in `notes/`, dated, and is pruned when it stops changing
+anything.
 
 ## Repository hygiene
 
 - The metadata folder (`.folderassistant/` by default) is generated output: gitignored,
-  never edited or committed by hand.
-- `notes/`, `*.local.md`, `_staging/`, `CLAUDE.local.md` and `appsettings.Development.json`
-  are gitignored and stay local. The last of these may hold a real API key.
-- Never commit credentials. Configuration binds from environment variables and user secrets
-  as readily as from `appsettings.json`.
+  never edited or committed by hand. Deleting it and running again rebuilds it.
+- `notes/`, `*.local.md`, `CLAUDE.local.md`, `.mcp.json` and `appsettings.Development.json`
+  are gitignored and stay local. The last of these may hold a real API key; create it from
+  `appsettings.Development.template.json`.
+- Never commit credentials. Configuration binds from environment variables
+  (`FolderAssistant__Provider__ApiKey`) and user secrets as readily as from `appsettings.json`.

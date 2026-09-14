@@ -1,9 +1,11 @@
+using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
 using FolderAssistant.Embedding;
 using FolderAssistant.Embedding.Lsa;
 using FolderAssistant.Indexing;
 using FolderAssistant.Indexing.Outbox;
+using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
 using Microsoft.Data.Sqlite;
@@ -19,6 +21,12 @@ namespace FolderAssistant.Tests;
 /// not own, and every refusal below is one that would otherwise be invisible — an index that never goes
 /// quiet, vectors embedded in a space no query can reach, or chunks left behind for a file that is gone.
 /// </para>
+///
+/// <para>
+/// A delivery writes chunks and vectors under a row the store wrote, and nothing about the row. So the
+/// fixture records each file the way the front end would before delivering it, and a refusal is asserted
+/// on what was <em>not</em> written under that row rather than on the row being absent.
+/// </para>
 /// </summary>
 public sealed class RagBridgeVectorizationServiceTests
 {
@@ -31,11 +39,11 @@ public sealed class RagBridgeVectorizationServiceTests
 
 		using Bridge bridge = Bridge.For(folder);
 
-		await bridge.DeliverAsync("doc-1", path);
+		string docId = await bridge.DeliverAsync(path);
 
-		bridge.FileIds().Should().Equal(["doc-1"], "the delivered id is the identity, not something derived here");
-		bridge.ChunkCountFor("doc-1").Should().BeGreaterThan(0);
-		bridge.VectorCount().Should().Be(bridge.ChunkCountFor("doc-1"),
+		bridge.FileIds().Should().Equal([docId], "the delivered id is the identity the store's row carries, not something derived here");
+		bridge.ChunkCountFor(docId).Should().BeGreaterThan(0);
+		bridge.VectorCount().Should().Be(bridge.ChunkCountFor(docId),
 			"a chunk whose vector did not land can never be retrieved, and looks like a chunk nothing matches");
 	}
 
@@ -52,15 +60,15 @@ public sealed class RagBridgeVectorizationServiceTests
 		await File.WriteAllTextAsync(path, "the first version of this document, which said one thing");
 
 		using Bridge bridge = Bridge.For(folder);
-		await bridge.DeliverAsync("doc-1", path);
-		int first = bridge.ChunkCountFor("doc-1");
+		string docId = await bridge.DeliverAsync(path);
+		int first = bridge.ChunkCountFor(docId);
 
 		await File.WriteAllTextAsync(path, "the second version, wholly rewritten, saying something else");
-		await bridge.DeliverAsync("doc-1", path);
+		await bridge.DeliverAsync(path);
 
-		bridge.FileIds().Should().Equal("doc-1");
-		bridge.ChunkCountFor("doc-1").Should().BeGreaterThan(0).And.Be(first);
-		bridge.VectorCount().Should().Be(bridge.ChunkCountFor("doc-1"));
+		bridge.FileIds().Should().Equal(docId);
+		bridge.ChunkCountFor(docId).Should().BeGreaterThan(0).And.Be(first);
+		bridge.VectorCount().Should().Be(bridge.ChunkCountFor(docId));
 	}
 
 	[Fact]
@@ -71,12 +79,12 @@ public sealed class RagBridgeVectorizationServiceTests
 		await File.WriteAllTextAsync(path, "something worth indexing and then removing again");
 
 		using Bridge bridge = Bridge.For(folder);
-		await bridge.DeliverAsync("doc-1", path);
+		string docId = await bridge.DeliverAsync(path);
 
-		await bridge.Service.DeleteAsync("doc-1", CancellationToken.None);
+		await bridge.Service.DeleteAsync(docId, CancellationToken.None);
 
-		bridge.FileIds().Should().BeEmpty();
-		bridge.ChunkCountFor("doc-1").Should().Be(0);
+		bridge.FileIds().Should().BeEmpty("a delivered removal is the one write that ends a file's row");
+		bridge.ChunkCountFor(docId).Should().Be(0);
 		bridge.VectorCount().Should().Be(0, "a vector outliving its chunk is a hit that cannot be resolved");
 	}
 
@@ -105,11 +113,11 @@ public sealed class RagBridgeVectorizationServiceTests
 		await File.WriteAllTextAsync(path, "content stored where a foreign key cannot reach it");
 
 		using Bridge bridge = Bridge.For(folder, vectorStore: "vec");
-		await bridge.DeliverAsync("doc-1", path);
+		string docId = await bridge.DeliverAsync(path);
 
 		bridge.VectorCount("vec").Should().BeGreaterThan(0, "the delivery has to have stored something to remove");
 
-		await bridge.Service.DeleteAsync("doc-1", CancellationToken.None);
+		await bridge.Service.DeleteAsync(docId, CancellationToken.None);
 
 		bridge.VectorCount("vec").Should().Be(0, "nothing cascades in a virtual table");
 	}
@@ -149,9 +157,10 @@ public sealed class RagBridgeVectorizationServiceTests
 
 		using Bridge bridge = Bridge.For(folder);
 
-		await bridge.DeliverAsync("doc-1", path);
+		string docId = await bridge.DeliverAsync(path);
 
-		bridge.FileIds().Should().BeEmpty("indexing the index is how an indexer stops going quiet");
+		bridge.ChunkCountFor(docId).Should().Be(0, "indexing the index is how an indexer stops going quiet");
+		bridge.VectorCount().Should().Be(0);
 	}
 
 	[Fact]
@@ -163,9 +172,10 @@ public sealed class RagBridgeVectorizationServiceTests
 
 		using Bridge bridge = Bridge.For(folder);
 
-		await bridge.DeliverAsync("doc-1", path);
+		string docId = await bridge.DeliverAsync(path);
 
-		bridge.FileIds().Should().BeEmpty();
+		bridge.ChunkCountFor(docId).Should().Be(0);
+		bridge.VectorCount().Should().Be(0);
 	}
 
 	/// <summary>
@@ -197,9 +207,10 @@ public sealed class RagBridgeVectorizationServiceTests
 		using Bridge bridge = Bridge.For(
 			folder, LsaEmbeddingVectorizer.CreateForFitting("lsa-v1", 8));
 
-		await bridge.DeliverAsync("doc-1", path);
+		string docId = await bridge.DeliverAsync(path);
 
-		bridge.FileIds().Should().BeEmpty("vectors in an unfitted space rank as though they meant something else");
+		bridge.ChunkCountFor(docId).Should().Be(0, "vectors in an unfitted space rank as though they meant something else");
+		bridge.VectorCount().Should().Be(0);
 	}
 
 	/// <summary>
@@ -228,8 +239,7 @@ public sealed class RagBridgeVectorizationServiceTests
 			await File.WriteAllTextAsync(paths[i], $"document number {i}, with enough words to make a chunk of it");
 		}
 
-		await Task.WhenAll(Enumerable.Range(0, paths.Length)
-			.Select(i => bridge.DeliverAsync($"doc-{i}", paths[i])));
+		await Task.WhenAll(paths.Select(path => bridge.DeliverAsync(path)));
 
 		bridge.FileIds().Should().HaveCount(paths.Length);
 		bridge.VectorCount().Should().BeGreaterThanOrEqualTo(paths.Length);
@@ -238,7 +248,7 @@ public sealed class RagBridgeVectorizationServiceTests
 	/// <summary>
 	/// What the bridge writes has to be reachable by the thing it was written for. The chunk rows and the
 	/// vectors could both be present and still be unqueryable — retrieval resolves a hit through the file
-	/// row, so a delivery that wrote no file row would store content nothing could ever return.
+	/// row, so chunks written under an id no row carries would be content nothing could ever return.
 	/// </summary>
 	[Fact]
 	public async Task A_Delivered_File_Is_Retrievable_Afterwards()
@@ -248,7 +258,7 @@ public sealed class RagBridgeVectorizationServiceTests
 		await File.WriteAllTextAsync(path, "the harbour wall was rebuilt after the storm of that winter");
 
 		using Bridge bridge = Bridge.For(folder);
-		await bridge.DeliverAsync("doc-1", path);
+		await bridge.DeliverAsync(path);
 
 		IReadOnlyList<RetrievalHit> hits = new CosineRetrievalQuery(bridge.Vectorizer)
 			.Search(bridge.DatabasePath, "harbour wall rebuilt", new RetrievalOptions(TopK: 5));
@@ -260,12 +270,17 @@ public sealed class RagBridgeVectorizationServiceTests
 	/// <summary>Builds the bridge over a real database, and reads back what it wrote.</summary>
 	private sealed class Bridge : IDisposable
 	{
-		private Bridge(string databasePath, IVectorizer vectorizer, RagBridgeVectorizationService service)
+		private static readonly DateTime Created = new(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+
+		private Bridge(string rootPath, string databasePath, IVectorizer vectorizer, RagBridgeVectorizationService service)
 		{
+			this.RootPath = rootPath;
 			this.DatabasePath = databasePath;
 			this.Vectorizer = vectorizer;
 			this.Service = service;
 		}
+
+		public string RootPath { get; }
 
 		public string DatabasePath { get; }
 
@@ -295,22 +310,32 @@ public sealed class RagBridgeVectorizationServiceTests
 				config,
 				".folderassistant");
 
-			return new Bridge(databasePath, resolved, service);
+			return new Bridge(folder.Path, databasePath, resolved, service);
 		}
 
-		public async Task DeliverAsync(string docId, string absolutePath, string? extension = null)
+		/// <summary>
+		/// Records the file the way the front end would — the row is the store's — and delivers it under
+		/// the id the library derives for its path, which is the only id a delivery can carry. Returns
+		/// that id.
+		/// </summary>
+		public async Task<string> DeliverAsync(string absolutePath, string? extension = null)
 		{
 			byte[] bytes = await File.ReadAllBytesAsync(absolutePath);
+			string relativePath = Path.GetRelativePath(this.RootPath, absolutePath).Replace('\\', '/');
+			string hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+			await new FolderIndexStore(this.DatabasePath).ApplyAsync(
+				[new ReconciledChange(relativePath, FileDelta.Added, new FileRecord(relativePath, hash, bytes.Length, Created))]);
+
+			string docId = FileIdentity.For(relativePath);
+
 			using MemoryStream content = new(bytes);
 
-			FileMetadata metadata = new(
-				absolutePath,
-				bytes.Length,
-				new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc),
-				extension ?? Path.GetExtension(absolutePath),
-				Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)));
+			FileMetadata metadata = new(absolutePath, bytes.Length, Created, extension ?? Path.GetExtension(absolutePath), hash);
 
 			await this.Service.UpsertAsync(docId, content, metadata, CancellationToken.None);
+
+			return docId;
 		}
 
 		public string[] FileIds()

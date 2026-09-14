@@ -4,20 +4,37 @@ using Microsoft.Data.Sqlite;
 
 namespace FolderAssistant.Persistence;
 
-/// <summary>What a single indexing pass wrote.</summary>
+/// <summary>What a single write of chunks and vectors covered.</summary>
 internal sealed record IndexWriteSummary(
-	Int32 FilesUpserted,
+	Int32 FilesWritten,
 	Int32 ChunksUpserted,
-	Int32 VectorsUpserted,
-	Int32 FilesDeleted);
+	Int32 VectorsUpserted);
 
 /// <summary>
-/// Writes a whole indexing pass to the database, in one transaction.
+/// Writes the embedding side of the index — chunks, vectors, the model registry and the fit artifact —
+/// in one transaction per call.
 ///
 /// <para>
-/// One transaction because the three tables are only meaningful together: a chunk row whose vector
-/// did not land is a chunk that can never be retrieved, and it looks exactly like a chunk nothing
-/// matches.
+/// One transaction because those tables are only meaningful together: a chunk row whose vector did
+/// not land is a chunk that can never be retrieved, and it looks exactly like a chunk nothing matches.
+/// </para>
+///
+/// <para>
+/// <strong>It never writes a file's record.</strong> What a <c>file_manifest</c> row says — the path,
+/// the content hash, the size, the creation time, whether the file is still there, and what was last
+/// delivered for it — is written by the indexing store and by nothing else (<c>SPEC-121</c>, own your
+/// columns). This type used to write those rows too, and a delivery that had read a file's hash before
+/// a slow embed wrote it back afterwards, reverting a newer hash the front end had recorded in between:
+/// the delivery queued for the newer content then found its work already done and skipped, and the file
+/// sat on stale vectors until a periodic pass happened to re-hash it. A chunk row references the file
+/// row the store wrote, so writing chunks for a file the store has not recorded fails on the foreign
+/// key — which is the right failure, rather than a row this side invents.
+/// </para>
+///
+/// <para>
+/// The one thing it does to a file row is end it: <see cref="DeleteFile"/> removes the row, and only
+/// as the last step of removing the file's vectors and chunks on a delivered removal, because vectors
+/// must go before the cascade and only this side can reach them.
 /// </para>
 /// </summary>
 internal sealed class FolderIndexRepository
@@ -37,7 +54,8 @@ internal sealed class FolderIndexRepository
 	}
 
 	/// <summary>
-	/// Writes the index. Takes metadata, not text.
+	/// Writes the chunks and vectors of many files at once, with the model registry entry and, where
+	/// there is one, the fit they were produced under. Takes metadata, not text.
 	///
 	/// <para>
 	/// <c>chunk_manifest</c> holds chunk ids, offsets and hashes and no content at all, so a
@@ -45,16 +63,19 @@ internal sealed class FolderIndexRepository
 	/// corpus in memory purely to satisfy it. The narrower types are the guard: there is no field
 	/// here to put a corpus in.
 	/// </para>
+	///
+	/// <para>
+	/// Every file named in <paramref name="chunksByFile"/> must already have its record in the store.
+	/// A file whose chunk list is empty has its existing chunks cleared and nothing written.
+	/// </para>
 	/// </summary>
 	public IndexWriteSummary Upsert(
 		String databasePath,
-		IReadOnlyList<ScannedFile> files,
 		IReadOnlyDictionary<String, IReadOnlyList<ChunkMetadata>> chunksByFile,
 		IReadOnlyDictionary<String, EmbeddingResult> embeddingsByChunk,
 		ModelDescriptor descriptor,
 		String? fitArtifactJson = null)
 	{
-		ArgumentNullException.ThrowIfNull(files);
 		ArgumentNullException.ThrowIfNull(chunksByFile);
 		ArgumentNullException.ThrowIfNull(embeddingsByChunk);
 		ArgumentNullException.ThrowIfNull(descriptor);
@@ -84,76 +105,44 @@ internal sealed class FolderIndexRepository
 			UpsertFitArtifact(connection, transaction, modelVersionId, fitArtifactJson);
 		}
 
-		// Before the upserts, matching the order the rest of the pass assumes: rows for files that are
-		// gone leave first, taking their chunks and vectors with them.
-		Int32 deletedCount = this.DeleteRemovedFiles(connection, transaction, files);
-
 		Int32 fileCount = 0;
 		Int32 chunkCount = 0;
 		Int32 vectorCount = 0;
 
-		foreach (ScannedFile file in files)
+		foreach ((String fileId, IReadOnlyList<ChunkMetadata> chunks) in chunksByFile)
 		{
-			UpsertFile(connection, transaction, file);
 			fileCount++;
 
-			chunksByFile.TryGetValue(file.FileId, out IReadOnlyList<ChunkMetadata>? chunks);
-			chunks ??= [];
+			(Int32 chunksWritten, Int32 vectorsWritten) = this.WriteChunks(
+				connection, transaction, fileId, chunks, embeddingsByChunk, descriptor);
 
-			this.DeleteSupersededChunks(connection, transaction, file.FileId, chunks);
-
-			if (chunks.Count == 0)
-			{
-				continue;
-			}
-
-			foreach (ChunkMetadata chunk in chunks)
-			{
-				UpsertChunk(connection, transaction, file.FileId, chunk, modelVersionId);
-				chunkCount++;
-
-				if (!embeddingsByChunk.TryGetValue(chunk.ChunkId, out EmbeddingResult? embedding))
-				{
-					continue;
-				}
-
-				this._vectorStoreWriter.UpsertVector(
-					connection, transaction, chunk.ChunkId, modelVersionId, embedding.Vector, descriptor.Dimension);
-				vectorCount++;
-			}
+			chunkCount += chunksWritten;
+			vectorCount += vectorsWritten;
 		}
 
 		transaction.Commit();
 
-		return new IndexWriteSummary(fileCount, chunkCount, vectorCount, deletedCount);
+		return new IndexWriteSummary(fileCount, chunkCount, vectorCount);
 	}
 
 	/// <summary>
-	/// Writes one delivered file: its manifest row, its chunks, and their vectors, in one transaction.
-	///
-	/// <para>
-	/// The corpus pass above and this method are <strong>two writers of <c>file_manifest</c></strong>,
-	/// and that is a known sharp edge rather than an oversight. A corpus pass rewrites those rows
-	/// wholesale and deletes any file its scan did not see, so a pass overlapping a delivery can remove
-	/// a row this method just wrote and take that file's chunks with it through the cascade. Nothing
-	/// drives this path yet, so the two cannot overlap today; the split that fixes it — the indexer
-	/// owning the file rows and this side owning only chunks and vectors — needs the outbox store,
-	/// which does not exist here. Until then the hazard is written down rather than designed around.
-	/// </para>
+	/// Writes one delivered file's chunks and their vectors, in one transaction, under the id the
+	/// delivery named. The file's record is the store's and is not touched here — see the type remarks
+	/// for the race that writing it caused.
 	///
 	/// <para>
 	/// It cannot write a fit artifact, and does not try. A corpus-fitted embedder is fitted against a
-	/// whole corpus, and one delivered file is not one; the cold pass owns that.
+	/// whole corpus, and one delivered file is not one; the whole-folder pass owns that.
 	/// </para>
 	/// </summary>
 	public IndexWriteSummary UpsertSingleFile(
 		String databasePath,
-		ScannedFile file,
+		String fileId,
 		IReadOnlyList<ChunkMetadata> chunks,
 		IReadOnlyDictionary<String, EmbeddingResult> embeddingsByChunk,
 		ModelDescriptor descriptor)
 	{
-		ArgumentNullException.ThrowIfNull(file);
+		ArgumentException.ThrowIfNullOrWhiteSpace(fileId);
 		ArgumentNullException.ThrowIfNull(chunks);
 		ArgumentNullException.ThrowIfNull(embeddingsByChunk);
 		ArgumentNullException.ThrowIfNull(descriptor);
@@ -169,34 +158,12 @@ internal sealed class FolderIndexRepository
 		UpsertModel(connection, transaction, descriptor);
 		this._vectorStoreWriter.EnsureSchema(connection, transaction, modelVersionId, descriptor.Dimension);
 
-		UpsertFile(connection, transaction, file);
-
-		// Before the new chunks, exactly as the corpus pass orders it: an edit produces a new
-		// content-addressed id for the same slot, and the unique constraint on (file_id, chunk_index)
-		// would reject it while the old row is still there.
-		this.DeleteSupersededChunks(connection, transaction, file.FileId, chunks);
-
-		Int32 chunkCount = 0;
-		Int32 vectorCount = 0;
-
-		foreach (ChunkMetadata chunk in chunks)
-		{
-			UpsertChunk(connection, transaction, file.FileId, chunk, modelVersionId);
-			chunkCount++;
-
-			if (!embeddingsByChunk.TryGetValue(chunk.ChunkId, out EmbeddingResult? embedding))
-			{
-				continue;
-			}
-
-			this._vectorStoreWriter.UpsertVector(
-				connection, transaction, chunk.ChunkId, modelVersionId, embedding.Vector, descriptor.Dimension);
-			vectorCount++;
-		}
+		(Int32 chunkCount, Int32 vectorCount) = this.WriteChunks(
+			connection, transaction, fileId, chunks, embeddingsByChunk, descriptor);
 
 		transaction.Commit();
 
-		return new IndexWriteSummary(1, chunkCount, vectorCount, 0);
+		return new IndexWriteSummary(1, chunkCount, vectorCount);
 	}
 
 	/// <summary>
@@ -244,16 +211,46 @@ internal sealed class FolderIndexRepository
 	}
 
 	/// <summary>
-	/// Removes chunk rows for a file that the current scan no longer produces.
+	/// Replaces one file's chunks: whatever the current chunk set no longer contains goes first, then
+	/// each current chunk and its vector.
 	///
 	/// <para>
-	/// Two cases need it. A content edit yields a new content-addressed <c>chunk_id</c> for the same
-	/// <c>(file_id, chunk_index)</c> slot, which the unique constraint on that pair would otherwise
-	/// reject; and a file that shrank leaves trailing chunks behind with nothing to overwrite them.
-	/// Their vectors cascade away, which is what keeps every stored vector bound to the content it
-	/// was computed from, under every model version.
+	/// The deletion comes first for a reason the constraint enforces: an edit produces a new
+	/// content-addressed id for the same <c>(file_id, chunk_index)</c> slot, and the unique constraint
+	/// on that pair would reject it while the old row is still there.
 	/// </para>
 	/// </summary>
+	private (Int32 Chunks, Int32 Vectors) WriteChunks(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String fileId,
+		IReadOnlyList<ChunkMetadata> chunks,
+		IReadOnlyDictionary<String, EmbeddingResult> embeddingsByChunk,
+		ModelDescriptor descriptor)
+	{
+		this.DeleteSupersededChunks(connection, transaction, fileId, chunks);
+
+		Int32 chunkCount = 0;
+		Int32 vectorCount = 0;
+
+		foreach (ChunkMetadata chunk in chunks)
+		{
+			UpsertChunk(connection, transaction, fileId, chunk, descriptor.ModelVersionId);
+			chunkCount++;
+
+			if (!embeddingsByChunk.TryGetValue(chunk.ChunkId, out EmbeddingResult? embedding))
+			{
+				continue;
+			}
+
+			this._vectorStoreWriter.UpsertVector(
+				connection, transaction, chunk.ChunkId, descriptor.ModelVersionId, embedding.Vector, descriptor.Dimension);
+			vectorCount++;
+		}
+
+		return (chunkCount, vectorCount);
+	}
+
 	/// <summary>
 	/// Deletes the vectors of every chunk the given query selects, through the store's own contract
 	/// rather than by relying on the <c>chunk_manifest</c> cascade.
@@ -290,6 +287,17 @@ internal sealed class FolderIndexRepository
 		this._vectorStoreWriter.DeleteVectors(connection, transaction, chunkIds);
 	}
 
+	/// <summary>
+	/// Removes chunk rows for a file that the current chunk set no longer produces.
+	///
+	/// <para>
+	/// Two cases need it. A content edit yields a new content-addressed <c>chunk_id</c> for the same
+	/// <c>(file_id, chunk_index)</c> slot, which the unique constraint on that pair would otherwise
+	/// reject; and a file that shrank leaves trailing chunks behind with nothing to overwrite them.
+	/// Their vectors cascade away, which is what keeps every stored vector bound to the content it
+	/// was computed from, under every model version.
+	/// </para>
+	/// </summary>
 	private void DeleteSupersededChunks(
 		SqliteConnection connection,
 		SqliteTransaction transaction,
@@ -335,93 +343,6 @@ internal sealed class FolderIndexRepository
 		command.CommandText =
 			$"DELETE FROM chunk_manifest WHERE file_id = $fileId AND chunk_id NOT IN ({String.Join(", ", keepParameters)});";
 		command.ExecuteNonQuery();
-	}
-
-	/// <summary>
-	/// Removes manifest rows for files that are no longer on disk; their chunks and vectors cascade
-	/// away with them.
-	///
-	/// <para>
-	/// This treats the scanned file list as the authoritative current state of the folder — which is
-	/// a sharp edge worth naming: a scan that silently returned nothing would clear the index. The
-	/// scanner throws on a bad path rather than returning an empty result, which is what makes this
-	/// sound.
-	/// </para>
-	/// <para>
-	/// The surviving file ids go into an indexed temp table rather than a <c>NOT IN (...)</c>
-	/// parameter list. A folder of twelve thousand files would otherwise bind twelve thousand
-	/// parameters, and SQLite does not build a lookup structure for a long list of *parameters* the
-	/// way it does for literals — it rescans the list per row. Small test folders never expose it.
-	/// </para>
-	/// </summary>
-	private Int32 DeleteRemovedFiles(
-		SqliteConnection connection,
-		SqliteTransaction transaction,
-		IReadOnlyList<ScannedFile> files)
-	{
-		if (files.Count == 0)
-		{
-			this.DeleteVectorsOf(connection, transaction, "SELECT chunk_id FROM chunk_manifest;", static _ => { });
-
-			using SqliteCommand deleteAll = connection.CreateCommand();
-			deleteAll.Transaction = transaction;
-			deleteAll.CommandText = "DELETE FROM file_manifest;";
-
-			return deleteAll.ExecuteNonQuery();
-		}
-
-		PopulateScannedFileIds(connection, transaction, files);
-
-		this.DeleteVectorsOf(
-			connection,
-			transaction,
-			"""
-			SELECT cm.chunk_id FROM chunk_manifest cm
-			WHERE cm.file_id NOT IN (SELECT file_id FROM scanned_file_id);
-			""",
-			static _ => { });
-
-		using SqliteCommand command = connection.CreateCommand();
-		command.Transaction = transaction;
-		command.CommandText = """
-			DELETE FROM file_manifest
-			WHERE file_id NOT IN (SELECT file_id FROM scanned_file_id);
-			""";
-
-		return command.ExecuteNonQuery();
-	}
-
-	/// <summary>
-	/// Fills a temp table with the ids the current scan found. Recreated per call rather than
-	/// cleared: the table is scoped to the connection, and a stale row here would spare a file that
-	/// has actually been deleted.
-	/// </summary>
-	private static void PopulateScannedFileIds(
-		SqliteConnection connection,
-		SqliteTransaction transaction,
-		IReadOnlyList<ScannedFile> files)
-	{
-		using (SqliteCommand create = connection.CreateCommand())
-		{
-			create.Transaction = transaction;
-			create.CommandText = """
-				DROP TABLE IF EXISTS temp.scanned_file_id;
-				CREATE TEMP TABLE scanned_file_id (file_id TEXT PRIMARY KEY);
-				""";
-			create.ExecuteNonQuery();
-		}
-
-		using SqliteCommand insert = connection.CreateCommand();
-		insert.Transaction = transaction;
-		insert.CommandText = "INSERT OR IGNORE INTO scanned_file_id (file_id) VALUES ($fileId);";
-
-		SqliteParameter fileId = insert.Parameters.Add("$fileId", SqliteType.Text);
-
-		foreach (ScannedFile file in files)
-		{
-			fileId.Value = file.FileId;
-			insert.ExecuteNonQuery();
-		}
 	}
 
 	private static void UpsertModel(
@@ -483,31 +404,6 @@ internal sealed class FolderIndexRepository
 		command.Parameters.AddWithValue("$id", modelVersionId);
 		command.Parameters.AddWithValue("$artifact", artifactJson);
 		command.Parameters.AddWithValue("$created", UtcNow());
-		command.ExecuteNonQuery();
-	}
-
-	private static void UpsertFile(SqliteConnection connection, SqliteTransaction transaction, ScannedFile file)
-	{
-		using SqliteCommand command = connection.CreateCommand();
-		command.Transaction = transaction;
-		command.CommandText = """
-			INSERT INTO file_manifest (
-				file_id, file_path, file_hash, size_bytes, modified_utc, status, updated_utc)
-			VALUES ($id, $path, $hash, $size, $modified, 'active', $updated)
-			ON CONFLICT(file_id) DO UPDATE SET
-				file_path = excluded.file_path,
-				file_hash = excluded.file_hash,
-				size_bytes = excluded.size_bytes,
-				modified_utc = excluded.modified_utc,
-				status = excluded.status,
-				updated_utc = excluded.updated_utc;
-			""";
-		command.Parameters.AddWithValue("$id", file.FileId);
-		command.Parameters.AddWithValue("$path", file.RelativePath);
-		command.Parameters.AddWithValue("$hash", file.FileHash);
-		command.Parameters.AddWithValue("$size", file.SizeBytes);
-		command.Parameters.AddWithValue("$modified", file.ModifiedUtc.ToString("O"));
-		command.Parameters.AddWithValue("$updated", UtcNow());
 		command.ExecuteNonQuery();
 	}
 

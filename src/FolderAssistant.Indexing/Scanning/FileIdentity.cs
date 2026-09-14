@@ -8,10 +8,11 @@ namespace FolderAssistant.Indexing.Scanning;
 ///
 /// <para>
 /// It must be exactly the id the application's corpus scanner derives for the same file, because the
-/// embedding side keys its rows on it. Delivered one file at a time under any other id, a file would
-/// land on different rows from the ones a whole-folder scan wrote — indexed twice, and removable only
-/// under the id it was not delivered with. The two derivations live in two assemblies by agreement, so
-/// the agreement is asserted by a test that runs the application's scanner, not by this comment.
+/// embedding side keys its chunks on it and the row those chunks reference is the one this library
+/// recorded under this id. Derived differently, the whole-folder pass would write chunks under an id no
+/// row carries and fail on the foreign key for every file — loudly, which is the better of the two
+/// failures, but a pass that indexes nothing. The two derivations live in two assemblies by agreement,
+/// so the agreement is asserted by a test that runs the application's scanner, not by this comment.
 /// </para>
 ///
 /// <para>
