@@ -63,21 +63,58 @@ public sealed class EmbeddingTelemetryVectorizerTests
 	}
 
 	/// <summary>
-	/// Cancellation is separated from failure. An error rate that counts shutdowns tells an operator to
-	/// investigate a process exiting normally.
+	/// Cancellation is separated from failure and from a timeout. An error rate that counts shutdowns
+	/// tells an operator to investigate a process exiting normally. The classification is by the caller's
+	/// token, not the exception type: a transport reports its own deadline as a cancellation too.
 	/// </summary>
 	[Fact]
-	public async Task A_Cancelled_Call_Is_Recorded_As_TimedOut_Not_Failed()
+	public async Task A_Call_The_Caller_Cancelled_Is_Recorded_As_Cancelled_Not_Failed()
 	{
 		RecordingTelemetry telemetry = new();
 		IVectorizer vectorizer = EmbeddingTelemetryVectorizer.Wrap(
 			new StubVectorizer { ThrowWith = () => new OperationCanceledException() }, telemetry);
+
+		using CancellationTokenSource caller = new();
+		await caller.CancelAsync();
+
+		Func<Task> embed = async () => await vectorizer.VectorizeAsync(["one"], EmbeddingKind.Document, caller.Token);
+
+		await embed.Should().ThrowAsync<OperationCanceledException>();
+
+		telemetry.Calls[0].Status.Should().Be(EmbeddingStatus.Cancelled);
+	}
+
+	/// <summary>
+	/// A cancellation nobody asked for is a deadline — the transport's — and a fault in the backend.
+	/// </summary>
+	[Fact]
+	public async Task A_Cancellation_The_Caller_Did_Not_Ask_For_Is_Recorded_As_TimedOut()
+	{
+		RecordingTelemetry telemetry = new();
+		IVectorizer vectorizer = EmbeddingTelemetryVectorizer.Wrap(
+			new StubVectorizer { ThrowWith = () => new TaskCanceledException("the HTTP client gave up") }, telemetry);
 
 		Func<Task> embed = async () => await vectorizer.VectorizeAsync(["one"], EmbeddingKind.Document);
 
 		await embed.Should().ThrowAsync<OperationCanceledException>();
 
 		telemetry.Calls[0].Status.Should().Be(EmbeddingStatus.TimedOut);
+	}
+
+	/// <summary>The vectorizer's own deadline reports itself as a timeout, and is filed as one.</summary>
+	[Fact]
+	public async Task A_Call_That_Hit_Its_Deadline_Is_Recorded_As_TimedOut()
+	{
+		RecordingTelemetry telemetry = new();
+		IVectorizer vectorizer = EmbeddingTelemetryVectorizer.Wrap(
+			new StubVectorizer { ThrowWith = () => new TimeoutException("120 s") }, telemetry);
+
+		Func<Task> embed = async () => await vectorizer.VectorizeAsync(["one"], EmbeddingKind.Document);
+
+		await embed.Should().ThrowAsync<TimeoutException>();
+
+		telemetry.Calls[0].Status.Should().Be(EmbeddingStatus.TimedOut);
+		telemetry.Calls[0].ErrorCode.Should().Be(nameof(TimeoutException));
 	}
 
 	/// <summary>

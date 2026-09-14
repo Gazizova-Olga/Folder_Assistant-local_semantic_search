@@ -166,6 +166,20 @@ internal record IndexingConfig
 	public Int32 OllamaEmbeddingDimension { get; init; } = 1024;
 
 	/// <summary>
+	/// The bound on one embed call, whatever its batch size, after which the call is abandoned as a
+	/// timeout and the work is retried. Without one, a call that never returned would hold a delivery in
+	/// flight forever with its attempts at zero — retry, backoff and the attempt limit never engage — and
+	/// during the first pass would leave the index <c>Building</c> for the life of the process.
+	///
+	/// <para>
+	/// Sized for a full embed window (<see cref="EmbeddingBatchSizeChunks"/>): measured at 386 ms per chunk
+	/// on a CPU here, a window of 64 takes about 25 s, so 120 s is generous by a factor of five and still
+	/// ends a hung call inside one delivery's lifetime. Raise it with the window, or on a slower machine.
+	/// </para>
+	/// </summary>
+	public Int32 OllamaTimeoutSeconds { get; init; } = 120;
+
+	/// <summary>
 	/// How long a changed file must go untouched before its change is processed, so a burst of edits to
 	/// one file costs one delivery rather than one per event.
 	/// </summary>

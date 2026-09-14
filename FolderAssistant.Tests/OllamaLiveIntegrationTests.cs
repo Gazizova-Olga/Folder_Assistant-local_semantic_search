@@ -187,7 +187,8 @@ public sealed class OllamaLiveIntegrationTests
 		IndexingConfig config = LiveConfig();
 
 		vectorizer = new OllamaEmbeddingVectorizer(
-			config.OllamaEndpoint, config.OllamaModel, config.OllamaModelVersionId, config.OllamaEmbeddingDimension);
+			config.OllamaEndpoint, config.OllamaModel, config.OllamaModelVersionId, config.OllamaEmbeddingDimension,
+			TimeSpan.FromSeconds(config.OllamaTimeoutSeconds));
 
 		return true;
 	}
@@ -197,7 +198,8 @@ public sealed class OllamaLiveIntegrationTests
 		IndexingConfig config = LiveConfig();
 
 		using OllamaEmbeddingVectorizer candidate = new(
-			config.OllamaEndpoint, config.OllamaModel, config.OllamaModelVersionId, config.OllamaEmbeddingDimension);
+			config.OllamaEndpoint, config.OllamaModel, config.OllamaModelVersionId, config.OllamaEmbeddingDimension,
+			TimeSpan.FromSeconds(config.OllamaTimeoutSeconds));
 
 		try
 		{

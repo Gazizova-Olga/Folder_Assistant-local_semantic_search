@@ -84,11 +84,11 @@ internal sealed class RetrievalTelemetryQuery : IRetrievalQuery
 			stopwatch.Stop();
 
 			// A search embeds its query text before it ranks anything, so an embedding backend that
-			// stops answering surfaces here rather than in the indexing path — as a cancellation,
-			// since the HTTP client's own deadline is what ends the wait. That is a fault outside the
-			// backend being measured, and folding it into Failed would attribute it to whichever
-			// backend happened to be composed.
-			RetrievalStatus status = ex is OperationCanceledException
+			// stops answering surfaces here rather than in the indexing path — as a timeout from the
+			// embedder's own deadline (SPEC-162), or as a cancellation where a transport's deadline is
+			// what ends the wait. Either is a fault outside the backend being measured, and folding it
+			// into Failed would attribute it to whichever backend happened to be composed.
+			RetrievalStatus status = ex is OperationCanceledException or TimeoutException
 				? RetrievalStatus.TimedOut
 				: RetrievalStatus.Failed;
 

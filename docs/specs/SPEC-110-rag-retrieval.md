@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.10.0 |
+| Version | 0.11.0 |
 | Owner | Retrieval |
-| Last updated | 2026-09-11 |
+| Last updated | 2026-09-14 |
 
 ## Purpose
 
@@ -303,9 +303,10 @@ the difference between the instruments.
   site, is what separates them; the `errorCode` names the underlying error rather than the refusal
   wrapped around it.
 - `TimedOut` — a search embeds its query text before it can rank anything, so an embedding backend
-  that stops answering ends the *search*. That is a fault outside the backend being measured, and
-  charging it to whichever backend happened to be composed would report a regression in the wrong
-  place.
+  that stops answering ends the *search*: as a `TimeoutException` from the embedder's own deadline
+  ([SPEC-162](SPEC-162-embedding-ollama-local.md)), or as a cancellation where a transport's deadline
+  ends the wait. That is a fault outside the backend being measured, and charging it to whichever
+  backend happened to be composed would report a regression in the wrong place.
 
 **Deliberately not recorded:** candidate-pool size and the active model version. Neither crosses
 the `IRetrievalQuery` boundary, and a decorator that reported them would be reporting what it

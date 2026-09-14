@@ -135,6 +135,26 @@ public sealed class RetrievalTelemetryQueryTests
 		telemetry.Calls[0].ErrorCode.Should().Be(nameof(TaskCanceledException));
 	}
 
+	/// <summary>
+	/// The embedder's own deadline arrives as a timeout rather than a cancellation (SPEC-162), and it is
+	/// the same fault in the same place: outside the backend being measured.
+	/// </summary>
+	[Fact]
+	public void A_Search_Whose_Embed_Hit_Its_Deadline_Is_Recorded_As_TimedOut_Not_Failed()
+	{
+		RecordingTelemetry telemetry = new();
+		IRetrievalQuery query = RetrievalTelemetryQuery.Wrap(
+			new StubRetrievalQuery { ThrowWith = () => new TimeoutException("the embed hit its deadline") },
+			telemetry);
+
+		Action search = () => query.Search("manifest.db", "anything", Options);
+
+		search.Should().Throw<TimeoutException>();
+
+		telemetry.Calls[0].Status.Should().Be(RetrievalStatus.TimedOut);
+		telemetry.Calls[0].ErrorCode.Should().Be(nameof(TimeoutException));
+	}
+
 	[Fact]
 	public void A_Genuine_Fault_Is_Recorded_As_Failed_And_Still_Reaches_The_Caller()
 	{

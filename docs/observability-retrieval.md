@@ -45,7 +45,9 @@ backend not answering.
 **`TimedOut` is a fault in the embedder, not in retrieval.** A search embeds its query text before
 it ranks anything, so an embedding backend that stops answering ends the search. Charging it to
 whichever retrieval backend happened to be composed would report a regression in the wrong place.
-Expect `latencyMs` near the HTTP client's own deadline when this appears.
+Expect `latencyMs` near the embedder's deadline (`FolderAssistant:Indexing:OllamaTimeoutSeconds`,
+120 s by default) with `errorCode=TimeoutException` when this appears; a `TaskCanceledException`
+there is a transport's own deadline, which arrives earlier and means the same thing.
 
 ## Scraping
 

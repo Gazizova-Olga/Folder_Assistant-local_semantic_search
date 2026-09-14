@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-10 |
+| Last updated | 2026-09-14 |
 
 ## Purpose
 
@@ -137,8 +137,13 @@ Three decisions are load-bearing.
   did not forward them would answer "no" to both while still returning good vectors — disabling
   fitting and the startup probe with no symptom but worse retrieval. Composition therefore goes
   through `EmbeddingTelemetryVectorizer.Wrap`, never the bare constructor.
-- **Status separates cancellation from failure.** A cancelled call is `TimedOut`, not `Failed`; an
-  error rate that counts process shutdowns tells an operator to investigate a normal exit.
+- **Status separates the caller's cancellation from a deadline, and both from failure.** A call the
+  caller cancelled is `Cancelled` — not a fault; an error rate that counted process shutdowns would
+  tell an operator to investigate a normal exit. A call that hit a deadline is `TimedOut`, whether
+  the vectorizer's own (`SPEC-162`, which reports it as a timeout) or a transport's (which reports it
+  as a cancellation nobody asked for). The classification is by the caller's token before the
+  exception type, because a transport's deadline and a shutdown throw the same type. Only `Failed`
+  and `TimedOut` log at warning.
 
 `latencyMs` is also stamped onto every `EmbeddingResult` the call produced. It is a property of the
 batch call rather than of a text, so it is identical across a batch — one round-trip embedded all of

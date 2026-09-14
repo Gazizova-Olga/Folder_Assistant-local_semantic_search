@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.16.0 |
+| Version | 0.17.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-14 |
 
@@ -350,6 +350,13 @@ work. Losing an edit is not.
 **A failed delivery waits, then tries again**, doubling the wait each time up to a cap, so a backend that is
 down is not hammered and a backend that recovers is found.
 
+**A delivery that never returns is a failed delivery, not a delivery in progress.** Nothing here bounds it
+— the dispatcher awaits the seam — so the bound is the embedder's own deadline
+([SPEC-162](SPEC-162-embedding-ollama-local.md), a bounded call), and it has to be there: a call that never
+returned held its operation in flight forever with attempts still at zero, so the retry, the backoff and
+the attempt limit above never engaged, and nothing reported it. It surfaces as a timeout, not a
+cancellation, so the attempt is counted like any other failure rather than mistaken for the host stopping.
+
 **A delivery that will not be tried again is retired as failed, keeping the error that ended it.** Retired
 as done, an outbox full of abandoned work would look exactly like one where everything had arrived, and the
 file's only symptom would be a search that quietly does not find it. It is the **last** error that is kept:
@@ -443,7 +450,7 @@ anything derived on the far side, so a file that is moved and then edited stays 
 rather than becoming two. The row that id names was written by the store before the delivery was
 queued; the delivery does not write it and could not.
 
-**Four things end in writing nothing, and none of them is a failure:**
+**Three things end in writing nothing, and none of them is a failure:**
 
 - **The metadata folder.** The database lives inside the watched folder, so indexing it would make every
   write a change to that folder, and the indexer would never go quiet — each pass triggering the next for
@@ -451,12 +458,24 @@ queued; the delivery does not write it and could not.
 - **An extension this system does not read.** The question is asked of the scanner rather than answered
   from a second list beside it; two lists would drift silently, and a file indexed by one path and
   ignored by the other looks exactly like a file that was never saved.
-- **A corpus-fitted embedder with no stored fit.** A fit is taken against a corpus and one delivered file
-  is not one. Embedding anyway would store vectors in a space no query can reach, and no query could
-  detect it: such a vector is not malformed, it simply means something else.
 - **A delete for something never indexed.** Delivery is at-least-once, so a delete can arrive twice or
   arrive for a file whose upsert was skipped. Treating it as an error would abandon the operation once
   its attempts ran out and mark a file failed for having nothing to remove.
+
+**One thing ends in a failure, and used to end in writing nothing: a corpus-fitted embedder with no
+stored fit.** A fit is taken against a corpus and one delivered file is not one, and embedding anyway
+would store vectors in a space no query can reach — such a vector is not malformed, it simply means
+something else. But returning normally was worse than either: the dispatcher recorded the file as
+delivered for content that was never embedded, and it was absent from every search while the record
+said otherwise, healing only on a restart. So the seam throws, the operation is retried and retired as
+failed at error level where it can be seen, and the file carries no mark. It is reachable on the
+`lsa-*` profiles when the whole-folder pass ran over an empty folder — it fits nothing then — and
+files arrive afterwards; only the next start's pass fits, which is the open edge this leaves.
+
+**The write is serialised; the embed is not.** The seam's gate sits around the repository write alone,
+because the embed is a round trip into a backend that may well take several at once, and a gate around
+it would make the dispatcher's parallelism measure the gate rather than the backend. The fit is restored
+once, under its own lock, because the restore replaces the analyzer and the model together.
 
 **Deletion removes vectors explicitly, before the row whose cascade takes the chunks.** Under the blob
 backend this looks redundant, because the chunk rows cascade and take their vectors with them — and a
@@ -631,9 +650,15 @@ The vectorization seam is tested against a real database, and most of its tests 
 refuses, because every refusal is a failure that would otherwise be silent. One of them can only be seen
 on the native backend: the explicit deletion of vectors is invisible under the blob store, where the
 cascade does the same work, so mutating it away kills nothing there — the test that catches it runs
-against `vec0`, and skips where the platform has no binary. The serialisation of concurrent deliveries is
+against `vec0`, and skips where the platform has no binary. The serialisation of concurrent writes is
 **not** demonstrated: widening the gate leaves every test passing, because the busy timeout absorbs the
 contention at this scale, and that is said in the test rather than left looking like coverage.
+
+The two ways a delivery ended in the wrong state are asserted through the real dispatcher, on the outbox
+row an operator would read: a generator that never answers ends as an operation retired failed within
+the embedder's deadline, with `TimeoutException` recorded against it and the file unmarked; and an
+unfitted corpus-fitted embedder ends the same way, with the model named in the error and nothing
+written under the file.
 
 The ownership of the file table is asserted against a real store and a real dispatcher, in three parts.
 A record that moves on while a delivery holds its embed is not reverted by that delivery, its stale

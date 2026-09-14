@@ -47,16 +47,24 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 	private static readonly TimeSpan HealthCheckRetryDelay = TimeSpan.FromSeconds(1);
 
 	private readonly IEmbeddingGenerator<String, Embedding<Single>> _generator;
+	private readonly TimeSpan _timeout;
 
-	public OllamaEmbeddingVectorizer(String endpoint, String model, String modelVersionId, Int32 dimension)
+	/// <param name="timeout">
+	/// The bound on one call, whatever its batch size. A call that never returns would otherwise hold a
+	/// delivery in flight forever with its attempts still at zero — retry, backoff and the attempt limit
+	/// never engage — and during the first pass would leave the index <c>Building</c> for the life of the
+	/// process. Sized for a full embed window: measured at 386 ms per chunk on a CPU here, a window of 64
+	/// takes about 25 s, so the configured default of 120 s is generous by a factor of five and still ends
+	/// a hung call inside one delivery's lifetime.
+	/// </param>
+	public OllamaEmbeddingVectorizer(
+		String endpoint,
+		String model,
+		String modelVersionId,
+		Int32 dimension,
+		TimeSpan timeout)
+		: this(BuildGenerator(endpoint, model), model, modelVersionId, dimension, timeout)
 	{
-		ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
-		ArgumentException.ThrowIfNullOrWhiteSpace(model);
-		ArgumentException.ThrowIfNullOrWhiteSpace(modelVersionId);
-		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dimension);
-
-		this._generator = BuildGenerator(endpoint, model);
-		this.Descriptor = new ModelDescriptor(modelVersionId, "ollama", model, dimension, "cosine");
 	}
 
 	/// <summary>Test seam: takes a generator directly, so the suite needs no live server.</summary>
@@ -64,11 +72,17 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 		IEmbeddingGenerator<String, Embedding<Single>> generator,
 		String model,
 		String modelVersionId,
-		Int32 dimension)
+		Int32 dimension,
+		TimeSpan timeout)
 	{
 		ArgumentNullException.ThrowIfNull(generator);
+		ArgumentException.ThrowIfNullOrWhiteSpace(model);
+		ArgumentException.ThrowIfNullOrWhiteSpace(modelVersionId);
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(dimension);
+		ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
 
 		this._generator = generator;
+		this._timeout = timeout;
 		this.Descriptor = new ModelDescriptor(modelVersionId, "ollama", model, dimension, "cosine");
 	}
 
@@ -91,8 +105,28 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 			? [.. texts.Select(static text => QueryInstructionPrefix + text)]
 			: texts;
 
-		GeneratedEmbeddings<Embedding<Single>> generated =
-			await this._generator.GenerateAsync(inputs, options: null, cancellationToken).ConfigureAwait(false);
+		// Bounded by this vectorizer's own deadline, linked to the caller's token. The deadline is
+		// reported as a timeout and never as a cancellation: nobody cancelled, and telemetry filing it
+		// as one would describe a shutdown where there was a hung server. The same conversion covers
+		// the HTTP client's own deadline, which it reports as a cancellation too — the filter is the
+		// caller's token, not the exception type.
+		using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+		deadline.CancelAfter(this._timeout);
+
+		GeneratedEmbeddings<Embedding<Single>> generated;
+
+		try
+		{
+			generated = await this._generator.GenerateAsync(inputs, options: null, deadline.Token).ConfigureAwait(false);
+		}
+		catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+		{
+			throw new TimeoutException(
+				$"Ollama did not return {texts.Count} embedding(s) for model '{this.Descriptor.ModelName}' within "
+				+ $"{this._timeout.TotalSeconds:F0} s. The server is hung, overloaded, or still loading the model; "
+				+ "the call is abandoned so that the work can be tried again rather than held open.",
+				ex);
+		}
 
 		if (generated.Count != texts.Count)
 		{
@@ -129,7 +163,9 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 	///
 	/// <para>
 	/// A width mismatch is passed straight through without retrying. It is a configuration error, not a
-	/// transient one, and retrying it three times only delays the same answer.
+	/// transient one, and retrying it three times only delays the same answer. A probe that hits the
+	/// deadline is retried like a refusal: a model still paging in on its first call is exactly the
+	/// transient the retries exist for, and each attempt is bounded, so the probe cannot hang either.
 	/// </para>
 	/// </summary>
 	public async ValueTask CheckAsync(CancellationToken cancellationToken = default)

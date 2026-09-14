@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — core implemented and live-verified |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-12 |
+| Last updated | 2026-09-14 |
 
 ## Purpose
 
@@ -61,6 +61,33 @@ nothing, so a placeholder credential is passed to satisfy the client.
 Embedding is asynchronous (`SPEC-160` 0.4.0). A local model server is still a socket, and the
 indexing path would otherwise block a thread per file waiting on a round-trip.
 
+### A bounded call
+
+**Every call has a deadline, whatever its batch size, and a call that reaches it fails as a
+timeout.** Without one, a server that stopped answering held a delivery in flight forever with its
+attempts still at zero — retry, backoff and the attempt limit never engaged
+([SPEC-121](SPEC-121-file-indexing-front-end.md), the outbox) — and during the first pass left the
+index `Building` for the life of the process, where the retry of a failed first pass fires only on
+`Failed`.
+
+Two things about the failure are the rule:
+
+- **It is a `TimeoutException`, never a cancellation.** Nobody cancelled, and telemetry that filed it
+  as one would describe a shutdown where there was a hung server. The conversion is keyed on the
+  caller's token, not on the exception type: a transport reports its own deadline as a cancellation
+  too, and that is the backend's fault just the same. The caller's own cancellation passes through
+  as what it is.
+- **It is sized for a full embed window.** The deadline bounds one call, and a call is at most
+  `EmbeddingBatchSizeChunks` chunks. Measured here at 386 ms per chunk on a CPU, a window of 64
+  takes about 25 s; the default of 120 s is generous by a factor of five and still ends a hung call
+  inside one delivery's lifetime. An operator who raises the window, or runs on a slower machine,
+  raises the deadline with it.
+
+The startup probe is bounded by the same deadline, so it cannot hang either. A probe that hits it is
+retried like a refusal — a model paging in on its first call is exactly the transient the retries
+exist for — and a probe that hits it three times fails the index, which is retried on its own
+schedule.
+
 ### Composition and configuration
 
 Two profiles, `ollama-blob` and `ollama-vec`, pairing the embedder with each vector backend. Both
@@ -69,9 +96,11 @@ model pulled is a runtime condition, not a platform one, and `CompositionProfile
 answer it without making a network call at startup.
 
 Configuration is `Indexing.Ollama*`: endpoint (`http://localhost:11434/v1`), model, the
-`model_version_id` vectors are stored under, and the expected dimension. The model-version-id is
-deliberately separate from the model name — vectors are keyed by version, not by whatever the server
-happens to be serving today.
+`model_version_id` vectors are stored under, the expected dimension, and the deadline on one call
+(`OllamaTimeoutSeconds`, 120). The model-version-id is deliberately separate from the model name —
+vectors are keyed by version, not by whatever the server happens to be serving today. A deadline of
+zero or less is refused at construction: a call that may run forever is the defect the deadline
+exists to close, not a setting.
 
 ### What this trades away
 
@@ -114,12 +143,14 @@ implementation able to reach a *remote* service must not be a profile in this as
   A probe that fails all three times fails the index — and that is retried on its own schedule
   rather than standing for the life of the process, since a server starting a minute late is the
   ordinary case ([SPEC-120](SPEC-120-rag-indexing.md), Readiness).
+- **A bounded embed call** (2026-09-14). Every call carries the configured deadline and fails as a
+  `TimeoutException` when it reaches it; the caller's own cancellation stays a cancellation. Asserted
+  against a generator that never answers — the call ends within its deadline, as a timeout, with the
+  model named; the caller's cancellation ends it as a cancellation; the probe retries it three times;
+  a zero deadline is refused — and end to end through the dispatcher, where a hung embed retires its
+  operation as failed within the deadline with `TimeoutException` recorded against it.
 
-**Pending:**
-
-- **A bounded embed call.** The per-request timeout is not yet applied, so a call that never returns
-  is not yet cut off. The configuration key for it is deliberately absent until the code that reads
-  it exists.
+Nothing is pending.
 
 ## What it retrieves, measured (2026-09-12)
 

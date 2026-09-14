@@ -82,11 +82,13 @@ internal class EmbeddingTelemetryVectorizer : IVectorizer, IDisposable
 		{
 			stopwatch.Stop();
 
-			// A cancellation is a different outcome from a backend that answered badly, and an error rate
-			// that mixes them tells an operator to investigate a shutdown.
-			EmbeddingStatus status = ex is OperationCanceledException
-				? EmbeddingStatus.TimedOut
-				: EmbeddingStatus.Failed;
+			// Three outcomes, and the order of the tests is the classification. The caller's token comes
+			// first: an HTTP client reports its own deadline as a cancellation, so testing the exception
+			// type first would file a dead backend as a user closing a tab. A deadline the vectorizer
+			// itself enforced arrives as a timeout, which is the backend's fault; anything else is a
+			// backend that answered badly. Only the first of the three is not a fault, and an error rate
+			// that mixed it in would tell an operator to investigate a shutdown.
+			EmbeddingStatus status = Classify(ex, cancellationToken);
 
 			this._telemetry.Record(new EmbeddingCallTelemetry(
 				descriptor.ProviderType,
@@ -99,6 +101,18 @@ internal class EmbeddingTelemetryVectorizer : IVectorizer, IDisposable
 
 			throw;
 		}
+	}
+
+	private static EmbeddingStatus Classify(Exception ex, CancellationToken cancellationToken)
+	{
+		if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+		{
+			return EmbeddingStatus.Cancelled;
+		}
+
+		return ex is TimeoutException or OperationCanceledException
+			? EmbeddingStatus.TimedOut
+			: EmbeddingStatus.Failed;
 	}
 
 	public void Dispose()
@@ -155,8 +169,8 @@ internal sealed class HealthCheckEmbeddingTelemetryVectorizer(IVectorizer inner,
 
 /// <summary>
 /// The default sink: writes each call's fields through <see cref="ILogger"/> as a structured event —
-/// information for a successful embed, warning for a failed one, because only one of those is something
-/// an operator can act on.
+/// information for a successful or cancelled embed, warning for a failed or timed-out one, because only
+/// the last two are something an operator can act on.
 /// </summary>
 internal sealed class LoggerEmbeddingTelemetry : IEmbeddingTelemetry
 {
@@ -173,7 +187,7 @@ internal sealed class LoggerEmbeddingTelemetry : IEmbeddingTelemetry
 	{
 		ArgumentNullException.ThrowIfNull(call);
 
-		if (call.Status == EmbeddingStatus.Success)
+		if (call.Status is EmbeddingStatus.Success or EmbeddingStatus.Cancelled)
 		{
 			this._logger.LogInformation(
 				"embedding provider={ProviderType} model={ModelVersionId} dim={Dimension} "

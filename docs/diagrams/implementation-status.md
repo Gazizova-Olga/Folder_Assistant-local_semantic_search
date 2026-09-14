@@ -1,8 +1,7 @@
 # Implementation status
 
 The whole structure the plan converges on, every block coloured by what is true of it now — as of
-2026-09-14, commit `bf9fc4f`. Updated with every commit that moves a block; at the end, every block
-is green.
+2026-09-14. Updated with every commit that moves a block; at the end, every block is green.
 
 **Five states, not two.** *Built but unreachable* is the category a diagram with only *done* and
 *not done* hides: retrieval is implemented twice over, tested, composed — and it still never runs.
@@ -24,7 +23,7 @@ flowchart TB
         direction LR
         prog["ProgrammableEmbeddingVectorizer<br/>character histogram"]
         lsa["LsaEmbeddingVectorizer<br/>corpus-fitted"]
-        ollama["OllamaEmbeddingVectorizer<br/>qwen3-embedding, local"]
+        ollama["OllamaEmbeddingVectorizer<br/>qwen3-embedding, local, bounded calls"]
         etel["EmbeddingTelemetryVectorizer<br/>Wrap, probe re-exposed"]
     end
 
@@ -34,7 +33,7 @@ flowchart TB
         state["IndexState<br/>Building · Ready · Failed, retried"]
         indexer["FolderIndexer<br/>watcher · reconciler · change pipeline · dispatcher"]
         store["FolderIndexStore<br/>one writer of file_manifest + outbox"]
-        bridge["RagBridgeVectorizationService<br/>chunks + vectors under the delivered id"]
+        bridge["RagBridgeVectorizationService<br/>chunks + vectors under the delivered id; unfitted fails"]
         hold["BeginBatch hold<br/>nests, expires"]
     end
 
@@ -120,8 +119,8 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,prog,lsa,etel,pass,state,indexer,store,hold,boot,conn,blob,vec,rtel live
-    class profiles,ollama,bridge defect
+    class root,config,metrics,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
+    class profiles defect
     class cosine,vecq,floor,reducer built
     class convdb,snippet,guard,readt,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
@@ -144,11 +143,11 @@ composition without a caller.
 
 | Item | Block | State |
 |---|---|---|
-| §5.1 **2 + 5** — one writer of `file_manifest`; the pass records through the front end's comparison, embeds what lacks vectors, marks delivered, deletes nothing | `store`, `pass`, `bridge` | **Landed** — `bf9fc4f` |
-| §5.1 **3** — an embed call has a deadline, surfaced as a timeout rather than a cancellation | `ollama` | Queued |
-| §5.1 **4** — a corpus-fitted profile with no fit fails a delivery rather than marking it synced | `bridge` | Queued |
-| §5.1 **1** — the default profile retrieves better than chance | `profiles` | Queued, after 4 |
-| §5.1 **6** — the bridge's gate wraps the write, not the embed | `bridge` | Queued, rides along |
+| §5.1 **2 + 5** — one writer of `file_manifest`; the pass records through the front end's comparison, embeds what lacks vectors, marks delivered, deletes nothing | `store`, `pass`, `bridge` | **Landed** 2026-09-14 (`bf9fc4f`) |
+| §5.1 **3** — an embed call has a deadline, surfaced as a timeout rather than a cancellation; telemetry tells the caller's cancellation from a deadline | `ollama`, `etel`, `rtel` | **Landed** 2026-09-14 |
+| §5.1 **4** — a corpus-fitted profile with no fit fails a delivery rather than marking it synced | `bridge` | **Landed** 2026-09-14 |
+| §5.1 **6** — the bridge's gate wraps the write, not the embed | `bridge` | **Landed** 2026-09-14 |
+| §5.1 **1** — the default profile retrieves better than chance | `profiles` | Queued |
 | §5.1 **7** — SPEC-000 stops claiming an agent and a closed network | spec only | Queued, Phase D |
 
 ## The gap, stated plainly

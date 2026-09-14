@@ -128,8 +128,24 @@ internal interface IEmbeddingHealthCheck
 internal enum EmbeddingStatus
 {
 	Success,
+
+	/// <summary>The backend answered badly, or not at all for a reason that was not time.</summary>
 	Failed,
+
+	/// <summary>
+	/// The call hit a deadline — the vectorizer's own, or a transport's — and nobody had asked for it
+	/// to stop. A fault in the backend, and the one that would otherwise hold a delivery in flight
+	/// forever (<c>SPEC-162</c>).
+	/// </summary>
 	TimedOut,
+
+	/// <summary>
+	/// The caller cancelled. Not a fault: a process shutting down mid-embed is the ordinary case, and
+	/// an error rate that counted it would tell an operator to investigate a normal exit. Classified by
+	/// the caller's token before the exception type, because a transport reports its own deadline as a
+	/// cancellation too.
+	/// </summary>
+	Cancelled,
 }
 
 /// <summary>

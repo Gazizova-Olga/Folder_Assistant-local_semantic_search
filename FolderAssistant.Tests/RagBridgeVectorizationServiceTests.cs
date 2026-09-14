@@ -195,10 +195,11 @@ public sealed class RagBridgeVectorizationServiceTests
 	/// <summary>
 	/// A corpus-fitted embedder cannot be fitted from one file, and embedding against no fit would store
 	/// vectors in a space nothing can query — which no query could detect, because such a vector is not
-	/// malformed, it simply means something else. Writing nothing leaves the file to the corpus pass.
+	/// malformed, it simply means something else. It refuses by failing, not by returning: a delivery
+	/// that returned normally would be recorded as delivered for content that was never embedded.
 	/// </summary>
 	[Fact]
-	public async Task A_Corpus_Fitted_Embedder_With_No_Stored_Fit_Writes_Nothing()
+	public async Task A_Corpus_Fitted_Embedder_With_No_Stored_Fit_Fails_The_Delivery_Rather_Than_Writing_Nothing()
 	{
 		using TempFolder folder = new();
 		string path = folder.Combine("notes.md");
@@ -207,10 +208,11 @@ public sealed class RagBridgeVectorizationServiceTests
 		using Bridge bridge = Bridge.For(
 			folder, LsaEmbeddingVectorizer.CreateForFitting("lsa-v1", 8));
 
-		string docId = await bridge.DeliverAsync(path);
+		Func<Task> deliver = async () => await bridge.DeliverAsync(path);
 
-		bridge.ChunkCountFor(docId).Should().Be(0, "vectors in an unfitted space rank as though they meant something else");
-		bridge.VectorCount().Should().Be(0);
+		(await deliver.Should().ThrowAsync<InvalidOperationException>()).Which.Message.Should().Contain("lsa-v1");
+
+		bridge.VectorCount().Should().Be(0, "vectors in an unfitted space rank as though they meant something else");
 	}
 
 	/// <summary>

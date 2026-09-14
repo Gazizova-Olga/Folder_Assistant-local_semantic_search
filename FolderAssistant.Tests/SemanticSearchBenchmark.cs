@@ -844,7 +844,8 @@ public sealed class SemanticSearchBenchmark
 		IndexingConfig config = new();
 
 		using OllamaEmbeddingVectorizer vectorizer = new(
-			config.OllamaEndpoint, config.OllamaModel, config.OllamaModelVersionId, config.OllamaEmbeddingDimension);
+			config.OllamaEndpoint, config.OllamaModel, config.OllamaModelVersionId, config.OllamaEmbeddingDimension,
+			TimeSpan.FromSeconds(config.OllamaTimeoutSeconds));
 
 		try
 		{
