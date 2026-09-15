@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-12 |
+| Last updated | 2026-09-15 |
 
 ## Purpose
 
@@ -160,7 +160,38 @@ across model versions, and not stable across fits. A corpus-fitted implementatio
 necessarily produces different vectors after refitting; that is why the fit is part of the
 model version's identity rather than a property of a run.
 
+## The corpus-fitted embedder as the default (2026-09-15)
+
+`lsa-*` is the default profile family, so the folders it fits include the smallest ones. Two rules
+follow, both implemented in the trainer and asserted by `LsaTinyCorpusTests`:
+
+- **A corpus below the pruning floor keeps its whole vocabulary.** A term must normally appear in two
+  chunks to survive pruning; one chunk, or a few sharing no term, would leave nothing and fail the
+  index of a folder that has text in it. When pruning leaves no terms the vocabulary is kept whole and
+  the fit is lexical rather than latent — which is what a corpus that small can support, and is a fit
+  rather than a failure. The rank is still clamped to what the corpus can carry.
+- **An empty corpus still refuses to fit.** There is nothing to fit on; the whole-folder pass fails,
+  the index reports `Failed` with the reason, and the pass is retried on its interval until the folder
+  has text.
+
+**The fit is taken once and kept** (`SPEC-120`, fit reuse). A folder that starts with two files and
+grows to two hundred keeps the two-file fit until the metadata folder is deleted, and nothing detects
+the drift. That cost was accepted when `lsa-*` was one profile among six; as the default it is the
+first-run experience, and a refit policy — refit when the corpus has grown past some multiple of the
+size it was fitted on — is the next thing this spec owes. Recorded as an open question below, and in
+the plan.
+
+**The model version is its own.** `lsa-*` persists vectors and the fit under
+`Indexing:LsaModelVersionId` (`lsa-v1`), not the programmable profile's id: the two embed into
+unrelated spaces, vectors are compared only within one model version, and a shared id would have let a
+profile switch mix them.
+
 ## Open questions
+
+- **A refit policy for the corpus-fitted embedder.** The fit is stale the moment the folder grows
+  past what it was fitted on, and it is now the default. Candidate signal: chunk count at fit time,
+  stored with the artifact; refit when the current count exceeds it by a factor. The refit invalidates
+  every vector of the model version, so it is a whole-folder pass, not an incremental one.
 
 - How `k` should be chosen for a real corpus. The band is real and both edges fail silently;
   nothing currently derives it from the corpus, and a caller picking badly gets no signal. The

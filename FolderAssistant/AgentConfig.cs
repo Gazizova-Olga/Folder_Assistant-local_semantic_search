@@ -17,10 +17,12 @@ internal record AgentConfig
 
 	/// <summary>
 	/// Which bundle of module implementations to compose: vectorizer, vector store, and
-	/// retrieval strategy. See <see cref="CompositionProfiles"/> for the valid names. An
-	/// unknown or platform-unavailable profile is a startup failure, never a silent fallback.
+	/// retrieval strategy. See <see cref="CompositionProfiles"/> for the valid names. A named
+	/// profile that is unknown or cannot run on this platform is a startup failure, never a silent
+	/// fallback. Unset, the platform's default runs (<see cref="CompositionProfiles.Default"/>, or its
+	/// blob twin where the native store has no binary) and the composition root says which.
 	/// </summary>
-	public String Profile { get; init; } = CompositionProfiles.Default;
+	public String? Profile { get; init; }
 
 	/// <summary>HTTP port the web server listens on. Defaults to <c>5000</c>.</summary>
 	public Int32 Port { get; init; } = 5000;
@@ -138,11 +140,21 @@ internal record IndexingConfig
 	/// </summary>
 	public Int32 EmbeddingBatchSizeChunks { get; init; } = 64;
 
-	/// <summary>Vector dimension produced by the programmable vectorizer.</summary>
+	/// <summary>
+	/// Vector dimension of the in-process vectorizers: the width the programmable one produces, and the
+	/// target rank the corpus-fitted one reduces to (bounded by what the corpus can support).
+	/// </summary>
 	public Int32 VectorDimension { get; init; } = 64;
 
-	/// <summary>Deterministic model version identifier used for persisted vectors.</summary>
+	/// <summary>Model version identifier the programmable vectorizer persists vectors under.</summary>
 	public String ModelVersionId { get; init; } = "programmable-v1";
+
+	/// <summary>
+	/// Model version identifier the corpus-fitted vectorizer persists vectors and its fit under. Its own,
+	/// not the programmable one's: the two embed into unrelated spaces, and vectors are compared only
+	/// within one model version, so sharing an id would let a profile switch mix them.
+	/// </summary>
+	public String LsaModelVersionId { get; init; } = "lsa-v1";
 
 	// ── Ollama embedding provider — read only by the ollama-* composition profiles (SPEC-162) ──
 

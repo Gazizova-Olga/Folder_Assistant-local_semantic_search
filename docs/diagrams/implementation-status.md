@@ -14,7 +14,7 @@ flowchart TB
     subgraph composition["Composition — Program.cs"]
         direction LR
         root["Composition root<br/>lazy IOptions, startup filter"]
-        profiles["CompositionProfiles<br/>6 named bundles"]
+        profiles["CompositionProfiles<br/>6 named bundles; lsa-vec default, loud fallback to lsa-blob"]
         config["AgentConfig<br/>section FolderAssistant"]
         metrics["GET /metrics<br/>Prometheus exporter"]
     end
@@ -119,8 +119,7 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
-    class profiles defect
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
     class cosine,vecq,floor,reducer,guard,readt built
     class convdb,snippet,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
@@ -148,7 +147,7 @@ composition without a caller.
 | §5.1 **4** — a corpus-fitted profile with no fit fails a delivery rather than marking it synced | `bridge` | **Landed** 2026-09-14 |
 | §5.1 **6** — the bridge's gate wraps the write, not the embed | `bridge` | **Landed** 2026-09-14 |
 | §10 — a removal queued before the file came back is retired without ending the row it has since taken again | `indexer` | **Landed** 2026-09-15 |
-| §5.1 **1** — the default profile retrieves better than chance | `profiles` | Queued |
+| §5.1 **1** — the default profile retrieves better than chance: `lsa-vec`, with a loud, default-only fallback to `lsa-blob` where the native store has no binary; benchmark re-run on this tree for every profile this machine can measure; SPEC-000 0.3.0, SPEC-131 0.8.0, SPEC-161 0.5.0, SPEC-162 0.7.0 | `profiles` | **Landed** 2026-09-15 |
 | §5.1 **7** — SPEC-000 stops claiming an agent and a closed network | spec only | Queued, Phase D |
 
 ## Phase A ledger — containment and tools

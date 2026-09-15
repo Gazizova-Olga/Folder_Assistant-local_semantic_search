@@ -23,13 +23,19 @@ public sealed class SqliteVecBackendTests
 	private const Int32 Dimension = 64;
 
 	/// <summary>
-	/// Not an assertion about the product so much as about the machine this suite is running on. The
-	/// package ships no win-arm64 or musl binary, so a skip here is the honest outcome elsewhere —
-	/// but on a platform that does have one, silently skipping the rest would hide a real regression.
+	/// The gate the rest of this suite stands behind, made loud. The package ships no win-arm64 or musl
+	/// binary, so on those platforms the honest answer is "not available" and the other tests return
+	/// early. On every platform the package does cover — which is now what the default profile runs on —
+	/// the binary has to be there and load: a missing or unloadable one fails here, rather than letting
+	/// the suite return early and report green while the default silently fell back to blob.
 	/// </summary>
 	[Fact]
 	public void The_Native_Extension_Reports_Its_Availability_Honestly()
 	{
+		SqliteVecExtension.IsAvailable.Should().Be(
+			SqliteVecExtension.PlatformHasBinary,
+			"a covered platform must find its binary, and an uncovered one must say so");
+
 		if (!SqliteVecExtension.IsAvailable)
 		{
 			return;

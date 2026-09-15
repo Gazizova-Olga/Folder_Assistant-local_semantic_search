@@ -38,20 +38,59 @@ public sealed class CompositionProfileTests
 	/// never chose a backend at all.
 	/// </summary>
 	[Fact]
-	public void The_Default_Profile_Needs_No_Native_Binary()
+	public void The_Default_Is_The_Fitted_Embedder_Over_The_Native_Store_And_Its_Fallback_Its_Blob_Twin()
 	{
-		ModuleSet profile = CompositionProfiles.Resolve(CompositionProfiles.Default);
+		CompositionProfiles.Default.Should().Be("lsa-vec");
+		CompositionProfiles.DefaultFallback.Should().Be("lsa-blob");
+		CompositionProfiles.Resolve(CompositionProfiles.DefaultFallback).IsAvailable()
+			.Should().BeTrue("the fallback is what has to run on every platform");
+	}
 
-		profile.Name.Should().Be(CompositionProfiles.Default);
-		profile.IsAvailable().Should().BeTrue("the default has to run on every platform");
+	/// <summary>
+	/// The one fallback there is. Nobody named a profile, the default's native store has no binary here,
+	/// so its blob twin runs — and the note says so, naming both, because a fallback nobody can see is
+	/// the thing SPEC-000 forbids.
+	/// </summary>
+	[Fact]
+	public void The_Unnamed_Default_Falls_Back_To_Its_Blob_Twin_Where_The_Native_Store_Cannot_Load_And_Says_So()
+	{
+		DefaultResolution here = CompositionProfiles.ResolveDefault(static profile => profile.IsAvailable());
+		DefaultResolution elsewhere = CompositionProfiles.ResolveDefault(static profile => profile.Name == "lsa-blob");
+
+		here.Profile.Name.Should().Be(SqliteVecExtension.IsAvailable ? "lsa-vec" : "lsa-blob");
+		(here.FallbackNote is null).Should().Be(SqliteVecExtension.IsAvailable, "the note exists exactly when the fallback ran");
+		elsewhere.Profile.Name.Should().Be("lsa-blob");
+		elsewhere.FallbackNote.Should().Contain("lsa-vec").And.Contain("lsa-blob").And.Contain("FolderAssistant:Profile");
+	}
+
+	[Fact]
+	public void The_Unnamed_Default_Is_The_Native_Store_Where_It_Can_Load()
+	{
+		DefaultResolution resolution = CompositionProfiles.ResolveDefault(static _ => true);
+
+		resolution.Profile.Name.Should().Be("lsa-vec");
+		resolution.FallbackNote.Should().BeNull();
+	}
+
+	/// <summary>
+	/// The rule the fallback must not erode: a profile the operator named never falls back, whatever the
+	/// platform. The same predicate that sends the unnamed default to its twin throws for the named one.
+	/// </summary>
+	[Fact]
+	public void A_Named_Profile_Never_Falls_Back()
+	{
+		Action resolve = () => CompositionProfiles.Resolve("lsa-vec", static profile => profile.Name == "lsa-blob");
+
+		resolve.Should().Throw<PlatformNotSupportedException>()
+			.Which.Message.Should().Contain("lsa-vec").And.Contain("lsa-blob");
 	}
 
 	[Theory]
 	[InlineData(null)]
 	[InlineData("")]
 	[InlineData("   ")]
-	public void An_Unset_Profile_Name_Falls_Back_To_The_Default(String? name)
-		=> CompositionProfiles.Resolve(name).Name.Should().Be(CompositionProfiles.Default);
+	public void An_Unset_Profile_Name_Resolves_The_Platforms_Default(String? name)
+		=> CompositionProfiles.Resolve(name).Name.Should().Be(CompositionProfiles.ResolveDefault().Profile.Name);
 
 	/// <summary>
 	/// Configuration is hand-written, so casing is not a distinction worth failing on. It is the one

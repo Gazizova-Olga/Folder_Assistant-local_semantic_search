@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
+using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
 using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
+using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -134,10 +136,10 @@ public sealed class HostStartupTests
 		await File.WriteAllTextAsync(folder.Combine("later.md"), "delta epsilon zeta");
 
 		await WaitFor(() => CountIndexedFiles(folder) == 2, "the new file to be recorded");
-		await WaitFor(() => CountVectorsOf(folder, FileIdentity.For("later.md")) > 0, "the new file to be embedded");
+		await WaitFor(() => CountVectorsOf(host, folder, FileIdentity.For("later.md")) > 0, "the new file to be embedded");
 
 		CountIndexedFiles(folder).Should().Be(2);
-		CountVectorsOf(folder, FileIdentity.For("later.md")).Should().BeGreaterThan(0);
+		CountVectorsOf(host, folder, FileIdentity.For("later.md")).Should().BeGreaterThan(0);
 	}
 
 	/// <summary>
@@ -175,7 +177,12 @@ public sealed class HostStartupTests
 	public async Task A_Search_Reaches_The_Scrape_Endpoint_As_A_Tagged_Series()
 	{
 		using TempFolder folder = new();
-		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"));
+		// The subject is the meter, not the embedder: the placeholder profile embeds a query with no fit
+		// and no index, where the default's corpus-fitted embedder would refuse an unfitted query.
+		using HostFixture host = new(
+			folder,
+			($"{AgentConfig.SectionName}:Indexing:Enabled", "false"),
+			($"{AgentConfig.SectionName}:Profile", "programmable-blob"));
 
 		using HttpClient client = host.CreateClient();
 		await client.GetAsync("/");
@@ -206,22 +213,33 @@ public sealed class HostStartupTests
 		return (Int64)(command.ExecuteScalar() ?? 0L);
 	}
 
-	private static Int64 CountVectorsOf(TempFolder folder, String fileId)
+	/// <summary>
+	/// Counted through the host's own vector store reader, under the host's own active model version, so
+	/// the check holds whichever backend the profile composed: the default writes <c>vec0</c> tables, and a
+	/// count over <c>chunk_vector</c> would read zero there while the file was embedded.
+	/// </summary>
+	private static Int64 CountVectorsOf(HostFixture host, TempFolder folder, String fileId)
 	{
 		String databasePath = folder.Combine(".folderassistant", "manifest.db");
+		String modelVersionId = host.Services.GetRequiredService<IVectorizer>().Descriptor.ModelVersionId;
+		IVectorStoreReader reader = host.Services.GetRequiredService<IVectorStoreReader>();
 
-		using Microsoft.Data.Sqlite.SqliteConnection connection = new($"Data Source={databasePath}");
-		connection.Open();
+		HashSet<String> chunkIds = new(StringComparer.Ordinal);
+		using (Microsoft.Data.Sqlite.SqliteConnection connection = new($"Data Source={databasePath}"))
+		{
+			connection.Open();
+			using Microsoft.Data.Sqlite.SqliteCommand command = connection.CreateCommand();
+			command.CommandText = "SELECT chunk_id FROM chunk_manifest WHERE file_id = $fileId;";
+			command.Parameters.AddWithValue("$fileId", fileId);
+			using Microsoft.Data.Sqlite.SqliteDataReader rows = command.ExecuteReader();
+			while (rows.Read())
+			{
+				chunkIds.Add(rows.GetString(0));
+			}
+		}
 
-		using Microsoft.Data.Sqlite.SqliteCommand command = connection.CreateCommand();
-		command.CommandText = """
-			SELECT COUNT(*) FROM chunk_vector cv
-			JOIN chunk_manifest cm ON cm.chunk_id = cv.chunk_id
-			WHERE cm.file_id = $fileId;
-			""";
-		command.Parameters.AddWithValue("$fileId", fileId);
-
-		return (Int64)(command.ExecuteScalar() ?? 0L);
+		return reader.ReadVectorsByModelVersion(databasePath, modelVersionId)
+			.Count(vector => chunkIds.Contains(vector.ChunkId));
 	}
 
 	private static async Task WaitFor(Func<Boolean> condition, String what)
@@ -241,7 +259,29 @@ public sealed class HostStartupTests
 		throw new TimeoutException($"Timed out waiting for {what}.");
 	}
 
-	private sealed record FolderResponse(String Name, String AnalyzedFolder);
+	/// <summary>
+	/// What is running is one request away. Named, the profile is echoed as named; unnamed, it is the
+	/// platform's default, and the note is present exactly when the default could not run here and its
+	/// blob twin did — the fallback that is allowed because it is never silent.
+	/// </summary>
+	[Fact]
+	public async Task The_Root_Reports_The_Active_Profile_And_Whether_It_Fell_Back()
+	{
+		using TempFolder named = new();
+		using TempFolder unnamed = new();
+		using HostFixture namedHost = new(named, ($"{AgentConfig.SectionName}:Profile", "programmable-blob"));
+		using HostFixture unnamedHost = new(unnamed);
+
+		FolderResponse? namedResponse = await namedHost.CreateClient().GetFromJsonAsync<FolderResponse>("/");
+		FolderResponse? unnamedResponse = await unnamedHost.CreateClient().GetFromJsonAsync<FolderResponse>("/");
+
+		namedResponse!.Profile.Should().Be("programmable-blob");
+		namedResponse.ProfileNote.Should().BeNull();
+		unnamedResponse!.Profile.Should().Be(SqliteVecExtension.IsAvailable ? "lsa-vec" : "lsa-blob");
+		(unnamedResponse.ProfileNote is null).Should().Be(SqliteVecExtension.IsAvailable);
+	}
+
+	private sealed record FolderResponse(String Name, String AnalyzedFolder, String Profile, String? ProfileNote);
 
 	/// <summary>
 	/// A host pointed at a temporary folder, with settings injected the way a deployment would add

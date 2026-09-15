@@ -26,6 +26,12 @@ internal static class SqliteVecExtension
 	/// <summary>True when a native binary for the current platform is present and can be loaded.</summary>
 	public static Boolean IsAvailable => ResolvePath() is not null;
 
+	/// <summary>
+	/// True when the package ships a binary for this platform at all — so a test can tell "the binary is
+	/// missing here, as expected" from "the binary should be here and is not", and fail on the second.
+	/// </summary>
+	public static Boolean PlatformHasBinary => CurrentPlatform().Rid is not null;
+
 	public static void LoadOnto(SqliteConnection connection)
 	{
 		String path = ResolvePath()
@@ -79,6 +85,13 @@ internal static class SqliteVecExtension
 
 		if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
 		{
+			// The linux-* binaries are built against glibc. On a musl system the file is present in a
+			// portable build and fails to load, so the platform is reported as uncovered up front.
+			if (RuntimeInformation.RuntimeIdentifier.Contains("musl", StringComparison.OrdinalIgnoreCase))
+			{
+				return (null, null);
+			}
+
 			return architecture switch
 			{
 				Architecture.Arm64 => ("linux-arm64", "vec0.so"),

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Reversed on evidence; see the verdict section |
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-12 |
+| Last updated | 2026-09-15 |
 
 ## Purpose
 
@@ -18,11 +18,20 @@ made.
 
 ## Decision
 
-**Plain SQLite, vectors stored in an ordinary column, ranked by a brute-force scan.**
+**Plain SQLite, vectors stored in an ordinary column, ranked by a brute-force scan** — as the
+baseline every candidate is measured against, and as the store the default falls back to.
 
-This is the baseline. It is not assumed to be the endpoint: any candidate below is welcome
-to replace it on measured evidence, and the brute-force scan exists partly to be the thing
-that evidence is measured against.
+**As of 2026-09-15 the default profile runs the native `sqlite-vec` extension** where its binary
+exists (win-x64, linux-x64, linux-arm64, osx-x64, osx-arm64), and the brute-force baseline where it
+does not (win-arm64, musl). The baseline stays: it is what the candidate's ranking is checked
+against, it is what runs on the platforms the candidate cannot, and it is what a `-blob` profile
+names explicitly. The three conditions under "What would change the decision" were each met —
+platform coverage is known and detected honestly (`SqliteVecExtension.PlatformHasBinary`,
+asserted by the backend suite), the two backends agree on ranking up to ties (asserted by the
+contract suite), and the latency gap is measured to grow with the corpus (below). What was *not*
+met is a corpus size at which the linear read hurts — at the sizes measured neither is slow enough
+for a model round-trip to notice — so the promotion rests on cost being near zero rather than on
+the baseline being a problem: the fallback carries the platforms the binary does not.
 
 ## Constraints this has to satisfy
 
@@ -370,7 +379,9 @@ topic is relevant to that topic's queries.
   detected reliably, beating the brute-force baseline on the same vectors and the same
   metric — including agreeing with it on ranking, up to ties.
 
-Until then the baseline stands, and stays as the thing candidates are compared against.
+The last two were met by 2026-09-15 and the default moved to the native extension on that basis
+(Decision, above); the first is still the open number. The baseline stands as the thing candidates are
+compared against, and as the fallback on the platforms the extension does not reach.
 
 ## References
 

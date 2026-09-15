@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — placeholder |
-| Version | 0.2.0 |
+| Version | 0.3.0 |
 | Owner | — |
-| Last updated | 2026-09-10 |
+| Last updated | 2026-09-15 |
 
 ## Purpose
 
@@ -69,11 +69,19 @@ an admission of what is not yet decided; it is not a description of anything.
   here — it belongs in a separate assembly or publish, so the guarantee stays "it is not in
   the binary" rather than "the configuration says not to". That, and not modularity, is the
   criterion for ever splitting an assembly; the contracts already provide the modularity.
-- **An unresolvable profile is a startup failure, never a fallback.** An unknown name, or one
-  whose implementation is unavailable on this platform, throws. Falling back to the default
+- **A named profile that cannot resolve is a startup failure, never a fallback.** An unknown
+  name, or one whose implementation is unavailable on this platform, throws. Falling back
   would run a configuration nobody asked for while reporting success, and the result would be
   a *working* system answering out of a different embedding space than the operator believes
   — the silently-plausible wrong answer this system is built against.
+
+  **The one fallback there is applies to the default alone, and is never silent** (2026-09-15).
+  When no profile is configured, the default is `lsa-vec`; where the native store has no
+  binary, `lsa-blob` runs in its place — the same embedder, so the same embedding space, over
+  the blob store — and the composition root logs the substitution at warning and `GET /`
+  reports the active profile with a note saying which was wanted. Nothing an operator named is
+  ever swapped, and nothing swapped is ever unreported: those two properties are what the rule
+  above protects, and both hold.
 - **Versioned explicitly.** Stored data outlives the code that wrote it. Schema and model
   identity are recorded, never inferred.
 - **Offline by construction where it matters.** The default path should not require a

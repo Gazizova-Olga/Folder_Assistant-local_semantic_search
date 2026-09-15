@@ -148,13 +148,25 @@ dependency — it cannot go at the end of `Main`, because a test host intercepts
 A **composition profile** (`FolderAssistant:Profile`, `CompositionProfiles.cs`) bundles the
 vectorizer, the vector store reader/writer and the retrieval strategy **together**, so a mismatched
 combination — a lexical query against a neural-embedded store, or a reader looking in `chunk_vector`
-while the writer fills a `vec0` table — cannot be expressed. An unknown or platform-unavailable
-profile is a startup failure, never a silent fallback. The names are `programmable-blob` (default),
-`programmable-vec`, `lsa-blob`, `lsa-vec`, `ollama-blob`, `ollama-vec`: `-blob` stores vectors as
-BLOBs scored by cosine in managed code; `-vec` uses the native `sqlite-vec` extension, which ships
-no binary for win-arm64 or musl. The default is the profile with no native dependency, not the one
-that retrieves best — `docs/benchmarks/semantic-search-results.md` measures which is which, and
-changing the default is a gated step in the plan, not a one-line edit.
+while the writer fills a `vec0` table — cannot be expressed. A **named** profile that is unknown or
+platform-unavailable is a startup failure, never a fallback. The names are `lsa-vec` (default),
+`lsa-blob`, `ollama-vec`, `ollama-blob`, `programmable-vec`, `programmable-blob`: `-blob` stores
+vectors as BLOBs scored by cosine in managed code; `-vec` uses the native `sqlite-vec` extension,
+which ships no binary for win-arm64 or musl. **The one fallback there is applies to the unnamed
+default alone and is never silent**: where `lsa-vec` cannot load, `lsa-blob` runs — same embedder,
+same embedding space, slower store — logged at warning and reported by `GET /` with a note
+(`DefaultResolution`, `SPEC-000`). The default is the corpus-fitted embedder because it needs nothing
+installed and retrieves far better than the placeholder; the pretrained Ollama model retrieves
+better still and is the recommended profile, not the default, because it is a separate install.
+`docs/benchmarks/` measures which is which; the default was changed on 2026-09-15 on a re-run of
+those figures, not by editing a constant.
+
+Two consequences of a corpus-fitted default are known and recorded in `SPEC-161`: the fit is taken
+once and kept, so a folder that grows a great deal keeps its early fit until the metadata folder is
+deleted (a refit policy is the next embedding item); and an empty folder cannot fit, so its index
+reports `Failed` and is retried on the interval until the folder has text. A corpus below the pruning
+floor keeps its whole vocabulary rather than failing. `lsa-*` persists under its own model version
+(`Indexing:LsaModelVersionId`), never the placeholder's.
 
 One vectorizer instance is shared by indexing and retrieval: a corpus-fitted embedder must be
 fitted identically on the write and the query side.

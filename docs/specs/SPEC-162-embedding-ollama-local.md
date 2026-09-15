@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — core implemented and live-verified |
-| Version | 0.6.0 |
+| Version | 0.7.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-14 |
+| Last updated | 2026-09-15 |
 
 ## Purpose
 
@@ -190,8 +190,10 @@ probe above turns an absent or unreachable server into a failed index carrying a
 prerequisite with no check is a trap: the system would otherwise start, index nothing useful, and answer
 badly for a reason no operator could see.
 
-**The other profiles do not go away, and a fallback is the least of why.** `programmable-*` stops being
-the default and becomes the explicit offline floor, for a machine that cannot meet the prerequisite. But
+**The other profiles do not go away, and a fallback is the least of why.** `programmable-*` stopped
+being the default on 2026-09-15 and is the explicit semantics-free floor; `lsa-*` is the default until
+the prerequisite below is made one, because it is in-process, needs nothing installed, and separates
+answerable questions from unanswerable ones where the placeholder cannot (`SPEC-131`, embedder table). But
 the load-bearing reason to keep the whole matrix is that **the matrix is the instrument**: every number
 in this spec exists because a semantics-free embedder, a corpus-fitted one and a pretrained one could be
 run over one corpus, and every number in `SPEC-131` exists because two vector backends could be run over
@@ -207,9 +209,12 @@ gate the product on platform coverage. This is a statement about what is *requir
 available — `*-vec` stays selectable and stays under measurement, and the corpus size at which it starts
 to pay is exactly the open question `SPEC-131` is holding.
 
-**Not done in this step.** `CompositionProfiles.Default` still resolves to `programmable-blob`. Changing
-it alters what a fresh clone does at runtime and needs its own verification on a machine where the
-prerequisite holds. It is recorded here as the decision, not performed here as a change.
+**What the default is now (2026-09-15).** `CompositionProfiles.Default` is `lsa-vec`, with `lsa-blob`
+run in its place — and said, at warning and on `GET /` — where the native store has no binary
+(`SPEC-000`). `ollama-*` is the recommended profile for real use and is not the default, because a
+default has to work on a fresh clone with nothing else installed, and the server is an install. The
+flip to `ollama-*` recorded above is still the decision; it waits on the prerequisite being one that a
+README can ask of every user, which the cold-start cost decides.
 
 ## Open questions
 
@@ -218,7 +223,7 @@ prerequisite holds. It is recorded here as the decision, not performed here as a
 - Whether `ollama-*` should become the default profile: **answered above** — it does, and installing
   the server becomes a prerequisite. What stays open is *when* the default flips, which waits on the
   cold-start cost coming down far enough that a first index of a real folder is bearable. The
-  per-chunk figure above is the thing to watch.
+  per-chunk figure above is the thing to watch. Until then the default is `lsa-vec` (2026-09-15).
 
 ## References
 

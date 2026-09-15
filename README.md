@@ -13,7 +13,7 @@ machine unless you deliberately point the chat side at a hosted provider.
 |---|---|
 | Language / runtime | C# 14 on .NET 10, ASP.NET Core minimal host |
 | AI stack | `Microsoft.Extensions.AI`, built towards the Microsoft Agent Framework; Ollama for local embeddings |
-| Storage | SQLite via `Microsoft.Data.Sqlite`, WAL mode, optional `sqlite-vec` native k-NN |
+| Storage | SQLite via `Microsoft.Data.Sqlite`, WAL mode; `sqlite-vec` native k-NN by default, brute-force cosine where it has no binary |
 | Observability | OpenTelemetry metrics exported for Prometheus at `GET /metrics`; structured logging |
 | Quality gates | Zero-warning build enforced with SonarAnalyzer; ~550 xUnit tests; CI on Ubuntu and Windows for every push |
 | Method | Spec-first: every behavioural change starts from a versioned spec in `docs/specs/` and ships with it |
@@ -83,7 +83,7 @@ flowchart TB
     subgraph composition["Composition — Program.cs"]
         direction LR
         root["Composition root<br/>lazy IOptions, startup filter"]
-        profiles["CompositionProfiles<br/>6 named bundles"]
+        profiles["CompositionProfiles<br/>6 named bundles; lsa-vec default, loud fallback to lsa-blob"]
         config["AgentConfig<br/>section FolderAssistant"]
         metrics["GET /metrics<br/>Prometheus exporter"]
     end
@@ -188,8 +188,7 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
-    class profiles defect
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
     class cosine,vecq,floor,reducer,guard,readt built
     class convdb,snippet,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
@@ -305,43 +304,62 @@ Every property, its default and its reason are documented in `FolderAssistant/Ag
 
 A **composition profile** bundles the embedder, the vector store and the retrieval backend together,
 so a mismatched combination — a reader looking in one table while the writer fills another — cannot
-be expressed. An unknown profile, or one whose native dependency is missing on this platform, stops
-the application at startup rather than falling back.
+be expressed. A profile you name that is unknown, or whose native dependency is missing on this
+platform, stops the application at startup rather than falling back.
+
+The name has two halves. The first is the **embedder**, which decides whether the right passage is
+found at all; the second is the **store**, which decides how long that takes.
 
 | Profile | Embedder | Retrieval | Needs |
 |---|---|---|---|
-| `programmable-blob` (default) | character histogram | cosine, managed code | nothing |
-| `programmable-vec` | character histogram | `sqlite-vec` k-NN | native `sqlite-vec` binary |
-| `lsa-blob` | LSA, fitted to the corpus | cosine, managed code | nothing |
-| `lsa-vec` | LSA, fitted to the corpus | `sqlite-vec` k-NN | native `sqlite-vec` binary |
+| `lsa-vec` **(default)** | LSA, fitted to the corpus, in-process | `sqlite-vec` k-NN | nothing on a covered platform |
+| `lsa-blob` | LSA, fitted to the corpus, in-process | cosine, managed code | nothing |
+| `ollama-vec` | `qwen3-embedding:0.6b` via Ollama | `sqlite-vec` k-NN | Ollama running |
 | `ollama-blob` | `qwen3-embedding:0.6b` via Ollama | cosine, managed code | Ollama running |
-| `ollama-vec` | `qwen3-embedding:0.6b` via Ollama | `sqlite-vec` k-NN | Ollama + native binary |
+| `programmable-vec` | character histogram (placeholder) | `sqlite-vec` k-NN | nothing on a covered platform |
+| `programmable-blob` | character histogram (placeholder) | cosine, managed code | nothing |
 
-**The default is the profile with no dependencies, not the one that retrieves best.** The
-placeholder embedder is a deterministic floor with no semantics. Measured on a 300-document labelled
-corpus whose queries avoid the vocabulary of the documents they should find
+**The default works on a fresh clone with nothing installed.** With no profile configured it is
+`lsa-vec`. On the two platforms where the `sqlite-vec` extension ships no binary — **Windows on
+ARM64, and musl-based Linux such as Alpine** — the application runs `lsa-blob` instead: the same
+embedder over the brute-force store, so the same search results, only slower on large folders. That
+substitution is never silent. It is logged at warning on startup, and `GET /` reports the active
+profile with a note saying which one was wanted. Name a profile explicitly and no substitution ever
+happens.
+
+**On Linux** nothing special is needed. The package ships `linux-x64` and `linux-arm64` binaries, so
+Ubuntu, Debian, Fedora and the other glibc distributions run the default as-is; CI runs the whole
+suite on Ubuntu for every push. Only Alpine and other musl builds take the fallback.
+
+**For the best retrieval, run Ollama.** The corpus-fitted embedder needs nothing installed and is a
+long way ahead of the placeholder, but a pretrained model is ahead of both. Measured on a
+300-document labelled corpus whose queries avoid the vocabulary of the documents they should find
 ([docs/benchmarks/semantic-search-full-results.md](docs/benchmarks/semantic-search-full-results.md)):
 
-| Profile | Precision@1 | MAP |
+| Embedder | Precision@1 | MAP |
 |---|---:|---:|
-| `programmable-blob` | 7 % | 0.031 |
-| `lsa-blob` | 45 % | 0.401 |
-| `ollama-blob` | 82 % | 0.675 |
+| `programmable-*` | 7 % | 0.031 |
+| `lsa-*` | 45 % | 0.401 |
+| `ollama-*` | 82 % | 0.675 (measured 2026-09-12 on an earlier tree; not re-measured since) |
 
-For any real use, run Ollama and set the profile:
+Install Ollama, pull the model, and set the profile:
 
 ```json
 {
   "FolderAssistant": {
-    "Profile": "ollama-blob"
+    "Profile": "ollama-vec"
   }
 }
 ```
 
-The `-vec` variants use the native `sqlite-vec` extension, which ships no binary for win-arm64 or
-musl-based Linux; the benchmark document shows where it pays off as the corpus grows. Switching
-profiles changes the active model version; existing vectors are kept and simply stop being the ones
-searched.
+Two things to know about the corpus-fitted default. Its fit is taken on the first successful index
+and kept, so a folder that grows a great deal after that searches with a fit taken on its early
+contents until `.folderassistant/` is deleted and the index rebuilt; a refit policy is the next item
+on the embedding side. And an empty folder cannot fit it: the index reports failed until the folder
+has text, and the pass is retried every 30 seconds.
+
+Switching profiles changes the active model version; existing vectors are kept and simply stop being
+the ones searched.
 
 ## Testing
 

@@ -35,15 +35,29 @@ internal sealed class Program
 
 		// Which implementations run is decided here, by name, from one configuration value. The
 		// profile is a bundle rather than a set of independent switches, so a mismatched combination
-		// cannot be expressed. Resolve throws on an unknown or platform-unavailable name and never
+		// cannot be expressed. A named profile that is unknown or cannot run here throws and never
 		// falls back, because a silent fallback would serve answers from a different embedding space
-		// than the operator believes they configured.
+		// than the operator believes they configured. Only the default, which nobody named, may fall
+		// back to its blob twin — logged here at warning, and reported by GET / — so the one case
+		// where the running profile is not the expected one is the one case that is said out loud.
 		builder.Services.AddSingleton(sp =>
 		{
-			ModuleSet profile = CompositionProfiles.Resolve(sp.GetRequiredService<AgentConfig>().Profile);
-			Console.WriteLine($"Composition profile: {profile.Name}");
-			return profile;
+			String? configured = sp.GetRequiredService<AgentConfig>().Profile;
+			DefaultResolution resolution = String.IsNullOrWhiteSpace(configured)
+				? CompositionProfiles.ResolveDefault()
+				: new DefaultResolution(CompositionProfiles.Resolve(configured), null);
+
+			ILogger<Program> logger = sp.GetRequiredService<ILogger<Program>>();
+			if (resolution.FallbackNote is not null)
+			{
+				logger.LogWarning("{FallbackNote}", resolution.FallbackNote);
+			}
+
+			logger.LogInformation("Composition profile: {Profile}", resolution.Profile.Name);
+
+			return resolution;
 		});
+		builder.Services.AddSingleton(sp => sp.GetRequiredService<DefaultResolution>().Profile);
 
 		// One vectorizer instance, shared by indexing and retrieval. For a corpus-fitted vectorizer
 		// this is load-bearing rather than an economy: the pipeline loads the fit onto the instance,
@@ -226,10 +240,14 @@ internal sealed class Program
 
 		WebApplication app = builder.Build();
 
-		app.MapGet("/", (AgentConfig config) => Results.Ok(new
+		// The active profile is reported here so that what is running is one request away, fallback
+		// included: the note is null unless the default could not run and its blob twin did.
+		app.MapGet("/", (AgentConfig config, DefaultResolution profile) => Results.Ok(new
 		{
 			name = "Folder Assistant",
 			analyzedFolder = config.ResolveAnalyzedFolderPath(),
+			profile = profile.Profile.Name,
+			profileNote = profile.FallbackNote,
 		}));
 
 		// Prometheus scrapes this directly, on the port the app already serves. A collector in

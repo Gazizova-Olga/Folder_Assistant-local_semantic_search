@@ -189,7 +189,7 @@ public sealed class SemanticSearchBenchmark
 		// sample than about the method. The generated corpus exists for this comparison alone.
 		List<GeneratedAccuracy> accuracy = [];
 
-		foreach (String profileName in AvailableProfiles(includeFitted: true, blobOnly: true))
+		foreach (String profileName in AvailableProfiles(blobOnly: true))
 		{
 			this.Log($"accuracy on {GeneratedCorpusSize} generated documents: {profileName} ...");
 			accuracy.Add(this.MeasureGenerated(profileName, topics));
@@ -363,7 +363,7 @@ public sealed class SemanticSearchBenchmark
 		String[] documents = Directory.GetFiles(CorpusDirectory(), "*.txt");
 		List<ColdStart> stages = [];
 
-		foreach (String profileName in AvailableProfiles(includeFitted: true, blobOnly: true))
+		foreach (String profileName in AvailableProfiles(blobOnly: true))
 		{
 			ModuleSet profile = CompositionProfiles.Resolve(profileName);
 
@@ -806,17 +806,15 @@ public sealed class SemanticSearchBenchmark
 	/// against an absent server would produce a row of failures that look like a result.
 	/// </para>
 	/// </summary>
-	private static IEnumerable<String> AvailableProfiles(Boolean includeFitted = false, Boolean blobOnly = false)
+	private static IEnumerable<String> AvailableProfiles(Boolean blobOnly = false)
 	{
 		Boolean ollama = OllamaIsReachable();
 		Boolean vec = SqliteVecExtension.IsAvailable;
 
+		// The fitted profiles are in-process and always run; the default is one of them, so a table
+		// without them would not carry the number the default is chosen on.
 		yield return "programmable-blob";
-
-		if (includeFitted)
-		{
-			yield return "lsa-blob";
-		}
+		yield return "lsa-blob";
 
 		if (ollama)
 		{
@@ -831,6 +829,7 @@ public sealed class SemanticSearchBenchmark
 		if (vec)
 		{
 			yield return "programmable-vec";
+			yield return "lsa-vec";
 		}
 
 		if (vec && ollama)

@@ -47,11 +47,21 @@ internal sealed class LsaTrainer
 
 		IReadOnlyList<String>[] analyzed = corpus.Select(this._analyzer.Analyze).ToArray();
 
-		(IReadOnlyList<String> terms, IReadOnlyDictionary<String, Int32> termIndex) = this.BuildVocabulary(analyzed);
+		(IReadOnlyList<String> terms, IReadOnlyDictionary<String, Int32> termIndex) =
+			this.BuildVocabulary(analyzed, this._minDocumentFrequency);
+
+		// A corpus too small for the pruning floor — one chunk, or a few that share no term — would
+		// otherwise fit nothing and fail the index of a folder that has text in it. Below the floor the
+		// vocabulary is kept whole: the fit is then lexical rather than latent, which is what a corpus
+		// that small can support, and it is a fit rather than a failure.
+		if (terms.Count == 0 && this._minDocumentFrequency > 1)
+		{
+			(terms, termIndex) = this.BuildVocabulary(analyzed, minDocumentFrequency: 1);
+		}
 
 		if (terms.Count == 0)
 		{
-			throw new InvalidOperationException("The corpus produced no usable terms after analysis and pruning.");
+			throw new InvalidOperationException("The corpus produced no usable terms after analysis.");
 		}
 
 		IReadOnlyList<Single> idf = ComputeIdf(analyzed, terms, termIndex);
@@ -73,7 +83,8 @@ internal sealed class LsaTrainer
 	}
 
 	private (IReadOnlyList<String> Terms, IReadOnlyDictionary<String, Int32> Index) BuildVocabulary(
-		IReadOnlyList<String>[] analyzed)
+		IReadOnlyList<String>[] analyzed,
+		Int32 minDocumentFrequency)
 	{
 		Dictionary<String, Int32> documentFrequency = new(StringComparer.Ordinal);
 
@@ -88,7 +99,7 @@ internal sealed class LsaTrainer
 		// Ordered by frequency to choose what survives the cap, then re-ordered by term so the stored
 		// vocabulary is stable: the same corpus must fit to the same artifact.
 		String[] terms = documentFrequency
-			.Where(pair => pair.Value >= this._minDocumentFrequency)
+			.Where(pair => pair.Value >= minDocumentFrequency)
 			.OrderByDescending(static pair => pair.Value)
 			.ThenBy(static pair => pair.Key, StringComparer.Ordinal)
 			.Take(this._maxVocabulary)
