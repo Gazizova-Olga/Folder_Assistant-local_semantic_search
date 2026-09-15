@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Status | Draft — containment written and implemented; the tools themselves not yet |
-| Version | 0.1.0 |
+| Status | Draft — containment and the read tools written and implemented; text search and mutation not yet |
+| Version | 0.2.0 |
 | Owner | Tools |
 | Last updated | 2026-09-15 |
 
@@ -26,8 +26,8 @@ cannot reach anything outside the folder, and cannot touch the index's own metad
 - How a tool failure is reported to the model. The facade that turns an exception into a string the
   model must report belongs to the agent layer, and is not built.
 
-This version writes the containment rule only. The tools are not built; nothing below describes
-them beyond naming the split they will have.
+This version writes the containment rule and the four read tools. The text search and the mutation
+tools are not built; they are named and not described.
 
 ## The rule
 
@@ -105,6 +105,91 @@ The read tools and the mutation tools each hold their own guard over the same ro
 contract that lets a roster grant reading without writing; giving both holders one shared instance
 would make that split a matter of which methods a class happens to expose.
 
+## The read tools
+
+Four methods on one holder, `ReadTools`, over its own guard. Every path argument goes through
+`Resolve` first, so a refusal is the guard's exception and not a tool's opinion. The rules that hold
+across all four:
+
+- **A result is a record with an explicit `Note`.** A bound that cut the result, a range that ran
+  past the end of the file, entries hidden from a listing — each is said in the note, and the record
+  carries a `Truncated` flag where a bound applied. A tool never returns a fake hit, an invented line,
+  or a silently shortened answer.
+- **A hard failure is an exception, not an empty result.** A missing file, a path that is a directory
+  where a file was asked for, a binary file, a bad line range — each throws its ordinary .NET
+  exception. The facade that turns those into the string the model must report belongs to the agent
+  layer and is not built; until then the exception is the contract.
+- **Bounds are code constants**, stated below. Per-call budgets are deferred for the same reason
+  the reducer's are ([SPEC-110](SPEC-110-rag-retrieval.md)): the caller is a model, and a model that
+  can raise a bound will.
+- **Reads open with share-read and do not retry.** Two readers coexist with the indexer's own
+  share-read opens; a read that fails has met a genuine external writer, and should say so at once
+  rather than wait it out.
+- **Paths in results are relative to the root**, with the platform's separator and no leading
+  separator; the root itself is shown as `.`. A substituted drive letter or the absolute root never
+  appears in a result.
+
+### `InspectDirectory(path)`
+
+The direct children of one directory, not a recursive tree: name, whether it is a directory, size
+for a file, last write time. Sorted by name, ordinally. The metadata folder is hidden, and so is any
+entry that is a symbolic link or junction — the guard would refuse it on the next call, and listing
+what cannot be opened invites the call. Hidden links are counted in the note. At most **500**
+entries; past that the listing is cut, `Truncated` is set and the note says so. A path that is not an
+existing directory throws.
+
+### `ReadFile(path, startLine, endLine)`
+
+A numbered line range. Lines are 1-based; `startLine` defaults to 1 and `endLine` to the end of the
+file. The reported `TotalLines` is the file's, counted through to the end whatever the range, so the
+caller knows where it stands. The rules of the cut:
+
+- At most **400** lines per call, and at most **64,000** characters. Whichever bound hits first ends
+  the result, `Truncated` is set, and the note names the next line to ask for.
+- A range that runs past the end of the file is not truncation: the file ended. The result holds the
+  lines that exist, `Truncated` is false, and the note says how many lines the file has.
+- A `startLine` past the end returns no lines and a note; it does not throw, because asking for line
+  500 of a 300-line file is a reasonable thing for a caller who has not read it yet to do.
+- `startLine` below 1, or `endLine` below `startLine`, throws.
+
+Line endings: `\n`, `\r\n` and a final line with no terminator each count as a line; an empty file
+has zero. A byte-order mark is consumed, not returned as text.
+
+### `Retrieve(path)`
+
+The whole file as one string, bounded at **200,000** characters. `TotalBytes` is the size on disk,
+so a caller can see how much of the file it got. Past the bound the text is cut, `Truncated` is set,
+and the note points at `ReadFile` for the rest.
+
+### What both file readers refuse
+
+- **A file above 16 MB** throws, before any of it is read. Nothing a line range or a bounded read
+  returns from such a file is worth reading it through, and the indexer's own bound is 1 MB.
+- **A file whose first 8 KB contain a NUL byte** throws as not a text file. This is the only binary
+  detection there is until the extraction registry exists; a PDF or a `.docx` is refused, not
+  returned as its raw bytes.
+
+### `FindFiles(pattern)`
+
+A glob over the folder, matched against a **list this tool walks itself**, never by pointing a
+matcher at the live tree. The walk starts at the root and takes each directory's files first, in name
+order, then its subdirectories in name order — so the matches nearest the root come first; it skips the
+metadata folder, the directory names the indexing scanner ignores (asked of the scanner, not
+copied), and every symbolic link or junction, file or directory. Skipping links is what keeps a
+walk inside the root; the guard would refuse each one individually, but a walk that followed them
+would enumerate the outside before anyone asked.
+
+The pattern's separator is `/`; a backslash is accepted and read as `/`. `*` matches within a
+segment, `?` one character, `**` any number of segments. A pattern with no separator matches
+**against the file name at any depth** — `*.md` finds every Markdown file — and a pattern with a
+separator matches the whole relative path, so `docs/*.md` finds only the top level of `docs`.
+Matching is case-insensitive on Windows and ordinal elsewhere, the same rule as containment. A
+pattern that is empty, or contains a `..` segment, throws.
+
+Results are relative paths, in walk order. At most **200** matches; the walk stops at the bound,
+`Truncated` is set, and the note says so. The walk also stops after examining **100,000** entries,
+with a note, so a pattern that matches nothing in an enormous tree still returns.
+
 ## Contracts
 
 ```csharp
@@ -120,12 +205,38 @@ internal sealed record GuardedPath(String FullPath, String RelativePath, String?
 
 internal enum ContainmentRefusal { EmptyPath, DevicePath, OutsideRoot, MetadataFolder, ReparsePoint, HardLinkOutsideRoot }
 
-internal sealed class WorkspaceContainmentException : Exception
+internal sealed class WorkspaceContainmentException : InvalidOperationException
 {
 	ContainmentRefusal Refusal { get; }
 	String Path { get; }
 }
+
+internal sealed class ReadTools
+{
+	ReadTools(WorkspacePathGuard guard);
+	DirectoryListing InspectDirectory(String path);
+	FileLines ReadFile(String path, Int32 startLine = 1, Int32? endLine = null);
+	FileText Retrieve(String path);
+	FileMatches FindFiles(String pattern);
+}
+
+internal sealed record DirectoryEntry(String Name, Boolean IsDirectory, Int64? SizeBytes, DateTime ModifiedUtc);
+internal sealed record DirectoryListing(String Path, IReadOnlyList<DirectoryEntry> Entries, Boolean Truncated, String? Note);
+internal sealed record NumberedLine(Int32 Number, String Text);
+internal sealed record FileLines(String Path, IReadOnlyList<NumberedLine> Lines, Int32 TotalLines, Boolean Truncated, String? Note);
+internal sealed record FileText(String Path, String Text, Int64 TotalBytes, Boolean Truncated, String? Note);
+internal sealed record FileMatches(String Pattern, IReadOnlyList<String> Paths, Boolean Truncated, String? Note);
+
+internal sealed class GlobPattern
+{
+	static GlobPattern Parse(String pattern);   // throws ArgumentException
+	Boolean IsMatch(String relativePath);       // '/'-separated
+}
 ```
+
+The bounds, as constants on `ReadTools`: `MaxEntries` 500, `MaxLinesPerRead` 400,
+`MaxCharsPerRead` 64,000, `MaxRetrieveChars` 200,000, `MaxFileBytes` 16 MB, `MaxMatches` 200,
+`MaxExamined` 100,000, `SniffBytes` 8 KB.
 
 ## Sharp edges
 
@@ -162,6 +273,25 @@ letter that could not be claimed, a hard link the volume would not make — each
 is red rather than green with nothing asserted. The `subst` tests exist only on Windows; on another
 platform they are reported as skipped with the reason, never as passed.
 
+The read tools, each asserted on its arithmetic directly and never through an end-to-end path:
+
+- The listing is sorted, hides the metadata folder and links and counts the links in the note, cuts
+  at the entry bound with the flag set, and throws for a file or a missing directory.
+- The line reader numbers `\n`, `\r\n` and an unterminated last line alike, returns zero lines for an
+  empty file, consumes a byte-order mark, returns the existing lines without the flag when the range
+  runs past the end, returns no lines and a note for a start past the end, cuts at the line bound
+  and at the character bound with the next line named, refuses a NUL-bearing file and an oversize
+  one, and throws for a bad range.
+- The whole-file reader returns a small file entire and cuts a large one with the size on disk
+  reported.
+- The glob matcher is tested as a table: each pattern form against paths that should and should not
+  match, including the no-separator-matches-any-depth rule and case handling per platform.
+- The walk excludes the ignored directory names, the metadata folder, a linked directory and a
+  linked file, stops at the match bound with the flag set, and refuses a `..` pattern. The linked-file
+  case needs a file symbolic link, which Windows grants only to an elevated process or a machine with
+  Developer Mode on; where the probe fails, that one test is reported as skipped with the reason,
+  never as passed. CI's Windows runner is elevated, so there it runs.
+
 ## Open questions
 
 - Whether an application-execution link (the reparse tag Windows Store and WSL use for a
@@ -178,5 +308,8 @@ platform they are reported as skipped with the reason, never as passed.
 
 ## Changelog
 
+- **0.2.0** (2026-09-15) — the four read tools: listing, numbered line range, bounded whole file,
+  glob over a self-walked list. Bounds as code constants; notes for every cut; exceptions for every
+  hard failure. The holder is composed in `Program.cs` and held by nothing.
 - **0.1.0** (2026-09-15) — the containment rule, written with its implementation. The tools that
   will use it are named and not described.

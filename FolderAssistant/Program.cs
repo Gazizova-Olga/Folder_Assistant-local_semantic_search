@@ -6,6 +6,7 @@ using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
+using FolderAssistant.Tools;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 
@@ -125,6 +126,18 @@ internal sealed class Program
 				sp.GetRequiredService<IVectorStoreReader>(),
 				config.Indexing,
 				config.Persistence.MetadataFolderName);
+		});
+
+		// The read tools over their own containment guard. Composed and resolved by nothing: the agent
+		// that would reflect the holder's methods into tools does not exist yet. The mutation holder,
+		// when it exists, gets a second guard over the same root — the split is the contract.
+		builder.Services.AddSingleton(sp =>
+		{
+			AgentConfig config = sp.GetRequiredService<AgentConfig>();
+
+			return new ReadTools(new WorkspacePathGuard(
+				config.ResolveAnalyzedFolderPath(),
+				config.Persistence.MetadataFolderName));
 		});
 
 		// The front end: watcher, reconciler, per-change pipeline and outbox dispatcher, composed by

@@ -45,6 +45,12 @@ internal sealed class LocalTextFileScanner
 	public static IReadOnlyCollection<String> IndexableExtensions => AllowedExtensions;
 
 	/// <summary>
+	/// The directory names this scanner does not descend into, for a walker that must skip the same
+	/// ones. One set, so a tool's walk and the index cannot disagree about what a folder contains.
+	/// </summary>
+	public static IReadOnlyCollection<String> IgnoredDirectories => IgnoredDirectoryNames;
+
+	/// <summary>
 	/// Yields indexable files one at a time, reading each one's text only as it is pulled.
 	///
 	/// <para>

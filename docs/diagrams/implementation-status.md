@@ -1,7 +1,7 @@
 # Implementation status
 
 The whole structure the plan converges on, every block coloured by what is true of it now — as of
-2026-09-14. Updated with every commit that moves a block; at the end, every block is green.
+2026-09-15. Updated with every commit that moves a block; at the end, every block is green.
 
 **Five states, not two.** *Built but unreachable* is the category a diagram with only *done* and
 *not done* hides: retrieval is implemented twice over, tested, composed — and it still never runs.
@@ -121,8 +121,8 @@ flowchart TB
 
     class root,config,metrics,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
     class profiles defect
-    class cosine,vecq,floor,reducer,guard built
-    class convdb,snippet,readt,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt built
+    class convdb,snippet,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -156,7 +156,7 @@ composition without a caller.
 | Item | Block | State |
 |---|---|---|
 | **A1** — every caller-supplied path resolves through one containment guard: outside the root, a link or junction at any segment, a hard link named outside the root, a `subst` letter for a path that is, and the metadata folder are refused; SPEC-101 written with it | `guard` | **Landed** 2026-09-15 |
-| **A2** — read tools | `readt` | Queued |
+| **A2** — read tools: listing, numbered line range, bounded whole file, glob over a self-walked list; bounds as constants, a note for every cut, an exception for every hard failure; SPEC-101 0.2.0 | `readt` | **Landed** 2026-09-15 |
 | **A3** — `SearchText` | `textsearch` | Queued |
 | **A4** — `FindFilesAbout` through the retrieval seams | `about` | Queued |
 | **A5** — mutation tools | `mutate` | Queued |

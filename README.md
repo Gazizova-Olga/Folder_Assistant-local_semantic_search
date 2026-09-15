@@ -15,7 +15,7 @@ machine unless you deliberately point the chat side at a hosted provider.
 | AI stack | `Microsoft.Extensions.AI`, built towards the Microsoft Agent Framework; Ollama for local embeddings |
 | Storage | SQLite via `Microsoft.Data.Sqlite`, WAL mode, optional `sqlite-vec` native k-NN |
 | Observability | OpenTelemetry metrics exported for Prometheus at `GET /metrics`; structured logging |
-| Quality gates | Zero-warning build enforced with SonarAnalyzer; ~500 xUnit tests; CI on Ubuntu and Windows for every push |
+| Quality gates | Zero-warning build enforced with SonarAnalyzer; ~550 xUnit tests; CI on Ubuntu and Windows for every push |
 | Method | Spec-first: every behavioural change starts from a versioned spec in `docs/specs/` and ships with it |
 
 ## Why it exists
@@ -56,16 +56,145 @@ colour-coded.
 - Retrieval — cosine ranking within one embedding space, in managed code or through `sqlite-vec` —
   and the context reducer that reranks, diversifies and fits passages under a token budget. Nothing
   on the request path calls them yet, so the vectors are written and read only by the test suite.
-- The **workspace path guard** every file tool will resolve paths through: it refuses anything
-  outside the folder, including escapes through symbolic links and junctions, hard links, and
-  `subst` drives, and refuses the index's own metadata folder for every operation.
+- The **workspace path guard** every file tool resolves paths through: it refuses anything outside
+  the folder, including escapes through symbolic links and junctions, hard links, and `subst` drives,
+  and refuses the index's own metadata folder for every operation.
+- The **read tools** over that guard: list a directory, read a numbered line range, read a bounded
+  whole file, find files by glob. Every cut is said in the result; every hard failure is an exception.
 
 **Not built**
 
-- The filesystem tools, the agent and provider adapter, the chat surface, the conversation database.
+- The text search and mutation tools, the agent and provider adapter, the chat surface, the
+  conversation database.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits and
 read the telemetry**. You cannot yet ask it a question.
+
+### The whole structure, coloured by state
+
+Every block the design converges on. Green runs; orange is built and tested but reached by nothing at
+runtime; grey is planned; amber runs with a known defect queued against it; dashed is deliberately
+deferred. Solid arrows are calls that exist, dotted ones seams with only one side built. The source is
+[docs/diagrams/implementation-status.md](docs/diagrams/implementation-status.md), which also carries the
+per-item ledger; a test keeps this copy identical to it.
+
+```mermaid
+flowchart TB
+    subgraph composition["Composition — Program.cs"]
+        direction LR
+        root["Composition root<br/>lazy IOptions, startup filter"]
+        profiles["CompositionProfiles<br/>6 named bundles"]
+        config["AgentConfig<br/>section FolderAssistant"]
+        metrics["GET /metrics<br/>Prometheus exporter"]
+    end
+
+    subgraph embedding["Embedding — SPEC-160/161/162"]
+        direction LR
+        prog["ProgrammableEmbeddingVectorizer<br/>character histogram"]
+        lsa["LsaEmbeddingVectorizer<br/>corpus-fitted"]
+        ollama["OllamaEmbeddingVectorizer<br/>qwen3-embedding, local, bounded calls"]
+        etel["EmbeddingTelemetryVectorizer<br/>Wrap, probe re-exposed"]
+    end
+
+    subgraph indexing["Indexing — SPEC-120/121"]
+        direction LR
+        pass["Whole-folder pass<br/>record, fit, embed, mark delivered"]
+        state["IndexState<br/>Building · Ready · Failed, retried"]
+        indexer["FolderIndexer<br/>watcher · reconciler · change pipeline · dispatcher"]
+        store["FolderIndexStore<br/>one writer of file_manifest + outbox"]
+        bridge["RagBridgeVectorizationService<br/>chunks + vectors under the delivered id; unfitted fails"]
+        hold["BeginBatch hold<br/>nests, expires"]
+    end
+
+    subgraph persistence["Persistence — SPEC-130"]
+        direction LR
+        boot["FolderDatabaseBootstrapper<br/>manifest.db, WAL, migrations"]
+        conn["FolderDatabaseConnection<br/>foreign_keys, busy_timeout, no shared cache"]
+        blob["Blob vector store<br/>chunk_vector"]
+        vec["sqlite-vec store<br/>vec0 per model"]
+        convdb["conversations.db<br/>bootstrapper, ConversationStore"]
+    end
+
+    subgraph retrieval["Retrieval — SPEC-110"]
+        direction LR
+        cosine["CosineRetrievalQuery"]
+        vecq["SqliteVecRetrievalQuery"]
+        floor["RelevanceFloor<br/>low-confidence screen"]
+        reducer["TokenBudgetContextReducer<br/>hybrid rerank, MMR, score gap"]
+        rtel["RetrievalTelemetryQuery<br/>log line + meter"]
+        snippet["Snippet verification<br/>against chunk_hash"]
+    end
+
+    subgraph tools["Tools — Phase A, SPEC-101"]
+        direction LR
+        guard["WorkspacePathGuard<br/>containment, links, hard links, subst, metadata folder"]
+        readt["Read tools<br/>InspectDirectory · ReadFile · Retrieve · FindFiles"]
+        textsearch["SearchText<br/>index-independent, bounded four ways"]
+        about["FindFilesAbout<br/>file-level semantic, same seams"]
+        mutate["Mutation tools<br/>Create · Update · ReplaceLines · Delete"]
+        extract["Text extraction registry<br/>plain text; docx/pdf after snippet verification"]
+    end
+
+    subgraph agent["Agent and orchestration — Phase B, SPEC-100/140"]
+        direction LR
+        provider["Provider + agent factory<br/>OpenAI-compatible, Azure; NetworkTimeout set"]
+        facade["Tool facades<br/>file tools non-fatal · search tools fatal"]
+        roster["Roster · catalog · registry · routing<br/>default roster in code; cycles refused at startup"]
+        runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution"]
+        searchidx["SearchIndex tool<br/>embed, over-fetch, screen, reduce, memoize per turn"]
+        batching["Index batching across a turn<br/>BeginBatch at the agent-run boundary"]
+        console["Console loop<br/>beside the host; stdin EOF does not stop it"]
+    end
+
+    subgraph surface["Conversation and HTTP — Phase C, SPEC-170 to write"]
+        direction LR
+        turns["TurnRecordingAgent<br/>message capture over the roster"]
+        history["GET/DELETE /api/history"]
+        status["GET /api/index/status<br/>read-only, bounded failed sample"]
+        responses["OpenAI Responses endpoints + DevUI<br/>SQLite conversation storage, loopback only"]
+        provenance["Provenance framing<br/>file content is data, not instructions"]
+    end
+
+    subgraph deferred["Deferred, deliberately"]
+        direction LR
+        webui["Custom web UI"]
+        approvals["Human-in-the-loop approvals<br/>IApprovalGate"]
+        legacydoc[".doc extraction"]
+        hybrid["Hybrid lexical recall<br/>FTS5 union"]
+    end
+
+    root --> profiles --> etel
+    etel -.-> prog & lsa & ollama
+    root --> pass --> indexer
+    indexer --> store --> bridge
+    pass -.-> state
+    bridge --> blob & vec
+    blob & vec -.->|"vectors nothing reads"| cosine & vecq
+    cosine & vecq --> floor --> reducer --> rtel -.-> metrics
+    rtel -.-> searchidx
+    snippet -.-> searchidx
+    guard --> readt & textsearch & mutate & about
+    readt & textsearch & about & searchidx & mutate --> facade --> roster --> runner
+    provider --> roster
+    runner --> batching -.-> hold
+    runner --> console & turns & responses
+    turns --> convdb
+    history & status --> convdb
+    provenance -.-> facade
+
+    classDef live fill:#1b5e20,stroke:#a5d6a7,color:#ffffff
+    classDef defect fill:#8d6e00,stroke:#ffe082,color:#ffffff
+    classDef built fill:#e65100,stroke:#ffcc80,color:#ffffff
+    classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
+    classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
+
+    class root,config,metrics,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
+    class profiles defect
+    class cosine,vecq,floor,reducer,guard,readt built
+    class convdb,snippet,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class webui,approvals,legacydoc,hybrid deferredCls
+```
+
 
 ## Quick start
 
@@ -220,7 +349,9 @@ searched.
 dotnet test --nologo -l "console;verbosity=detailed" > "$TEMP/run.txt" 2>&1; tail -3 "$TEMP/run.txt"
 ```
 
-Expect every test to pass with none skipped. Run the suite to a file rather than through `-v q` or
+Expect every test to pass. One test is skipped, with the reason printed, on a Windows machine
+without Developer Mode: it needs a file symbolic link, which Windows grants only to an elevated
+process. Run the suite to a file rather than through `-v q` or
 `grep`: both discard the stack trace of a rare failure, and a re-run that passes takes the only copy
 with it. Filtered runs work the usual way:
 

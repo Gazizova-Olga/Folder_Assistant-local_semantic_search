@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using FluentAssertions;
 using FolderAssistant.Tools;
 
@@ -169,7 +168,7 @@ public sealed class WorkspacePathGuardTests
 		using TempFolder root = new();
 		using TempFolder outside = new();
 		String link = root.Combine("escape");
-		CreateDirectoryLink(link, outside.Path);
+		LinkFixtures.CreateDirectoryLink(link, outside.Path);
 		WorkspacePathGuard guard = new(root.Path, Metadata);
 
 		Refusal(guard, "escape").Should().Be(ContainmentRefusal.ReparsePoint);
@@ -182,7 +181,7 @@ public sealed class WorkspacePathGuardTests
 		using TempFolder outside = new();
 		File.WriteAllText(outside.Combine("secret.txt"), "outside");
 		String link = root.Combine("escape");
-		CreateDirectoryLink(link, outside.Path);
+		LinkFixtures.CreateDirectoryLink(link, outside.Path);
 		WorkspacePathGuard guard = new(root.Path, Metadata);
 
 		Refusal(guard, Path.Combine("escape", "secret.txt")).Should().Be(ContainmentRefusal.ReparsePoint);
@@ -196,7 +195,7 @@ public sealed class WorkspacePathGuardTests
 		// check, so a link is refused for being one.
 		using TempFolder root = new();
 		Directory.CreateDirectory(root.Combine("real"));
-		CreateDirectoryLink(root.Combine("alias"), root.Combine("real"));
+		LinkFixtures.CreateDirectoryLink(root.Combine("alias"), root.Combine("real"));
 		WorkspacePathGuard guard = new(root.Path, Metadata);
 
 		Refusal(guard, Path.Combine("alias", "file.txt")).Should().Be(ContainmentRefusal.ReparsePoint);
@@ -209,7 +208,7 @@ public sealed class WorkspacePathGuardTests
 		using TempFolder root = new();
 		using TempFolder outside = new();
 		Directory.CreateDirectory(root.Combine("plain"));
-		CreateDirectoryLink(root.Combine("escape"), outside.Path);
+		LinkFixtures.CreateDirectoryLink(root.Combine("escape"), outside.Path);
 		WorkspacePathGuard guard = new(root.Path, Metadata);
 
 		guard.Resolve(Path.Combine("plain", "file.txt")).RelativePath.Should().Be(Path.Combine("plain", "file.txt"));
@@ -236,7 +235,7 @@ public sealed class WorkspacePathGuardTests
 		String original = outside.Combine("original.txt");
 		File.WriteAllText(original, "outside");
 		String link = root.Combine("linked.txt");
-		CreateHardLink(link, original);
+		LinkFixtures.CreateHardLink(link, original);
 		WorkspacePathGuard guard = new(root.Path, Metadata);
 
 		if (OperatingSystem.IsWindows())
@@ -255,7 +254,7 @@ public sealed class WorkspacePathGuardTests
 		using TempFolder root = new();
 		String original = root.Combine("original.txt");
 		File.WriteAllText(original, "inside");
-		CreateHardLink(root.Combine("linked.txt"), original);
+		LinkFixtures.CreateHardLink(root.Combine("linked.txt"), original);
 		WorkspacePathGuard guard = new(root.Path, Metadata);
 
 		guard.Resolve("linked.txt").Note.Should().BeNull();
@@ -346,71 +345,6 @@ public sealed class WorkspacePathGuardTests
 	}
 
 	/// <summary>
-	/// A junction on Windows (no privilege needed) or a symbolic link elsewhere. Throws when the link is
-	/// not there afterwards, so the test fails instead of asserting against a plain directory.
-	/// </summary>
-	private static void CreateDirectoryLink(String link, String target)
-	{
-		if (OperatingSystem.IsWindows())
-		{
-			Run("cmd.exe", "/c", "mklink", "/J", link, target);
-		}
-		else
-		{
-			Directory.CreateSymbolicLink(link, target);
-		}
-
-		if (new DirectoryInfo(link).LinkTarget is null)
-		{
-			throw new InvalidOperationException($"Fixture could not be staged: '{link}' is not a link.");
-		}
-	}
-
-	private static void CreateHardLink(String link, String target)
-	{
-		if (OperatingSystem.IsWindows())
-		{
-			Run("cmd.exe", "/c", "mklink", "/H", link, target);
-		}
-		else
-		{
-			Run("ln", target, link);
-		}
-
-		if (!File.Exists(link))
-		{
-			throw new InvalidOperationException($"Fixture could not be staged: hard link '{link}' was not created.");
-		}
-	}
-
-	private static void Run(String fileName, params String[] arguments)
-	{
-		ProcessStartInfo start = new(fileName)
-		{
-			UseShellExecute = false,
-			CreateNoWindow = true,
-			RedirectStandardOutput = true,
-			RedirectStandardError = true,
-		};
-		foreach (String argument in arguments)
-		{
-			start.ArgumentList.Add(argument);
-		}
-
-		using Process process = Process.Start(start)
-			?? throw new InvalidOperationException($"Fixture could not be staged: '{fileName}' did not start.");
-		String error = process.StandardError.ReadToEnd();
-		String output = process.StandardOutput.ReadToEnd();
-		process.WaitForExit();
-
-		if (process.ExitCode != 0)
-		{
-			throw new InvalidOperationException(
-				$"Fixture could not be staged: '{fileName} {String.Join(' ', arguments)}' exited {process.ExitCode}: {error}{output}");
-		}
-	}
-
-	/// <summary>
 	/// Claims a free drive letter with <c>subst</c> for the life of the test and releases it after. A letter
 	/// that cannot be claimed throws: the test fails, it does not pass with nothing asserted.
 	/// </summary>
@@ -429,7 +363,7 @@ public sealed class WorkspacePathGuardTests
 					continue;
 				}
 
-				Run("subst", $"{letter}:", target);
+				LinkFixtures.Run("subst", $"{letter}:", target);
 				if (!Directory.Exists($"{letter}:\\"))
 				{
 					throw new InvalidOperationException($"Fixture could not be staged: subst {letter}: did not appear.");
@@ -447,7 +381,7 @@ public sealed class WorkspacePathGuardTests
 
 		public void Dispose()
 		{
-			Run("subst", this.Letter, "/D");
+			LinkFixtures.Run("subst", this.Letter, "/D");
 		}
 	}
 }
