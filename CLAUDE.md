@@ -32,7 +32,8 @@ The tree is in three states, and the middle one is the one to watch
   database; embedding and retrieval telemetry served at `GET /metrics`.
 - **Built but unreachable** — retrieval (`IRetrievalQuery`, two backends) and the context reducer
   are composed in `Program.cs` and called by nothing on the request path. Every vector written is
-  one the running application never reads.
+  one the running application never reads. The containment guard the file tools will resolve every
+  path through (`WorkspacePathGuard`, `SPEC-101`) is built and tested, and no tool exists to hold it.
 - **Not built** — the filesystem tools, the agent and provider adapter, the chat surface, the
   conversation database. The parts of the architecture below that describe them are intent.
 
@@ -104,9 +105,10 @@ RELEVANCE_FLOOR_BENCH=1 dotnet test --filter "FullyQualifiedName~RelevanceFloorB
 `docs/benchmarks/`. **Never carry a number forward** — a commit stating a figure re-measures both
 sides on the tree it produces, and compares trees from the same kind of directory.
 
-**CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)) builds and tests in Release on
-`ubuntu-latest` for every push and PR to `main`. Development is on Windows, so CI is where
-path-separator and case-sensitivity mistakes surface.
+**CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)) builds and tests in Release on both
+`ubuntu-latest` and `windows-latest` for every push and PR to `main`. Development is on Windows, so
+the Linux job is where path-separator and case-sensitivity mistakes surface; the Windows job runs
+the tests whose subject exists only there (`subst` drives, hard-link names) instead of skipping them.
 
 NuGet versions are managed centrally in `Directory.Packages.props` (Central Package Management) —
 **do not put versions in `.csproj` files**. `NuGet.config` maps every package to nuget.org and
@@ -280,7 +282,7 @@ half-built index: results from a partial index are indistinguishable from genuin
 ones. A query vector is compared only against vectors sharing its model version — scoring
 across embedding spaces is meaningless.
 
-### Tools — not built
+### Tools — guard built, tools not built
 
 File tools are split into two holders — **read** (`InspectDirectory`, `ReadFile`, `Retrieve`,
 `FindFiles`) and **mutation** (`Create`, `Update`, `ReplaceLines`, `Delete`). The split is
@@ -288,9 +290,20 @@ the contract, not file layout: it is what lets a roster grant an agent the abili
 the folder without the ability to change it, so "which agent can destroy data" is answerable
 by reading one line of configuration. There is no shell-execution tool.
 
-Every caller-supplied path resolves through a containment guard that refuses anything
-outside the workspace root, including a reparse point at any path segment. The metadata
-folder is refused for **every** operation, reads included, and hidden from listings.
+Every caller-supplied path resolves through a containment guard (`WorkspacePathGuard`, `SPEC-101`
+— built, held by nothing yet) that refuses anything outside the workspace root. The textual rule
+decides on the normalised full path, and then each way it can be fooled is closed: a symbolic link
+or junction at **any** segment below the root, a file whose NTFS hard-link names include one outside
+the root, and a `subst` drive letter standing for a path that is. Only a *redirecting* reparse point
+is refused — a cloud-file placeholder redirects nothing, and refusing it would make a synced folder
+unusable while closing no escape. The `subst` check resolves one level; a chain or an unrecognised
+device target leaves the textual rule deciding and puts a note on the result, which a tool passes
+on. The metadata folder is refused for **every** operation, reads included, and hidden from
+listings. Each holder gets its own guard instance over the same root.
+
+A containment test whose fixture cannot be staged — a junction not created, a `subst` letter not
+claimed — throws and fails; the `subst` cases exist only on Windows and are reported as skipped
+elsewhere, never as passed.
 
 Mutations write through a temp file and a **retrying rename**, never an in-place write: an
 in-place write holds a handle the indexer's share-`Read` opens collide with, and a blocked

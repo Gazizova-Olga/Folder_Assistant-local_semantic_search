@@ -9,7 +9,14 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    # Both, on purpose. Development is on Windows, so Linux is where path-separator and
+    # case-sensitivity mistakes surface; Windows is where the tests whose subject exists only
+    # there (subst drives, hard-link names) run instead of being reported as skipped.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4

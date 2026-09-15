@@ -30,6 +30,7 @@ module specifications below it do not each restate them.
 | Spec | Subject |
 |---|---|
 | [SPEC-100](SPEC-100-conversation-orchestration.md) | Conversation orchestration |
+| [SPEC-101](SPEC-101-file-tools.md) | File tools and their containment |
 | [SPEC-110](SPEC-110-rag-retrieval.md) | Retrieval |
 | [SPEC-120](SPEC-120-rag-indexing.md) | Indexing |
 | [SPEC-130](SPEC-130-persistence.md) | Persistence |

@@ -56,9 +56,9 @@ flowchart TB
         snippet["Snippet verification<br/>against chunk_hash"]
     end
 
-    subgraph tools["Tools — Phase A, SPEC-101 to write"]
+    subgraph tools["Tools — Phase A, SPEC-101"]
         direction LR
-        guard["WorkspacePathGuard<br/>containment, reparse points, metadata folder"]
+        guard["WorkspacePathGuard<br/>containment, links, hard links, subst, metadata folder"]
         readt["Read tools<br/>InspectDirectory · ReadFile · Retrieve · FindFiles"]
         textsearch["SearchText<br/>index-independent, bounded four ways"]
         about["FindFilesAbout<br/>file-level semantic, same seams"]
@@ -121,8 +121,8 @@ flowchart TB
 
     class root,config,metrics,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
     class profiles defect
-    class cosine,vecq,floor,reducer built
-    class convdb,snippet,guard,readt,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard built
+    class convdb,snippet,readt,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -150,6 +150,17 @@ composition without a caller.
 | §10 — a removal queued before the file came back is retired without ending the row it has since taken again | `indexer` | **Landed** 2026-09-15 |
 | §5.1 **1** — the default profile retrieves better than chance | `profiles` | Queued |
 | §5.1 **7** — SPEC-000 stops claiming an agent and a closed network | spec only | Queued, Phase D |
+
+## Phase A ledger — containment and tools
+
+| Item | Block | State |
+|---|---|---|
+| **A1** — every caller-supplied path resolves through one containment guard: outside the root, a link or junction at any segment, a hard link named outside the root, a `subst` letter for a path that is, and the metadata folder are refused; SPEC-101 written with it | `guard` | **Landed** 2026-09-15 |
+| **A2** — read tools | `readt` | Queued |
+| **A3** — `SearchText` | `textsearch` | Queued |
+| **A4** — `FindFilesAbout` through the retrieval seams | `about` | Queued |
+| **A5** — mutation tools | `mutate` | Queued |
+| **A6** — text extraction registry | `extract` | Queued |
 
 ## The gap, stated plainly
 
