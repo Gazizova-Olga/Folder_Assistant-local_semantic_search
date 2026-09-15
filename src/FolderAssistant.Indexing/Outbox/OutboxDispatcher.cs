@@ -37,7 +37,7 @@ public sealed record OutboxDispatcherOptions
 /// Delivers queued changes to the embedding side, at least once, one file at a time per file.
 ///
 /// <para>
-/// Three rules make the log trustworthy, and each is tested by breaking it.
+/// Four rules make the log trustworthy, and each is tested by breaking it.
 /// </para>
 ///
 /// <para>
@@ -49,6 +49,13 @@ public sealed record OutboxDispatcherOptions
 /// <para>
 /// <strong>Marking a file delivered is conditional on the content that was delivered.</strong> See
 /// <see cref="IOutboxStore.TryMarkSyncedAsync"/>.
+/// </para>
+///
+/// <para>
+/// <strong>A removal is delivered only while the file is still gone.</strong> A file that came back before
+/// its queued removal was delivered is recorded again, with the upsert that re-embeds it queued behind the
+/// removal. Delivered anyway, the removal would clear the file's rows out from under that upsert, which
+/// would find nothing recorded and skip — leaving the file absent until a periodic pass rediscovered it.
 /// </para>
 ///
 /// <para>
@@ -231,7 +238,7 @@ public sealed class OutboxDispatcher
         {
             if (op.Kind == DeliveryKind.Delete)
             {
-                await _vectorizer.DeleteAsync(FileIdentity.For(op.RelativePath), cancellationToken).ConfigureAwait(false);
+                await DeleteAsync(op, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -248,6 +255,22 @@ public sealed class OutboxDispatcher
         {
             await RecordFailureAsync(op, ex, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private async Task DeleteAsync(OutboxOp op, CancellationToken cancellationToken)
+    {
+        // Recorded again since the removal was queued: the file came back, and the store queued the upsert
+        // that re-embeds it behind this operation. The removal has been overtaken and delivers nothing. A
+        // return landing between this read and the embedding side ending the row is not covered here; that
+        // window is one store round-trip, not an embed.
+        DeliveryRecord? present = await _store.ReadForDeliveryAsync(op.RelativePath, cancellationToken).ConfigureAwait(false);
+
+        if (present is not null)
+        {
+            return;
+        }
+
+        await _vectorizer.DeleteAsync(FileIdentity.For(op.RelativePath), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task UpsertAsync(OutboxOp op, CancellationToken cancellationToken)

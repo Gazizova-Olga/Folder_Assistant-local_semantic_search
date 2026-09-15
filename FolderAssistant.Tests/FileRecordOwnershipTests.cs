@@ -101,6 +101,45 @@ public sealed class FileRecordOwnershipTests
 	}
 
 	/// <summary>
+	/// A removal queued before the file came back must not end the row the file has since taken again.
+	///
+	/// <para>
+	/// The store records a restored file as active with its mark cleared and queues the upsert that
+	/// re-embeds it, behind the removal already queued. Delivered anyway, the removal ended the row and
+	/// took the chunks with it; the upsert then found nothing recorded and skipped, and the file was
+	/// absent from every search until a periodic pass rediscovered it. Plausible during a long startup
+	/// backlog, and every count looked right throughout.
+	/// </para>
+	/// </summary>
+	[Fact]
+	public async Task A_Removal_Delivered_After_The_File_Came_Back_Leaves_It_Indexed()
+	{
+		using TempFolder folder = new();
+		String path = folder.Combine("notes.md");
+		String databasePath = Bootstrap(folder);
+
+		Byte[] content = Encoding.UTF8.GetBytes("the ferry timetable changed the week the new pier opened");
+		String hash = Hash(content);
+		await File.WriteAllBytesAsync(path, content);
+
+		FolderIndexStore store = new(databasePath);
+		await store.ApplyAsync([Change("notes.md", FileDelta.Added, hash, content.Length)]);
+		OutboxDrain.Deliver(folder.Path, databasePath, Config).Should().Be(1);
+
+		// Removed, then back before the removal was delivered: the front end records both, in this order.
+		File.Delete(path);
+		await store.ApplyAsync([new ReconciledChange("notes.md", FileDelta.Removed, null)]);
+		await File.WriteAllBytesAsync(path, content);
+		await store.ApplyAsync([Change("notes.md", FileDelta.Added, hash, content.Length)]);
+
+		OutboxDrain.Deliver(folder.Path, databasePath, Config).Should().Be(2, "the removal, and the upsert behind it");
+
+		Row row = ReadRow(databasePath, "notes.md");
+		row.LastSyncedHash.Should().Be(hash, "the upsert queued for the restored file embedded it");
+		ChunkCount(databasePath, row.FileId).Should().BePositive("its chunks hang from the row it has now");
+	}
+
+	/// <summary>
 	/// The pass records the folder through the store and then says what it embedded; it writes no row
 	/// of its own. The deliveries the record queued find their work done, so a cold start costs one
 	/// embed per file and not two.
@@ -182,6 +221,16 @@ public sealed class FileRecordOwnershipTests
 			reader.GetString(1),
 			reader.IsDBNull(2) ? null : reader.GetString(2),
 			reader.IsDBNull(3) ? null : reader.GetString(3));
+	}
+
+	private static Int64 ChunkCount(String databasePath, String fileId)
+	{
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
+		using SqliteCommand command = connection.CreateCommand();
+		command.CommandText = "SELECT COUNT(*) FROM chunk_manifest WHERE file_id = $fileId;";
+		command.Parameters.AddWithValue("$fileId", fileId);
+
+		return (Int64)command.ExecuteScalar()!;
 	}
 
 	/// <summary>Counts the embed calls it passes through.</summary>

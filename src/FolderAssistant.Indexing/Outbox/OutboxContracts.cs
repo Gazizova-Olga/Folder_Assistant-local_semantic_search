@@ -68,7 +68,11 @@ public interface IOutboxStore
     /// </summary>
     Task<IReadOnlyList<OutboxOp>> ClaimDueAsync(int max, DateTimeOffset now, CancellationToken cancellationToken);
 
-    /// <summary>The file behind an upsert, or <see langword="null"/> if it is no longer recorded.</summary>
+    /// <summary>
+    /// The file as currently recorded, or <see langword="null"/> if it is not recorded as present. Read
+    /// before an upsert for what to deliver, and before a delete to tell whether the file has come back
+    /// since its removal was queued — a removal is deliverable only while the record it came from is gone.
+    /// </summary>
     Task<DeliveryRecord?> ReadForDeliveryAsync(string relativePath, CancellationToken cancellationToken);
 
     /// <summary>

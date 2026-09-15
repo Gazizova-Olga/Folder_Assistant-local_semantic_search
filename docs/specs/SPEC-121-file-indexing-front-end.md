@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.17.0 |
+| Version | 0.18.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-14 |
+| Last updated | 2026-09-15 |
 
 ## Purpose
 
@@ -338,6 +338,17 @@ together or out of order, can leave content embedded for a file that no longer e
 at once defaults to one, because each delivery is a round trip into a single backend and what that backend
 can take in parallel is a property of the backend.
 
+**A removal is delivered only while the file is still gone.** The store marks a removed file's row and
+queues its removal; a file that comes back before that removal is delivered is recorded active again, its
+mark cleared, with the upsert that re-embeds it queued behind the removal. So before delivering a removal
+the dispatcher asks the store whether the file is recorded, and retires the operation untouched when it
+is. Delivered anyway, the removal ended the row the file had since taken again and took its chunks with
+it; the upsert behind it found nothing recorded and skipped; and the file was absent from every search
+until a periodic pass rediscovered it — plausible during a long startup backlog, and silent throughout.
+A return landing between that question and the embedding side ending the row is not covered: the window
+is one store round-trip rather than an embed, and closing it means the row's end being conditional on the
+row still being marked gone, which is a statement for the side that ends it.
+
 **Recording a file as delivered is conditional on the content that was delivered.** A delivery is a round
 trip, and the file can be rewritten while it happens. The dispatcher records the hash it read before
 delivering, and the store accepts it only if the file's recorded content is still that hash. Writing the
@@ -659,6 +670,11 @@ row an operator would read: a generator that never answers ends as an operation 
 the embedder's deadline, with `TimeoutException` recorded against it and the file unmarked; and an
 unfitted corpus-fitted embedder ends the same way, with the model named in the error and nothing
 written under the file.
+
+A removal overtaken by the file's return is asserted twice. Against the in-memory outbox: the removal is
+retired without reaching the embedding side, and the upsert queued behind it is delivered. Against the
+real store and bridge: the file's row and chunks are there afterwards with its mark set, which is the
+assertion the defect failed, since the delivered removal ended the row.
 
 The ownership of the file table is asserted against a real store and a real dispatcher, in three parts.
 A record that moves on while a delivery holds its embed is not reverted by that delivery, its stale

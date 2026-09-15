@@ -56,6 +56,36 @@ public sealed class OutboxDispatcherTests
 	}
 
 	/// <summary>
+	/// The file came back between its removal being queued and delivered, so the store records it again and
+	/// has queued the upsert that re-embeds it behind the removal. Delivering the removal now would clear the
+	/// file's rows out from under that upsert, which would find nothing recorded and skip — and the file would
+	/// be absent until a periodic pass rediscovered it.
+	/// </summary>
+	[Fact]
+	public async Task A_Delete_For_A_File_Recorded_Again_Since_It_Was_Queued_Delivers_Nothing()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("note.md"), "the content");
+
+		InMemoryOutbox outbox = new();
+		outbox.Record("note.md", "hash-1", syncedHash: "hash-1");
+		outbox.Remove("note.md");
+		long delete = outbox.Enqueue("note.md", DeliveryKind.Delete);
+		outbox.Record("note.md", "hash-1");
+		long upsert = outbox.Enqueue("note.md", DeliveryKind.Upsert);
+
+		ScriptedVectorizer vectorizer = new();
+
+		await Dispatcher(folder, outbox, vectorizer).DrainOnceAsync(CancellationToken.None);
+
+		vectorizer.Deletes.Should().BeEmpty("the file is recorded again, so its removal has been overtaken");
+		vectorizer.Upserts.Should().ContainSingle().Which.DocId.Should().Be(FileIdentity.For("note.md"));
+		outbox.StateOf(delete).Should().Be(OpState.Done);
+		outbox.StateOf(upsert).Should().Be(OpState.Done);
+		outbox.LastSyncedHash("note.md").Should().Be("hash-1");
+	}
+
+	/// <summary>
 	/// Delivery is at-least-once, so a redelivery must cost nothing: content already delivered is not sent
 	/// again.
 	/// </summary>
@@ -140,13 +170,19 @@ public sealed class OutboxDispatcherTests
 		outbox.Enqueue("note.md", DeliveryKind.Upsert);
 		outbox.Enqueue("note.md", DeliveryKind.Delete);
 
-		// Each delete stands for the file being rewritten, so the upsert after it has new content to deliver
-		// rather than being skipped as already delivered — which is a different rule, not this one.
+		// The record moves between deliveries the way the store moves it: the file is removed after each
+		// upsert and comes back with new content after each delete. Otherwise the delete after an upsert
+		// would find the file still recorded, and the upsert after a delete would find its content already
+		// delivered — each skipped by a different rule than the one under test.
 		int version = 1;
 		ConcurrencyProbe probe = new();
 		ScriptedVectorizer vectorizer = new()
 		{
-			OnUpsert = (_, _) => probe.Run("upsert"),
+			OnUpsert = async (_, _) =>
+			{
+				await probe.Run("upsert");
+				outbox.Remove("note.md");
+			},
 			OnDelete = async _ =>
 			{
 				await probe.Run("delete");
@@ -627,6 +663,18 @@ public sealed class OutboxDispatcherTests
 			{
 				string? kept = syncedHash ?? _files.GetValueOrDefault(relativePath)?.LastSyncedHash;
 				_files[relativePath] = new DeliveryRecord(new FileRecord(relativePath, contentHash, size, createdUtc), kept);
+			}
+		}
+
+		/// <summary>
+		/// The record is gone, as after a removal is recorded: nothing is read for the path, and a record
+		/// written for it afterwards carries no mark.
+		/// </summary>
+		public void Remove(string relativePath)
+		{
+			lock (_gate)
+			{
+				_files.Remove(relativePath);
 			}
 		}
 
