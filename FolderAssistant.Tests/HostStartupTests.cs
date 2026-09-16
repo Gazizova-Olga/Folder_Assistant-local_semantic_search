@@ -321,6 +321,31 @@ public sealed class HostStartupTests
 	}
 
 	/// <summary>
+	/// The mutation holder's wiring: it has to be built over the analyzed folder — a guard over any other
+	/// root would write somewhere the index never looks — and refuse the index's own folder, and it has to
+	/// be a holder of its own, resolvable apart from the read tools, or a roster could not grant one
+	/// without the other.
+	/// </summary>
+	[Fact]
+	public async Task The_Mutation_Tools_Write_Into_The_Analyzed_Folder_Through_Their_Own_Guard()
+	{
+		using TempFolder folder = new();
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"));
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+
+		MutationTools tools = host.Services.GetRequiredService<MutationTools>();
+		FileCreated created = await tools.Create("written.md", "by the tool");
+		Func<Task> metadata = () => tools.Create(Path.Combine(".folderassistant", "x.md"), "no");
+
+		created.Path.Should().Be("written.md");
+		(await File.ReadAllTextAsync(folder.Combine("written.md"))).Should().Be("by the tool");
+		await metadata.Should().ThrowAsync<WorkspaceContainmentException>();
+		host.Services.GetRequiredService<ReadTools>().Should().NotBeSameAs(tools);
+	}
+
+	/// <summary>
 	/// The promise the default makes: an Ollama that is not there is a failed index with a message that
 	/// says what to do, never a quietly different embedder and never an index that reports building for
 	/// ever. Pinned against a port nothing listens on, so it holds on a machine that does run Ollama.

@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Status | Draft — containment, the read tools, the text search and the file-level semantic search written and implemented; mutation not yet |
-| Version | 0.4.0 |
+| Status | Draft — containment, the read tools, the text search, the file-level semantic search and the mutation tools written and implemented |
+| Version | 0.5.0 |
 | Owner | Tools |
 | Last updated | 2026-09-16 |
 
@@ -17,7 +17,7 @@ cannot reach anything outside the folder, and cannot touch the index's own metad
 **In scope**
 
 - The containment rule every caller-supplied path is resolved through, and what it refuses.
-- The read tools, the text search and the mutation tools, once they exist.
+- The read tools, the text search, the file-level semantic search and the mutation tools.
 
 **Out of scope**
 
@@ -28,8 +28,9 @@ cannot reach anything outside the folder, and cannot touch the index's own metad
 - How a tool failure is reported to the model. The facade that turns an exception into a string the
   model must report belongs to the agent layer, and is not built.
 
-This version writes the containment rule, the four read tools, the text search and the file-level
-semantic search. The mutation tools are not built; they are named and not described.
+This version writes the containment rule, the four read tools, the text search, the file-level
+semantic search and the four mutation tools. All of it is built and registered; nothing at runtime
+resolves it yet.
 
 ## The rule
 
@@ -284,6 +285,79 @@ Not applied here, deliberately: the low-confidence screen and the token-budget r
 the passage-level search tool, which returns text and has a budget to spend; this tool returns names and
 scores, and the score is there so a caller can see a weak best match for what it is.
 
+## The mutation tools
+
+A third holder, `MutationTools`, over a second guard of its own (see *Two instances, one type*). Four
+methods: `Create`, `Update`, `ReplaceLines`, `Delete`. Every path goes through the holder's guard first,
+a hard failure is the ordinary exception, the result carries the guard's note when the physical check
+could not complete, and paths are shown as the read tools show them. The rules that hold across all four:
+
+- **Every write is a temporary file and a rename, never a write in place.** The temporary file is
+  written beside the target, named `<file>.<guid>.tmp` — an ending the indexing front end never reports
+  ([SPEC-121](SPEC-121-file-indexing-front-end.md)), so the transient costs no index pass — and renamed
+  over the target. A write in place holds a handle the indexer's share-read opens collide with, and a
+  reader that opened the file half-way through would read a torn document; a rename is one step, and the
+  file is always either the old whole or the new whole. A write that fails past its retries, or is
+  cancelled, leaves no temporary file behind.
+- **A rename and a delete are retried; a read is not.** A file the indexer is delivering is open
+  share-read, which denies a replace over it and a delete of it. The failure is reported as
+  `IOException` or `UnauthorizedAccessException` depending on the platform, so both are retried:
+  **6** attempts, the first delay **25 ms**, doubling — under a second in all, which outlasts an indexer
+  read and not an editor's hold. Past the last attempt the exception is the caller's to report. Reads
+  open share-read once, as the read holder's do: a read that fails has met a genuine external writer.
+- **A completed mutation is reported to the indexing front end with its own kind** — created, changed
+  or deleted, one report per file — through `IIndexChangeNotifier`, so the index follows an edit this
+  process made without waiting to rediscover it. The kind is load-bearing: a create and a delete inside
+  one window annihilate, and a create reported as a change reaches the same end state only by luck
+  (SPEC-121). The report is **advisory**: one that fails — including one refused because the caller's
+  token was cancelled after the write had happened — is said in the result's note, and never turns a
+  completed write into a reported failure.
+- **Encoding and line endings are the file's.** A rewrite decodes UTF-8, keeps a byte-order mark it
+  found, and writes the same way. `Update` touches nothing but the occurrences; `ReplaceLines` adds a
+  terminator only in the file's own form, taken from its first line ending. A new file is written as
+  UTF-8 without a mark.
+- **What the readers refuse, the rewriters refuse**: a file above 16 MB and a file whose first 8 KB
+  hold a NUL byte, through the one check both holders share (`TextFile`).
+- **Nothing is changed silently.** An `Update` whose text does not occur throws rather than reporting
+  zero replacements, because the caller asked for a change and none happened; a `ReplaceLines` past
+  the end of the file throws rather than appending.
+
+### `Create(path, content)`
+
+Writes a new file with the content, creating missing parent directories. An existing file throws —
+creating over a file is an update by another name, and would be reported with the wrong kind — and so
+does a directory. Reported as created; the result carries the bytes written.
+
+### `Update(path, find, replace, ignoreCase, wholeWord)`
+
+Replaces every occurrence of a literal — not an expression — in one pass, and returns the count.
+`ignoreCase` compares ordinally without case; `wholeWord` goes through the same `WordBoundary` rule
+the text search uses, so the two tools cannot mean different things by it. Matches do not overlap, and
+a replacement is never searched again. The replacer keeps **two cursors** — where the next search
+starts, and how much of the original has been copied to the output — and a candidate the word rule
+rejects advances the first and not the second; had it moved both, the text between would be dropped
+silently and the count would still be right. An empty `find` throws; an empty `replace` removes the
+occurrences.
+
+### `ReplaceLines(path, startLine, endLine, text)`
+
+Replaces an inclusive 1-based range, numbered as `ReadFile` numbers lines, with the text verbatim. The
+range runs from the first character of `startLine` past the terminator of `endLine`; the text takes its
+place, and gains the file's own terminator when the range had one and the text ends in none, so what
+follows stays on its own line. Empty text removes the lines, terminator included. The last line of a
+file with no terminator is replaced without adding one. A range past the end throws naming the file's
+line count; `startLine` below 1, or `endLine` below `startLine`, throws. The offset arithmetic is
+`LineRangeLocator`, tested on its own for `\n`, `\r\n`, a lone `\r`, no trailing newline, an empty file
+and a single line, because a replacement one character off still produces a file that reads plausibly.
+The result says how many lines were removed, how many inserted, and how many the file has now.
+
+### `Delete(path)`
+
+Deletes a file, or a directory with everything under it. The root itself is refused. A directory is
+listed before anything is removed, and one that holds a symbolic link or junction anywhere under it is
+refused whole — every tool refuses links, and a recursive delete that met one would have to decide what
+it meant. One deletion is reported per file, and the result counts them.
+
 ## Contracts
 
 ```csharp
@@ -351,6 +425,44 @@ internal sealed class SearchTools
 
 internal sealed record FileRelevance(String Path, Double Score, Int32 MatchingChunks);
 internal sealed record FilesAbout(String Query, IReadOnlyList<FileRelevance> Files, Boolean Truncated, String? Note);
+
+internal sealed class MutationTools
+{
+	MutationTools(WorkspacePathGuard guard, IIndexChangeNotifier notifier);
+	Task<FileCreated> Create(String path, String content, CancellationToken cancellationToken = default);
+	Task<FileUpdated> Update(String path, String find, String replace, Boolean ignoreCase = false,
+		Boolean wholeWord = false, CancellationToken cancellationToken = default);
+	Task<LinesReplaced> ReplaceLines(String path, Int32 startLine, Int32 endLine, String text,
+		CancellationToken cancellationToken = default);
+	Task<FileDeleted> Delete(String path, CancellationToken cancellationToken = default);
+}
+
+internal sealed record FileCreated(String Path, Int64 Bytes, String? Note);
+internal sealed record FileUpdated(String Path, Int32 Replacements, String? Note);
+internal sealed record LinesReplaced(String Path, Int32 LinesRemoved, Int32 LinesInserted, Int32 TotalLines, String? Note);
+internal sealed record FileDeleted(String Path, Int32 FilesDeleted, String? Note);
+
+internal static class LineRangeLocator
+{
+	static Int32 CountLines(String text);
+	static LineSpan Locate(String text, Int32 startLine, Int32 endLine);   // throws ArgumentOutOfRangeException
+	static String DetectNewLine(String text);
+}
+
+internal readonly record struct LineSpan(Int32 Start, Int32 End, Boolean EndsWithTerminator);
+
+internal static class TextReplacer
+{
+	static String Replace(String text, String find, String replacement, Boolean ignoreCase, Boolean wholeWord, out Int32 count);
+}
+
+internal static class TextFile
+{
+	const Int64 MaxBytes;                                            // 16 MB
+	const Int32 SniffBytes;                                          // 8 KB
+	static FileInfo Existing(GuardedPath resolved, String shown);   // throws
+	static StreamReader OpenText(FileInfo file);                    // share-read, no retry
+}
 ```
 
 The search bounds, as constants on `SearchTools`: `MaxFiles` 20, `CandidatesPerFile` 5,
@@ -360,7 +472,10 @@ The bounds, as constants on `ReadTools`: `MaxEntries` 500, `MaxLinesPerRead` 400
 `MaxCharsPerRead` 64,000, `MaxRetrieveChars` 200,000, `MaxFileBytes` 16 MB, `MaxMatches` 200,
 `MaxExamined` 100,000, `SniffBytes` 8 KB, `MaxSearchLines` 200, `MaxSearchChars` 64,000,
 `MaxSearchLineChars` 400, `DefaultSearchDeadline` 10 s. The search's file-size bound is the
-constructor argument, not a constant, because it is the scanner's.
+constructor argument, not a constant, because it is the scanner's. `MaxFileBytes` and `SniffBytes`
+are `TextFile`'s, which both file holders share; `ReadTools` re-exposes them under those names.
+
+The mutation bounds, as constants on `MutationTools`: `RetryAttempts` 6, `RetryFirstDelay` 25 ms.
 
 ## Sharp edges
 
@@ -371,8 +486,19 @@ constructor argument, not a constant, because it is the scanner's.
   refused. It cannot reach outside the root; it can hold content a listing does not show.
 - **Hard links off Windows** are allowed without inspection. The check has one implementation, on
   the platform the tree is developed on; a Linux host with a hard link into the root from outside
-  it would read that file. Recorded rather than closed, because the tools do not yet exist to make
-  the exposure real.
+  it would read that file. A rewrite does not reach the outside name: the rename replaces the
+  directory entry inside the root and the other name keeps the old content, and a delete unlinks the
+  inside name only. Recorded rather than closed.
+- **A rewrite races an external writer.** `Update` and `ReplaceLines` read the file, compute, and
+  rename over it; an external write that lands between the read and the rename is overwritten, and
+  the tool cannot tell. The window is one call wide, and the loser is a writer with access to the
+  folder already — the same actor the containment guard does not protect against.
+- **A directory delete that fails part-way is partly done.** The retries finish it in the ordinary
+  case; past them the exception surfaces with some files gone and none of them reported, and the
+  index finds them at its next reconcile.
+- **A report after cancellation is dropped, and the write stands.** A caller whose token is cancelled
+  once the rename has happened gets its result with a note, not an exception: the file changed, and
+  saying otherwise would be the lie.
 - **The text search does not sniff for binary content.** It trusts the scanner's extension list, as
   the index does; a binary file carrying a text extension is read line by line and any NUL-bearing
   line that happens to match is returned. The per-line window and the payload bound cap what that
@@ -460,6 +586,43 @@ The file-level semantic search, over a query that answers with fixed hits:
   fails the fold test — a first fixture that listed each file's best passage first let that mutation
   live, which is why the fixture says what it does.
 
+The mutation tools, their arithmetic first and the tools over it, asserted on the bytes left on disk
+and the reports made — never through an index that would still look right after a torn write:
+
+- The locator as a table: the line count for `\n`, `\r\n`, a lone `\r`, a trailing terminator, an
+  empty text and blank lines; the span offsets for a middle range, a CRLF range, the last line with and
+  without a terminator, a single-line text and the whole text; a range past the end throws naming the
+  count and the parameter; the detected newline is the text's first, or the platform's.
+- The replacer as a table: every occurrence replaced and counted, case, whole word, an overlap
+  (`aa` in `aaa` once), a replacement containing the pattern not re-matched, an empty replacement,
+  and — its own test — a candidate the word rule rejects between two matches, whose text must reach
+  the output.
+- The tools: `Create` writes the bytes, makes the parents, reports a creation with the full path and
+  leaves no temporary file; it refuses an existing file, a directory, a path outside and the metadata
+  folder with nothing written and nothing reported. `Update` replaces and counts, keeps a byte-order
+  mark and CRLF endings, throws on no occurrence with the file's write time unchanged and nothing
+  reported, passes both flags through, and refuses a missing file, a NUL-bearing file and an empty
+  pattern. `ReplaceLines` keeps the following line on its own line, uses the file's own ending, adds
+  none after a last line that had none, removes lines for empty text, replaces a single-line file
+  whole, and throws for a range past the end, an empty file, a zero start and an inverted range with
+  the file unchanged. `Delete` removes a file and reports it, removes a directory and reports each
+  file in it, and refuses the root, a missing path and a directory holding a link with nothing removed
+  on either side of the link.
+- A write and a delete wait out a reader holding the file share-read. On Windows that is the
+  property: the rename and the delete are denied until the handle closes, and the test holds it past
+  the first retries. Elsewhere both succeed at once and the test asserts the same outcome.
+- A failing report is a note on each of the three results, with the mutation done. A write cancelled
+  before it starts throws, changes nothing and leaves no temporary file.
+- A host test resolves the holder from the real composition root, writes into the analyzed folder
+  through it, is refused the metadata folder, and is a different object from the read holder.
+- Mutation kills, each restored byte-for-byte: the copy cursor moved along with the scan cursor on a
+  rejected candidate fails five tests (the two-cursor test, three whole-word rows and the tool's
+  flag test); the retry attempts set to one fails exactly the two held-reader tests; `\r\n` unpaired
+  in the locator fails four (two count rows, the CRLF span row and the tool's line-ending test); the
+  appended terminator dropped fails exactly the two `ReplaceLines` tests that keep a following line;
+  the link refusal turned into a count fails exactly the link test. Two first attempts only failed to
+  compile under the zero-warning gate and were discarded as non-evidence.
+
 ## Open questions
 
 - Whether an application-execution link (the reparse tag Windows Store and WSL use for a
@@ -476,6 +639,12 @@ The file-level semantic search, over a query that answers with fixed hits:
 
 ## Changelog
 
+- **0.5.0** (2026-09-16) — the mutation tools, `Create`, `Update`, `ReplaceLines` and `Delete`, in
+  their own holder over a second guard: every write a temporary file and a retried rename, every
+  delete retried, reads not; a literal replace with two cursors and the shared whole-word rule; a line
+  range located by one directly tested rule; each completed mutation reported to the front end with
+  its own kind, advisorily. The file readers' size bound and sniff moved to `TextFile`, shared by both
+  holders. Four sharp edges added.
 - **0.4.0** (2026-09-16) — the file-level semantic search, `FindFilesAbout`, in its own holder over
   the composed retrieval query: over-fetched passages folded into files scored by their best passage,
   bounded and said; refusal passes through; no ranking of its own. The scope line on semantic search

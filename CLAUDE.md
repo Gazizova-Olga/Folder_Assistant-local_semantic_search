@@ -33,11 +33,12 @@ The tree is in three states, and the middle one is the one to watch
 - **Built but unreachable** — retrieval (`IRetrievalQuery`, two backends) and the context reducer
   are composed in `Program.cs` and called by nothing on the request path. Every vector written is
   one the running application never reads. The containment guard (`WorkspacePathGuard`), the read
-  tools and text search over it (`ReadTools`) and the file-level semantic search over the wrapped
-  query (`SearchTools`, all `SPEC-101`) are built, tested and registered, and nothing resolves them:
-  the agent that would reflect the holders' methods into tools does not exist.
-- **Not built** — the mutation tools, the agent and provider adapter, the chat surface, the
-  conversation database. The parts of the architecture below that describe them are intent.
+  tools and text search over it (`ReadTools`), the mutation tools over a second guard
+  (`MutationTools`) and the file-level semantic search over the wrapped query (`SearchTools`, all
+  `SPEC-101`) are built, tested and registered, and nothing resolves them: the agent that would
+  reflect the holders' methods into tools does not exist.
+- **Not built** — the agent and provider adapter, the chat surface, the conversation database. The
+  parts of the architecture below that describe them are intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -300,7 +301,7 @@ half-built index: results from a partial index are indistinguishable from genuin
 ones. A query vector is compared only against vectors sharing its model version — scoring
 across embedding spaces is meaningless.
 
-### Tools — guard, read tools, text search and file-level semantic search built, the rest not
+### Tools — guard, both file holders and the search holder built, reached by nothing
 
 The search holder (`SearchTools`) exists beside the read holder and holds `FindFilesAbout`: which files
 are about a topic, each scored by its best passage. It is built over the **wrapped** `IRetrievalQuery`
@@ -317,6 +318,18 @@ facade that turns one into the string the model must report is Phase B. `FindFil
 share one walk that builds its own list, skipping the metadata folder, the scanner's ignored directory
 names and every link, so neither the matcher nor the search touches the live tree. A pattern with no
 separator matches the file name at any depth; that is the form a model reaches for first.
+
+The mutation holder (`MutationTools`) exists: `Create`, `Update`, `ReplaceLines`, `Delete`, over a
+second guard of its own. `Update` is a literal replace in one pass whose replacer keeps the scan
+cursor and the copy cursor apart — a candidate the whole-word rule rejects advances the first and
+not the second, or the text between would be dropped silently with the count still right — and
+throws when the text does not occur, because a change that changed nothing is the silent failure
+this tree exists to refuse. `ReplaceLines` locates an inclusive range through `LineRangeLocator`,
+tested on its own for every line-ending form. A rewrite keeps the byte-order mark and the line
+ending it found. Every completed mutation is reported to the running front end through
+`IIndexChangeNotifier` with its own kind, one report per file, and the report is advisory: one that
+fails is a note on the result, never a failure of a write that happened. Both holders read a file
+through one `TextFile` helper, so they cannot mean different things by "a text file".
 
 `SearchText` reads exactly the files the index does — the scanner's extension list, asked of the
 scanner, and its size bound, passed in from the same configuration value — so a search and the index

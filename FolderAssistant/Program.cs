@@ -143,9 +143,8 @@ internal sealed class Program
 		});
 
 		// The read tools over their own containment guard. Composed and resolved by nothing: the agent
-		// that would reflect the holder's methods into tools does not exist yet. The mutation holder,
-		// when it exists, gets a second guard over the same root — the split is the contract. The text
-		// search takes the scanner's size bound so it reads exactly the files the index does.
+		// that would reflect the holder's methods into tools does not exist yet. The text search takes
+		// the scanner's size bound so it reads exactly the files the index does.
 		builder.Services.AddSingleton(sp =>
 		{
 			AgentConfig config = sp.GetRequiredService<AgentConfig>();
@@ -153,6 +152,19 @@ internal sealed class Program
 			return new ReadTools(
 				new WorkspacePathGuard(config.ResolveAnalyzedFolderPath(), config.Persistence.MetadataFolderName),
 				config.Indexing.MaxTextFileSizeBytes);
+		});
+
+		// The mutation tools over a second guard of their own, over the same root. Two instances rather
+		// than one shared is the split: which holder an agent is granted is what decides whether it can
+		// change the folder, and the guard goes with the holder. Every completed write is reported to the
+		// running front end below, so the index follows an edit this process made without rediscovering it.
+		builder.Services.AddSingleton(sp =>
+		{
+			AgentConfig config = sp.GetRequiredService<AgentConfig>();
+
+			return new MutationTools(
+				new WorkspacePathGuard(config.ResolveAnalyzedFolderPath(), config.Persistence.MetadataFolderName),
+				sp.GetRequiredService<IIndexChangeNotifier>());
 		});
 
 		// The search tools, over the composed retrieval query — the wrapped one, so a file-level search is

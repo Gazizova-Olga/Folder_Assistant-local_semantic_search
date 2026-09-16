@@ -31,9 +31,9 @@ design:
   plausible wrong answer. A search while the first index is still building is refused rather than
   answered from a half-built index; an unknown embedding profile stops the application at startup
   instead of falling back; a scan that finds nothing throws instead of quietly indexing nothing.
-- **Reading is not writing.** The file tools are split into a read holder, which exists, and a
-  mutation holder, which does not yet, so which agent can change data will be answerable from one
-  line of configuration.
+- **Reading is not writing.** The file tools are split into a read holder and a mutation holder,
+  each over its own containment guard, so which agent can change data will be answerable from one
+  line of configuration once there is a roster to grant them.
 
 The full statement of purpose and principles is [SPEC-000](docs/specs/SPEC-000-system-concept.md).
 
@@ -70,10 +70,14 @@ colour-coded.
   each with its best passage's score. It asks the same wrapped retrieval query the passage search
   will, so it is timed by the same instrument and refused by the same readiness check, and adds no
   ranking of its own.
+- The **mutation tools**, in their own holder over a second guard: create a file, replace text in
+  one, replace a line range, delete a file or a directory. Every write is a temporary file and a
+  rename, retried while the indexer holds the file open; every completed change is reported to the
+  index with its own kind, so the index follows the tool's edits without rediscovering them.
 
 **Not built**
 
-- The mutation tools, the agent and provider adapter, the chat surface, the conversation database.
+- The agent and provider adapter, the chat surface, the conversation database.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits and
 read the telemetry**. You cannot yet ask it a question.
@@ -197,8 +201,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about built
-    class convdb,snippet,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate built
+    class convdb,snippet,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

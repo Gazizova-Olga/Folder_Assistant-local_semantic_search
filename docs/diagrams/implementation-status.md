@@ -1,7 +1,7 @@
 # Implementation status
 
 The whole structure the plan converges on, every block coloured by what is true of it now — as of
-2026-09-15. Updated with every commit that moves a block; at the end, every block is green.
+2026-09-16. Updated with every commit that moves a block; at the end, every block is green.
 
 **Five states, not two.** *Built but unreachable* is the category a diagram with only *done* and
 *not done* hides: retrieval is implemented twice over, tested, composed — and it still never runs.
@@ -120,8 +120,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about built
-    class convdb,snippet,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate built
+    class convdb,snippet,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -159,7 +159,7 @@ composition without a caller.
 | **A2** — read tools: listing, numbered line range, bounded whole file, glob over a self-walked list; bounds as constants, a note for every cut, an exception for every hard failure; SPEC-101 0.2.0 | `readt` | **Landed** 2026-09-15 |
 | **A3** — `SearchText`: a literal or regex line scan over the scanner's own extensions and size bound, on the same walk as `FindFiles`; whole-word through one shared rule; bounded by matching lines, matched characters, a deadline and the caller's token, each said in the note; SPEC-101 0.3.0 | `textsearch` | **Landed** 2026-09-15 |
 | **A4** — `FindFilesAbout` in its own search holder over the composed, wrapped retrieval query: over-fetched passages folded into files scored by their best passage, bounded and said, refusal passing through; SPEC-101 0.4.0 | `about` | **Landed** 2026-09-16 |
-| **A5** — mutation tools | `mutate` | Queued |
+| **A5** — mutation tools in their own holder over a second guard: `Create`, `Update`, `ReplaceLines`, `Delete`; every write a temporary file and a retried rename, every delete retried, reads not; each completed mutation reported to the running front end with its own kind, advisory; SPEC-101 0.5.0 | `mutate` | **Landed** 2026-09-16 |
 | **A6** — text extraction registry | `extract` | Queued |
 
 ## The gap, stated plainly

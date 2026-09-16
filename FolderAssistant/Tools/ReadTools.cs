@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Text;
 using FolderAssistant.Indexing;
 
 namespace FolderAssistant.Tools;
@@ -57,10 +56,10 @@ internal sealed class ReadTools
 	internal const Int32 MaxLinesPerRead = 400;
 	internal const Int32 MaxCharsPerRead = 64_000;
 	internal const Int32 MaxRetrieveChars = 200_000;
-	internal const Int64 MaxFileBytes = 16L * 1024 * 1024;
+	internal const Int64 MaxFileBytes = TextFile.MaxBytes;
 	internal const Int32 MaxMatches = 200;
 	internal const Int32 MaxExamined = 100_000;
-	internal const Int32 SniffBytes = 8 * 1024;
+	internal const Int32 SniffBytes = TextFile.SniffBytes;
 	internal const Int32 MaxSearchLines = 200;
 	internal const Int32 MaxSearchChars = 64_000;
 	internal const Int32 MaxSearchLineChars = 400;
@@ -550,48 +549,11 @@ internal sealed class ReadTools
 		}
 	}
 
-	/// <summary>
-	/// The file behind a resolved path, or the exception that says why it cannot be read: not there, a
-	/// directory, above the size bound, or — by its first bytes — not text.
-	/// </summary>
 	private static FileInfo ExistingTextFile(GuardedPath resolved)
-	{
-		FileInfo file = new(resolved.FullPath);
-		if (!file.Exists)
-		{
-			if (Directory.Exists(resolved.FullPath))
-			{
-				throw new FileNotFoundException($"'{Shown(resolved)}' is a directory, not a file.", resolved.FullPath);
-			}
-
-			throw new FileNotFoundException($"'{Shown(resolved)}' is not a file in the workspace.", resolved.FullPath);
-		}
-
-		if (file.Length > MaxFileBytes)
-		{
-			throw new IOException($"'{Shown(resolved)}' is {file.Length:N0} bytes, above the {MaxFileBytes:N0}-byte bound.");
-		}
-
-		Byte[] sniff = new Byte[SniffBytes];
-		Int32 read;
-		using (FileStream stream = new(file.FullName, FileMode.Open, FileAccess.Read, FileShare.Read))
-		{
-			read = stream.Read(sniff, 0, sniff.Length);
-		}
-
-		if (Array.IndexOf(sniff, (Byte)0, 0, read) >= 0)
-		{
-			throw new InvalidDataException($"'{Shown(resolved)}' is not a text file.");
-		}
-
-		return file;
-	}
+		=> TextFile.Existing(resolved, Shown(resolved));
 
 	private static StreamReader OpenText(FileInfo file)
-		=> new(
-			new FileStream(file.FullName, FileMode.Open, FileAccess.Read, FileShare.Read),
-			Encoding.UTF8,
-			detectEncodingFromByteOrderMarks: true);
+		=> TextFile.OpenText(file);
 
 	private static String Shown(GuardedPath resolved)
 		=> resolved.RelativePath.Length == 0 ? "." : resolved.RelativePath;
