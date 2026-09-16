@@ -33,11 +33,13 @@ public sealed class FileSettlerTests
 	}
 
 	/// <summary>
-	/// A writer holding its handle denies the share-<c>Read</c> open, which is how every read on this path
-	/// is made — the file is busy, not broken.
+	/// A writer holding its handle denies the share-<c>Read</c> open on Windows, which is how every read on
+	/// this path is made — the file is busy, not broken. Elsewhere share modes are advisory, the open
+	/// succeeds, and a held file whose size and write time hold still is settled: the second look is the
+	/// only protection there. One test asserting each platform's documented result, never a skip.
 	/// </summary>
 	[Fact]
-	public async Task A_File_Held_By_A_Writer_Is_Busy()
+	public async Task A_File_Held_By_A_Writer_Is_Busy_Where_Share_Modes_Are_Enforced()
 	{
 		using TempFolder folder = new();
 		string path = folder.Combine("held.md");
@@ -47,7 +49,7 @@ public sealed class FileSettlerTests
 
 		SettleResult result = await Settler(betweenLooks: () => { }).SettleAsync(path, CancellationToken.None);
 
-		result.Should().Be(SettleResult.Busy);
+		result.Should().Be(OperatingSystem.IsWindows() ? SettleResult.Busy : SettleResult.Settled);
 	}
 
 	/// <summary>

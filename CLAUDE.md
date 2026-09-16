@@ -240,10 +240,11 @@ Properties worth stating because they are easy to "simplify" away:
   watcher's own events for that file into a second one — leaving write-through *worse* than
   being rediscovered. It is a no-op when nothing is running, because nothing would drain it.
 - **A concurrent writer may delay indexing a file but must never stop it.** Every read
-  opens share-`Read`, and a live write handle denies it, so per-file failures are skipped
-  rather than allowed to abort a pass, a change whose file is busy is retried rather than
-  dropped — and the reconcile loop catches everything, because that loop *is* the safety net
-  and a single fault would otherwise end it for the process lifetime.
+  opens share-`Read`, and on Windows a live write handle denies it (on Linux share modes are
+  advisory and only the settle probe's second look sees a writer), so per-file failures are
+  skipped rather than allowed to abort a pass, a change whose file is busy is retried rather
+  than dropped — and the reconcile loop catches everything, because that loop *is* the safety
+  net and a single fault would otherwise end it for the process lifetime.
 - **A file that cannot be hashed is left out of the classification entirely**, never
   stored with an empty hash. An empty hash becomes the file's identity and makes every
   other unhashable file look like its move source.

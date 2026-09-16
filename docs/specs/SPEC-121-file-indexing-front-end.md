@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.18.0 |
+| Version | 0.19.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-15 |
+| Last updated | 2026-09-16 |
 
 ## Purpose
 
@@ -272,7 +272,10 @@ never be removed.
 window by now, but a quiet window measures events, not writers. Two kinds of writer survive it: one
 that holds its handle, which denies the share-`Read` open, and one that shares the file while writing
 it, so the open succeeds and the content keeps moving. The probe checks for both — an open, and a size
-and write time that hold still across an interval.
+and write time that hold still across an interval. The denial is a Windows property: on Linux share
+modes are advisory, a held file opens, and the second look is the only one of the two checks that
+can see a writer — a writer holding a file whose size and write time do not move across the
+interval is not seen there at all, and the content hash at the next reconcile is what corrects it.
 
 **A busy file delays a change; it never drops it.** A change that meets a writer — at the probe, or at
 the hash, since the two are separate opens and a writer can take the file in between — is tried again
