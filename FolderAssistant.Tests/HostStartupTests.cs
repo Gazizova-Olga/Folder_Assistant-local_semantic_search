@@ -28,6 +28,12 @@ namespace FolderAssistant.Tests;
 public sealed class HostStartupTests
 {
 	/// <summary>
+	/// For the tests whose subject is the host's wiring rather than the embedder: an in-process profile
+	/// with no native dependency, so the test asks nothing of the machine it runs on.
+	/// </summary>
+	private static readonly (String Key, String Value) InProcessProfile = ($"{AgentConfig.SectionName}:Profile", "lsa-blob");
+
+	/// <summary>
 	/// The reason the binding is lazy. An eager bind freezes the values while the composition root
 	/// runs, so a source added afterwards is discarded without a word — and the host quietly serves
 	/// whatever the developer's own settings said. Reverting to an eager bind fails this test.
@@ -91,13 +97,18 @@ public sealed class HostStartupTests
 	}
 
 
+	/// <summary>
+	/// The subject is the composition root's wiring of the pass and the state, so the profile is an
+	/// in-process one: the default embeds through a local Ollama, which neither this machine nor CI is
+	/// promised to have, and a test that depended on it would report the server's absence as a defect here.
+	/// </summary>
 	[Fact]
 	public async Task With_Indexing_Enabled_The_Index_Becomes_Ready_On_Its_Own()
 	{
 		using TempFolder folder = new();
 		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma");
 
-		using HostFixture host = new(folder);
+		using HostFixture host = new(folder, InProcessProfile);
 
 		using HttpClient client = host.CreateClient();
 		await client.GetAsync("/");
@@ -125,7 +136,7 @@ public sealed class HostStartupTests
 		using TempFolder folder = new();
 		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma");
 
-		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:DebounceMilliseconds", "100"));
+		using HostFixture host = new(folder, InProcessProfile, ($"{AgentConfig.SectionName}:Indexing:DebounceMilliseconds", "100"));
 
 		using HttpClient client = host.CreateClient();
 		await client.GetAsync("/");
@@ -277,8 +288,36 @@ public sealed class HostStartupTests
 
 		namedResponse!.Profile.Should().Be("programmable-blob");
 		namedResponse.ProfileNote.Should().BeNull();
-		unnamedResponse!.Profile.Should().Be(SqliteVecExtension.IsAvailable ? "lsa-vec" : "lsa-blob");
+		unnamedResponse!.Profile.Should().Be(SqliteVecExtension.IsAvailable ? "ollama-vec" : "ollama-blob");
 		(unnamedResponse.ProfileNote is null).Should().Be(SqliteVecExtension.IsAvailable);
+	}
+
+	/// <summary>
+	/// The promise the default makes: an Ollama that is not there is a failed index with a message that
+	/// says what to do, never a quietly different embedder and never an index that reports building for
+	/// ever. Pinned against a port nothing listens on, so it holds on a machine that does run Ollama.
+	/// </summary>
+	[Fact]
+	public async Task An_Unreachable_Ollama_Fails_The_Index_Loudly_Rather_Than_Substituting_An_Embedder()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma");
+
+		using HostFixture host = new(
+			folder,
+			($"{AgentConfig.SectionName}:Profile", "ollama-blob"),
+			($"{AgentConfig.SectionName}:Indexing:OllamaEndpoint", "http://127.0.0.1:9/v1"),
+			($"{AgentConfig.SectionName}:Indexing:OllamaTimeoutSeconds", "5"));
+
+		using HttpClient client = host.CreateClient();
+		FolderResponse? response = await client.GetFromJsonAsync<FolderResponse>("/");
+
+		IIndexState state = host.Services.GetRequiredService<IIndexState>();
+		await WaitFor(() => state.Status != IndexStatus.Building, "the probe to give up");
+
+		response!.Profile.Should().Be("ollama-blob");
+		state.Status.Should().Be(IndexStatus.Failed);
+		state.Error!.Message.Should().Contain("Ollama").And.Contain("running at the configured endpoint");
 	}
 
 	private sealed record FolderResponse(String Name, String AnalyzedFolder, String Profile, String? ProfileNote);

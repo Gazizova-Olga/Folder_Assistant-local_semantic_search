@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-15 |
+| Last updated | 2026-09-16 |
 
 ## Purpose
 
@@ -160,10 +160,11 @@ across model versions, and not stable across fits. A corpus-fitted implementatio
 necessarily produces different vectors after refitting; that is why the fit is part of the
 model version's identity rather than a property of a run.
 
-## The corpus-fitted embedder as the default (2026-09-15)
+## The corpus-fitted embedder on small folders (default 2026-09-15, named since 2026-09-16)
 
-`lsa-*` is the default profile family, so the folders it fits include the smallest ones. Two rules
-follow, both implemented in the trainer and asserted by `LsaTinyCorpusTests`:
+`lsa-*` was the default profile family for one day and is now the profile to name where nothing can
+be installed (`SPEC-162`); either way the folders it fits include the smallest ones. Two rules follow,
+both implemented in the trainer and asserted by `LsaTinyCorpusTests`:
 
 - **A corpus below the pruning floor keeps its whole vocabulary.** A term must normally appear in two
   chunks to survive pruning; one chunk, or a few sharing no term, would leave nothing and fail the
@@ -176,10 +177,10 @@ follow, both implemented in the trainer and asserted by `LsaTinyCorpusTests`:
 
 **The fit is taken once and kept** (`SPEC-120`, fit reuse). A folder that starts with two files and
 grows to two hundred keeps the two-file fit until the metadata folder is deleted, and nothing detects
-the drift. That cost was accepted when `lsa-*` was one profile among six; as the default it is the
-first-run experience, and a refit policy — refit when the corpus has grown past some multiple of the
-size it was fitted on — is the next thing this spec owes. Recorded as an open question below, and in
-the plan.
+the drift. That cost was accepted when `lsa-*` was one profile among six; for anyone who names it
+because they cannot install the server it is the whole experience, and a refit policy — refit when the
+corpus has grown past some multiple of the size it was fitted on — is the next thing this spec owes.
+Recorded as an open question below, and in the plan.
 
 **The model version is its own.** `lsa-*` persists vectors and the fit under
 `Indexing:LsaModelVersionId` (`lsa-v1`), not the programmable profile's id: the two embed into
@@ -189,7 +190,7 @@ profile switch mix them.
 ## Open questions
 
 - **A refit policy for the corpus-fitted embedder.** The fit is stale the moment the folder grows
-  past what it was fitted on, and it is now the default. Candidate signal: chunk count at fit time,
+  past what it was fitted on, and it is the profile for machines without the server. Candidate signal: chunk count at fit time,
   stored with the artifact; refit when the current count exceeds it by a factor. The refit invalidates
   every vector of the model version, so it is a whole-folder pass, not an incremental one.
 
@@ -198,7 +199,7 @@ profile switch mix them.
   measurement above used k = 32 against 300 documents and scored MAP 0.401 — one point, deliberately
   chosen well below the corpus rank. It is evidence that a reasonable k works, not a rule for picking one.
 - Whether the baseline should stay selectable now that a fitted implementation exists, or become
-  test-only. It is currently the only thing that guarantees an offline default.
+  test-only. It and the fitted embedder are the two profiles that run with nothing installed.
 
 ## References
 

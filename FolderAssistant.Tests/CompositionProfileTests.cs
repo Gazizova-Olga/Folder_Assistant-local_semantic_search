@@ -33,15 +33,16 @@ public sealed class CompositionProfileTests
 	private const Int32 FixedDimension = 64;
 
 	/// <summary>
-	/// The default must be the combination that runs wherever the managed code runs. A default with
-	/// a native dependency would turn an unsupported platform into a startup failure for someone who
-	/// never chose a backend at all.
+	/// The default is the pretrained model over the native store, and its fallback must be the combination
+	/// that runs wherever the managed code runs. A fallback with a native dependency would turn an
+	/// unsupported platform into a startup failure for someone who never chose a backend at all; the
+	/// server the embedder needs is a runtime prerequisite the startup probe reports, not a platform one.
 	/// </summary>
 	[Fact]
-	public void The_Default_Is_The_Fitted_Embedder_Over_The_Native_Store_And_Its_Fallback_Its_Blob_Twin()
+	public void The_Default_Is_The_Ollama_Embedder_Over_The_Native_Store_And_Its_Fallback_Its_Blob_Twin()
 	{
-		CompositionProfiles.Default.Should().Be("lsa-vec");
-		CompositionProfiles.DefaultFallback.Should().Be("lsa-blob");
+		CompositionProfiles.Default.Should().Be("ollama-vec");
+		CompositionProfiles.DefaultFallback.Should().Be("ollama-blob");
 		CompositionProfiles.Resolve(CompositionProfiles.DefaultFallback).IsAvailable()
 			.Should().BeTrue("the fallback is what has to run on every platform");
 	}
@@ -49,18 +50,18 @@ public sealed class CompositionProfileTests
 	/// <summary>
 	/// The one fallback there is. Nobody named a profile, the default's native store has no binary here,
 	/// so its blob twin runs — and the note says so, naming both, because a fallback nobody can see is
-	/// the thing SPEC-000 forbids.
+	/// the thing SPEC-000 forbids. The twin shares the embedder: a fallback never changes embedding space.
 	/// </summary>
 	[Fact]
 	public void The_Unnamed_Default_Falls_Back_To_Its_Blob_Twin_Where_The_Native_Store_Cannot_Load_And_Says_So()
 	{
 		DefaultResolution here = CompositionProfiles.ResolveDefault(static profile => profile.IsAvailable());
-		DefaultResolution elsewhere = CompositionProfiles.ResolveDefault(static profile => profile.Name == "lsa-blob");
+		DefaultResolution elsewhere = CompositionProfiles.ResolveDefault(static profile => profile.Name == "ollama-blob");
 
-		here.Profile.Name.Should().Be(SqliteVecExtension.IsAvailable ? "lsa-vec" : "lsa-blob");
+		here.Profile.Name.Should().Be(SqliteVecExtension.IsAvailable ? "ollama-vec" : "ollama-blob");
 		(here.FallbackNote is null).Should().Be(SqliteVecExtension.IsAvailable, "the note exists exactly when the fallback ran");
-		elsewhere.Profile.Name.Should().Be("lsa-blob");
-		elsewhere.FallbackNote.Should().Contain("lsa-vec").And.Contain("lsa-blob").And.Contain("FolderAssistant:Profile");
+		elsewhere.Profile.Name.Should().Be("ollama-blob");
+		elsewhere.FallbackNote.Should().Contain("ollama-vec").And.Contain("ollama-blob").And.Contain("FolderAssistant:Profile");
 	}
 
 	[Fact]
@@ -68,7 +69,7 @@ public sealed class CompositionProfileTests
 	{
 		DefaultResolution resolution = CompositionProfiles.ResolveDefault(static _ => true);
 
-		resolution.Profile.Name.Should().Be("lsa-vec");
+		resolution.Profile.Name.Should().Be("ollama-vec");
 		resolution.FallbackNote.Should().BeNull();
 	}
 
@@ -79,10 +80,10 @@ public sealed class CompositionProfileTests
 	[Fact]
 	public void A_Named_Profile_Never_Falls_Back()
 	{
-		Action resolve = () => CompositionProfiles.Resolve("lsa-vec", static profile => profile.Name == "lsa-blob");
+		Action resolve = () => CompositionProfiles.Resolve("ollama-vec", static profile => profile.Name == "ollama-blob");
 
 		resolve.Should().Throw<PlatformNotSupportedException>()
-			.Which.Message.Should().Contain("lsa-vec").And.Contain("lsa-blob");
+			.Which.Message.Should().Contain("ollama-vec").And.Contain("ollama-blob");
 	}
 
 	[Theory]

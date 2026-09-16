@@ -149,19 +149,23 @@ A **composition profile** (`FolderAssistant:Profile`, `CompositionProfiles.cs`) 
 vectorizer, the vector store reader/writer and the retrieval strategy **together**, so a mismatched
 combination — a lexical query against a neural-embedded store, or a reader looking in `chunk_vector`
 while the writer fills a `vec0` table — cannot be expressed. A **named** profile that is unknown or
-platform-unavailable is a startup failure, never a fallback. The names are `lsa-vec` (default),
-`lsa-blob`, `ollama-vec`, `ollama-blob`, `programmable-vec`, `programmable-blob`: `-blob` stores
+platform-unavailable is a startup failure, never a fallback. The names are `ollama-vec` (default),
+`ollama-blob`, `lsa-vec`, `lsa-blob`, `programmable-vec`, `programmable-blob`: `-blob` stores
 vectors as BLOBs scored by cosine in managed code; `-vec` uses the native `sqlite-vec` extension,
 which ships no binary for win-arm64 or musl. **The one fallback there is applies to the unnamed
-default alone and is never silent**: where `lsa-vec` cannot load, `lsa-blob` runs — same embedder,
-same embedding space, slower store — logged at warning and reported by `GET /` with a note
-(`DefaultResolution`, `SPEC-000`). The default is the corpus-fitted embedder because it needs nothing
-installed and retrieves far better than the placeholder; the pretrained Ollama model retrieves
-better still and is the recommended profile, not the default, because it is a separate install.
-`docs/benchmarks/` measures which is which; the default was changed on 2026-09-15 on a re-run of
-those figures, not by editing a constant.
+default alone, is a store fallback, and is never silent**: where `ollama-vec` cannot load,
+`ollama-blob` runs — same embedder, same embedding space, slower store — logged at warning and
+reported by `GET /` with a note (`DefaultResolution`, `SPEC-000`). **A fallback never changes the
+embedder.** The default needs a local Ollama holding the model; when it is absent the startup probe
+fails the index with a message saying so and searches refuse until it is there. Nothing in-process
+runs in its place, because a substitute embedder answers from a different embedding space with no way
+for anyone to tell. The default was `lsa-vec` for one day (2026-09-15, on a benchmark re-run) and
+became `ollama-vec` on 2026-09-16 by the owner's decision, with every profile re-measured that day on
+this tree on both Windows and Linux (`docs/benchmarks/`, and `docs/benchmarks/linux/` for the second).
+`lsa-vec` is the profile to name where nothing can be installed; it retrieves far better than the
+placeholder and well short of the pretrained model.
 
-Two consequences of a corpus-fitted default are known and recorded in `SPEC-161`: the fit is taken
+Two consequences of the corpus-fitted profiles are known and recorded in `SPEC-161`: the fit is taken
 once and kept, so a folder that grows a great deal keeps its early fit until the metadata folder is
 deleted (a refit policy is the next embedding item); and an empty folder cannot fit, so its index
 reports `Failed` and is retried on the interval until the folder has text. A corpus below the pruning

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Reversed on evidence; see the verdict section |
-| Version | 0.8.0 |
+| Version | 0.9.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-15 |
+| Last updated | 2026-09-16 |
 
 ## Purpose
 
@@ -41,7 +41,8 @@ From [SPEC-130](SPEC-130-persistence.md) and the system concept:
   it describes.
 - **No service to deploy.** A tool that needs a database server running before it can answer
   a question about a local directory has the wrong shape.
-- **Offline.** The default path must not require anything reachable over a network.
+- **Local.** The store must not require anything reachable beyond the machine. (The default
+  *embedder* needs a local server on loopback since 2026-09-16, `SPEC-162`; the store never has.)
 - **Several embedding models coexist**, keyed `(chunk_id, model_version_id)`.
 - **One writer, many readers.** A background indexer writes; queries only read.
 - Corpus size: a folder a person works in. Thousands of files, tens of thousands of chunks.
@@ -52,7 +53,7 @@ From [SPEC-130](SPEC-130-persistence.md) and the system concept:
 | Criterion | Why it matters here |
 |---|---|
 | Deployment cost | Anything requiring a running service is close to disqualifying |
-| Offline | The default path must work with no network |
+| Local | The store must work with nothing reachable beyond the machine |
 | Fit with the folder-scoped model | The store has to live in the folder and be discardable with it |
 | Retrieval quality headroom | Whether it can do better than a linear scan when the corpus grows |
 | Concurrency | One writer, many readers, no cross-process coordination |
@@ -382,6 +383,13 @@ topic is relevant to that topic's queries.
 The last two were met by 2026-09-15 and the default moved to the native extension on that basis
 (Decision, above); the first is still the open number. The baseline stands as the thing candidates are
 compared against, and as the fallback on the platforms the extension does not reach.
+
+**Re-measured 2026-09-16 on this tree, on Windows and on Linux** (`docs/benchmarks/`,
+`docs/benchmarks/linux/`): the two stores agree on every accuracy column on both operating systems and
+with every embedder including the pretrained one; at 8,000 documents the native store answers in 2.5 ms
+p50 against 35 ms on Windows and 2.6 against 52 on Linux; below a few hundred documents the two are
+within a few milliseconds of each other on both. The shape of the 2026-09-15 sweep holds; the Linux blob
+figure is the slower of the two because the container's filesystem is, not because the code differs.
 
 ## References
 

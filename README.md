@@ -31,8 +31,9 @@ design:
   plausible wrong answer. A search while the first index is still building is refused rather than
   answered from a half-built index; an unknown embedding profile stops the application at startup
   instead of falling back; a scan that finds nothing throws instead of quietly indexing nothing.
-- **Reading is not writing.** The planned file tools are split into read and mutation holders, so
-  which agent can change data will be answerable from one line of configuration.
+- **Reading is not writing.** The file tools are split into a read holder, which exists, and a
+  mutation holder, which does not yet, so which agent can change data will be answerable from one
+  line of configuration.
 
 The full statement of purpose and principles is [SPEC-000](docs/specs/SPEC-000-system-concept.md).
 
@@ -86,7 +87,7 @@ flowchart TB
     subgraph composition["Composition — Program.cs"]
         direction LR
         root["Composition root<br/>lazy IOptions, startup filter"]
-        profiles["CompositionProfiles<br/>6 named bundles; lsa-vec default, loud fallback to lsa-blob"]
+        profiles["CompositionProfiles<br/>6 named bundles; ollama-vec default, loud store fallback to ollama-blob"]
         config["AgentConfig<br/>section FolderAssistant"]
         metrics["GET /metrics<br/>Prometheus exporter"]
     end
@@ -203,8 +204,9 @@ flowchart TB
 ### Requirements
 
 - **.NET 10 SDK** — `dotnet --version` prints `10.x`.
-- **Ollama**, optional but needed for real semantic search. Install it, keep it running, and pull the
-  embedding model:
+- **Ollama**, which the default profile embeds through. Install it, keep it running, and pull the
+  embedding model — or name an in-process profile (see *Choosing a profile*) to run with nothing
+  installed:
 
   ```bash
   ollama pull qwen3-embedding:0.6b
@@ -232,7 +234,7 @@ somewhere you mean. It listens on `http://localhost:5000`:
 
 | Endpoint | Returns |
 |---|---|
-| `GET /` | The application name and the absolute path of the folder being indexed. |
+| `GET /` | The application name, the absolute path of the folder being indexed, the active profile, and a note if the default fell back to its blob twin. |
 | `GET /metrics` | Prometheus text: retrieval counters and latency histograms, per backend. |
 
 **This writes to the folder it is pointed at.** It creates a `.folderassistant/` directory holding
@@ -249,7 +251,10 @@ Reconciled C:\some\folder at start: 312 files examined, 0 skipped, 312 changes r
 
 Each embed call logs one structured line (`embedding provider=… model=… dim=… status=…`), which is
 how you see the indexer at work after that. A first index that fails is reported as failed, not as
-still building, and is retried every 30 seconds.
+still building, and is retried every 30 seconds. With the default profile and no Ollama running,
+that is what you will see first: `Initial index failed: The Ollama embedding backend is not usable`,
+with the endpoint and model named, repeated on each retry until the server is up and the model
+pulled. Nothing else embeds in its place; name `lsa-vec` if you want an index without the server.
 
 **What gets indexed.** Plain-text files by extension — `.txt`, `.md`, `.json`, `.yml`, `.xml`,
 `.csv`, `.log`, and the common source-code extensions (`.cs`, `.py`, `.js`, `.ts`, `.java`, `.go`,
@@ -315,50 +320,58 @@ found at all; the second is the **store**, which decides how long that takes.
 
 | Profile | Embedder | Retrieval | Needs |
 |---|---|---|---|
-| `lsa-vec` **(default)** | LSA, fitted to the corpus, in-process | `sqlite-vec` k-NN | nothing on a covered platform |
-| `lsa-blob` | LSA, fitted to the corpus, in-process | cosine, managed code | nothing |
-| `ollama-vec` | `qwen3-embedding:0.6b` via Ollama | `sqlite-vec` k-NN | Ollama running |
+| `ollama-vec` **(default)** | `qwen3-embedding:0.6b` via Ollama | `sqlite-vec` k-NN | Ollama running, on a covered platform |
 | `ollama-blob` | `qwen3-embedding:0.6b` via Ollama | cosine, managed code | Ollama running |
+| `lsa-vec` | LSA, fitted to the corpus, in-process | `sqlite-vec` k-NN | nothing on a covered platform |
+| `lsa-blob` | LSA, fitted to the corpus, in-process | cosine, managed code | nothing |
 | `programmable-vec` | character histogram (placeholder) | `sqlite-vec` k-NN | nothing on a covered platform |
 | `programmable-blob` | character histogram (placeholder) | cosine, managed code | nothing |
 
-**The default works on a fresh clone with nothing installed.** With no profile configured it is
-`lsa-vec`. On the two platforms where the `sqlite-vec` extension ships no binary — **Windows on
-ARM64, and musl-based Linux such as Alpine** — the application runs `lsa-blob` instead: the same
-embedder over the brute-force store, so the same search results, only slower on large folders. That
-substitution is never silent. It is logged at warning on startup, and `GET /` reports the active
-profile with a note saying which one was wanted. Name a profile explicitly and no substitution ever
-happens.
+**The default is the pretrained model, and it needs Ollama.** With no profile configured it is
+`ollama-vec`. If Ollama is not installed, not running, or has not pulled the model, the startup probe
+fails the index with a message saying which, and every search refuses until it is fixed. The
+application never swaps in a different embedder in its place: a substitute would answer every question
+from a different embedding space, plausibly and worse, and nothing would tell you. On the two
+platforms where the `sqlite-vec` extension ships no binary — **Windows on ARM64, and musl-based Linux
+such as Alpine** — the application runs `ollama-blob` instead: the same embedder over the brute-force
+store, so the same search results, only slower on large folders. That substitution is never silent. It
+is logged at warning on startup, and `GET /` reports the active profile with a note saying which one
+was wanted. Name a profile explicitly and no substitution ever happens.
 
-**On Linux** nothing special is needed. The package ships `linux-x64` and `linux-arm64` binaries, so
-Ubuntu, Debian, Fedora and the other glibc distributions run the default as-is; CI runs the whole
-suite on Ubuntu for every push. Only Alpine and other musl builds take the fallback.
+**On Linux** nothing special is needed beyond Ollama. The package ships `linux-x64` and `linux-arm64`
+binaries, so Ubuntu, Debian, Fedora and the other glibc distributions run the default as-is; CI runs
+the whole suite on Ubuntu for every push. Only Alpine and other musl builds take the store fallback.
 
-**For the best retrieval, run Ollama.** The corpus-fitted embedder needs nothing installed and is a
-long way ahead of the placeholder, but a pretrained model is ahead of both. Measured on a
-300-document labelled corpus whose queries avoid the vocabulary of the documents they should find
+**To run with nothing installed, name `lsa-vec`.** The corpus-fitted embedder is in-process and a long
+way ahead of the placeholder, but a pretrained model is ahead of both. Measured on a 300-document
+labelled corpus whose queries avoid the vocabulary of the documents they should find
 ([docs/benchmarks/semantic-search-full-results.md](docs/benchmarks/semantic-search-full-results.md)):
 
 | Embedder | Precision@1 | MAP |
 |---|---:|---:|
 | `programmable-*` | 7 % | 0.031 |
 | `lsa-*` | 45 % | 0.401 |
-| `ollama-*` | 82 % | 0.675 (measured 2026-09-12 on an earlier tree; not re-measured since) |
+| `ollama-*` | 82 % | 0.674 |
 
-Install Ollama, pull the model, and set the profile:
+All three rows were measured on 2026-09-16 on this tree, on Windows and again on Linux
+([docs/benchmarks/linux/](docs/benchmarks/linux/)); the accuracy columns agree across the two to the
+last digit, and the two stores agree with each other on every accuracy column on both.
+[docs/benchmarks/2026-09-16-two-platforms.md](docs/benchmarks/2026-09-16-two-platforms.md) reads the
+whole measurement, with charts: every profile, both stores, what the pretrained model costs per chunk,
+and how the two stores diverge as a folder grows.
 
 ```json
 {
   "FolderAssistant": {
-    "Profile": "ollama-vec"
+    "Profile": "lsa-vec"
   }
 }
 ```
 
-Two things to know about the corpus-fitted default. Its fit is taken on the first successful index
+Two things to know about the corpus-fitted profiles. The fit is taken on the first successful index
 and kept, so a folder that grows a great deal after that searches with a fit taken on its early
 contents until `.folderassistant/` is deleted and the index rebuilt; a refit policy is the next item
-on the embedding side. And an empty folder cannot fit it: the index reports failed until the folder
+on the embedding side. And an empty folder cannot fit: the index reports failed until the folder
 has text, and the pass is retried every 30 seconds.
 
 Switching profiles changes the active model version; existing vectors are kept and simply stop being
@@ -451,6 +464,7 @@ FolderAssistant/                the application: composition root, configuration
   Indexing/                     scanner, chunker, whole-folder pass, bridge into the outbox library
   Persistence/                  SQLite bootstrap, connection factory, blob and sqlite-vec vector stores
   Retrieval/                    cosine and sqlite-vec queries, context reducer, low-confidence screen
+  Tools/                        the containment guard, the read tools and the text search over it
 src/FolderAssistant.Indexing/   the outbox indexer library: watcher, reconciler, change pipeline, dispatcher
 FolderAssistant.Tests/          one test project for both assemblies, plus the opt-in benchmarks
 docs/                           specifications, diagrams, benchmarks, archived designs

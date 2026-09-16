@@ -39,20 +39,21 @@ internal sealed record DefaultResolution(ModuleSet Profile, String? FallbackNote
 internal static class CompositionProfiles
 {
 	/// <summary>
-	/// The default: the corpus-fitted embedder over the native k-NN store. In-process and offline, and
-	/// measured at 45% precision-at-one on the labelled corpus where the placeholder reaches 7%
-	/// (<c>docs/benchmarks</c>); the pretrained Ollama model does better still and is not the default
-	/// only because it is a separate install. Where the native store has no binary — win-arm64, musl —
-	/// the default is <see cref="DefaultFallback"/>, and the fallback is said, never silent.
+	/// The default: the pretrained model served by a local Ollama, over the native k-NN store. The only
+	/// embedder here that retrieves a passage sharing none of the query's words (<c>docs/benchmarks</c>);
+	/// the price is a server that has to be installed, running and holding the model. That is a runtime
+	/// prerequisite, not a platform one: the startup probe turns an absent server into a failed index with
+	/// an actionable message, never into a different embedder. Where the native store has no binary —
+	/// win-arm64, musl — the default is <see cref="DefaultFallback"/>, and the fallback is said, never silent.
 	/// </summary>
-	public const String Default = "lsa-vec";
+	public const String Default = "ollama-vec";
 
 	/// <summary>
 	/// The same embedder over the blob store: the default's twin with no native dependency, run in its
 	/// place only when nothing was configured and the native store cannot load here. Same embedding
 	/// space, so nothing an operator believed about their vectors changes — only the store and its speed.
 	/// </summary>
-	public const String DefaultFallback = "lsa-blob";
+	public const String DefaultFallback = "ollama-blob";
 
 	private const String NoNativeBinary =
 		"the sqlite-vec native extension ships no binary for this platform (no win-arm64, no musl build)";

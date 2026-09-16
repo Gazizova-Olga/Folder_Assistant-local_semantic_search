@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using FolderAssistant.Embedding;
 using FolderAssistant.Embedding.Lsa;
@@ -811,8 +812,8 @@ public sealed class SemanticSearchBenchmark
 		Boolean ollama = OllamaIsReachable();
 		Boolean vec = SqliteVecExtension.IsAvailable;
 
-		// The fitted profiles are in-process and always run; the default is one of them, so a table
-		// without them would not carry the number the default is chosen on.
+		// The in-process profiles always run, so the table always carries the baseline and the fitted
+		// embedder; the default's own rows appear only where the server is reachable.
 		yield return "programmable-blob";
 		yield return "lsa-blob";
 
@@ -903,7 +904,12 @@ public sealed class SemanticSearchBenchmark
 		StringBuilder builder = new();
 		builder.AppendLine(CultureInfo.InvariantCulture, $"# {title}");
 		builder.AppendLine();
-		builder.AppendLine(CultureInfo.InvariantCulture, $"_Measured {DateTime.Now:yyyy-MM-dd} on this machine. " +
+		// The operating system, architecture and core count are in the header because the same tree is
+		// measured on more than one of them, and a table that only says "this machine" cannot be told from
+		// another such table once both are committed.
+		builder.AppendLine(CultureInfo.InvariantCulture, $"_Measured {DateTime.Now:yyyy-MM-dd} on this machine: " +
+			$"{RuntimeInformation.OSDescription}, {RuntimeInformation.ProcessArchitecture}, " +
+			$"{Environment.ProcessorCount} logical processors. " +
 			$"Regenerate with `{GateVariable}=1 dotnet test --filter FullyQualifiedName~SemanticSearchBenchmark`._");
 		builder.AppendLine();
 		builder.AppendLine(summary);

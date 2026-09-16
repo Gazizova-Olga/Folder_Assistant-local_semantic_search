@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — placeholder |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | — |
-| Last updated | 2026-09-15 |
+| Last updated | 2026-09-16 |
 
 ## Purpose
 
@@ -76,16 +76,24 @@ an admission of what is not yet decided; it is not a description of anything.
   — the silently-plausible wrong answer this system is built against.
 
   **The one fallback there is applies to the default alone, and is never silent** (2026-09-15).
-  When no profile is configured, the default is `lsa-vec`; where the native store has no
-  binary, `lsa-blob` runs in its place — the same embedder, so the same embedding space, over
-  the blob store — and the composition root logs the substitution at warning and `GET /`
-  reports the active profile with a note saying which was wanted. Nothing an operator named is
-  ever swapped, and nothing swapped is ever unreported: those two properties are what the rule
-  above protects, and both hold.
+  When no profile is configured, the default is `ollama-vec` (2026-09-16; it was `lsa-vec` for the
+  day before); where the native store has no binary, `ollama-blob` runs in its place — the same
+  embedder, so the same embedding space, over the blob store — and the composition root logs the
+  substitution at warning and `GET /` reports the active profile with a note saying which was
+  wanted. Nothing an operator named is ever swapped, and nothing swapped is ever unreported: those
+  two properties are what the rule above protects, and both hold.
+
+  **A fallback never changes the embedder.** The default's embedder needs a local Ollama server
+  holding the model. When that server is not there, the startup probe fails the index with a
+  message saying so, searches refuse until it is, and nothing runs in its place — an in-process
+  embedder substituted for a pretrained one would answer every question from a different embedding
+  space, plausibly and worse, which is the one outcome this document exists to forbid.
 - **Versioned explicitly.** Stored data outlives the code that wrote it. Schema and model
   identity are recorded, never inferred.
-- **Offline by construction where it matters.** The default path should not require a
-  network service to be reachable.
+- **Local by construction where it matters.** No document text leaves the machine on the
+  default path. The default embeds through a server on loopback (2026-09-16), so it needs a
+  local process to be running; it needs nothing beyond the machine to be reachable. Profiles
+  that need no process at all exist and are named explicitly.
 - **Observable enough to debug.** A loop that survives its own faults and keeps going looks
   identical to one that is working, unless it says otherwise.
 

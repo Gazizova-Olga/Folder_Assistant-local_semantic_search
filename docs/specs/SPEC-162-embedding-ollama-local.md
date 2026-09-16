@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Status | Draft — core implemented and live-verified |
-| Version | 0.7.0 |
+| Status | Draft — core implemented and live-verified; the default profile |
+| Version | 0.8.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-15 |
+| Last updated | 2026-09-16 |
 
 ## Purpose
 
@@ -191,8 +191,8 @@ prerequisite with no check is a trap: the system would otherwise start, index no
 badly for a reason no operator could see.
 
 **The other profiles do not go away, and a fallback is the least of why.** `programmable-*` stopped
-being the default on 2026-09-15 and is the explicit semantics-free floor; `lsa-*` is the default until
-the prerequisite below is made one, because it is in-process, needs nothing installed, and separates
+being the default on 2026-09-15 and is the explicit semantics-free floor; `lsa-*` was the default for
+one day and is the profile to name where nothing can be installed, because it is in-process and separates
 answerable questions from unanswerable ones where the placeholder cannot (`SPEC-131`, embedder table). But
 the load-bearing reason to keep the whole matrix is that **the matrix is the instrument**: every number
 in this spec exists because a semantics-free embedder, a corpus-fitted one and a pretrained one could be
@@ -202,28 +202,58 @@ questions those measurements serve are open — what a corpus fit actually buys 
 k-NN index actually buys (`SPEC-131`), and what any future embedder would have to beat. **Selecting a
 non-default profile stays a supported thing to do, not a vestige.**
 
-**`ollama-blob`, not `ollama-vec`.** The native k-NN backend would add a second prerequisite, and a
-harder one: it ships no `win-arm64` and no musl binary (`SPEC-131`). The same measurement shows it only
-pays above a few hundred documents and costs more below that, so pairing the two would buy little and
-gate the product on platform coverage. This is a statement about what is *required*, not about what is
-available — `*-vec` stays selectable and stays under measurement, and the corpus size at which it starts
-to pay is exactly the open question `SPEC-131` is holding.
+**`ollama-vec`, with `ollama-blob` where the native store has no binary.** The native k-NN backend
+ships no `win-arm64` and no musl binary (`SPEC-131`), so it cannot be *required*; it is the default
+where it loads, and the blob twin runs in its place where it does not — the same embedder, the same
+embedding space, said at warning and on `GET /` (`SPEC-000`). That is the one fallback the system has,
+and it is a store fallback, never an embedder one. The corpus size at which the native store starts to
+pay is still the open question `SPEC-131` is holding; below it the twin costs little.
 
-**What the default is now (2026-09-15).** `CompositionProfiles.Default` is `lsa-vec`, with `lsa-blob`
-run in its place — and said, at warning and on `GET /` — where the native store has no binary
-(`SPEC-000`). `ollama-*` is the recommended profile for real use and is not the default, because a
-default has to work on a fresh clone with nothing else installed, and the server is an install. The
-flip to `ollama-*` recorded above is still the decision; it waits on the prerequisite being one that a
-README can ask of every user, which the cold-start cost decides.
+**What the default is now (2026-09-16).** `CompositionProfiles.Default` is `ollama-vec`, with
+`ollama-blob` run in its place where the native store has no binary. The server is a prerequisite: an
+Ollama that is not installed, not running, or without the model fails the index at the startup probe
+with a message saying which, and searches refuse until it is fixed. No in-process embedder is ever
+substituted for it, because the substitute would answer from a different embedding space with no way
+for anyone to tell. The decision was the owner's, taken on 2026-09-16 over the `lsa-vec` default of the
+day before; the figures it rests on were re-measured the same day on this tree, on Windows and on Linux
+(next section). `lsa-vec` stays the profile to name where nothing can be installed.
+
+## Measured again on this tree, on two operating systems (2026-09-16)
+
+Ollama 0.34.1 installed on the development machine and, separately, run CPU-only in a container in a
+WSL2 Podman machine on the same hardware with the tree copied in (`docs/benchmarks/linux/README.md`
+says how). Every profile, both stores, both operating systems; the corpus and the queries are the ones
+of 2026-09-12, unchanged since.
+
+- **Accuracy is the same on both operating systems to the last digit**, and the same across the two
+  stores on both: curated Recall@1 **95 %**, MRR@10 **0.977** for `ollama-vec` and `ollama-blob`
+  alike; generated-corpus P@1 **82 %**, MAP **0.674** (Windows) / **0.675** (Linux, the rounding of one
+  query). The placeholder and the fitted embedder reproduce their 2026-09-12 figures exactly.
+- **One curated query fewer than on 2026-09-12**, when the model answered all twenty-two. The corpus
+  has not changed, so the difference is in the model build or the server that serves it. Which query
+  moved was not investigated; the finding is recorded, not explained.
+- **What it costs, CPU-only:** about **600 ms per chunk** on Windows and **660 ms** in the Linux
+  container on the same cores, against 1.8 and 3.5 ms for the in-process embedders. A twenty-document
+  folder indexes from nothing in about twelve seconds. The 2026-09-12 figure of 386 ms was a different
+  machine. The embed window still buys nothing measurable (1.03× at 64, spreads overlapping): inference,
+  not the round trip, is what is paid for.
+- **Query latency** with the pretrained model is about **175 ms** on Windows and **180 ms** on Linux,
+  almost all of it embedding the query.
+- **The backend gap reproduces on both** (`SPEC-131`): at 8,000 documents the native store answers in
+  2.5 ms p50 against 35 ms for the blob store on Windows, 2.6 against 52 on Linux; at 500 documents both
+  are under 4 ms.
+
+The first two contaminated Windows timings — taken while the Linux container was embedding on the same
+cores — were discarded and the run repeated with the container stopped; the accuracy columns did not
+move between the two runs, which is the separation `SPEC-131` records.
 
 ## Open questions
 
 - Whether the query instruction should ever be configurable. It is a constant today because getting
   it wrong degrades ranking silently, and an operator has no way to tell they have.
-- Whether `ollama-*` should become the default profile: **answered above** — it does, and installing
-  the server becomes a prerequisite. What stays open is *when* the default flips, which waits on the
-  cold-start cost coming down far enough that a first index of a real folder is bearable. The
-  per-chunk figure above is the thing to watch. Until then the default is `lsa-vec` (2026-09-15).
+- ~~Whether `ollama-*` should become the default profile~~ — it did, on 2026-09-16 (above). What the
+  cold-start cost now decides is how the README warns a first user about the first index of a large
+  folder, not whether the default waits; the per-chunk figure above is still the thing to watch.
 
 ## References
 
