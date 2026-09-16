@@ -7,6 +7,7 @@ using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
+using FolderAssistant.Tools;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -290,6 +291,33 @@ public sealed class HostStartupTests
 		namedResponse.ProfileNote.Should().BeNull();
 		unnamedResponse!.Profile.Should().Be(SqliteVecExtension.IsAvailable ? "ollama-vec" : "ollama-blob");
 		(unnamedResponse.ProfileNote is null).Should().Be(SqliteVecExtension.IsAvailable);
+	}
+
+	/// <summary>
+	/// The search holder's wiring, which no unit test can reach: it has to be built over the wrapped query
+	/// the root composed and the database the root bootstrapped, or it would search a different index than
+	/// the one the folder was indexed into — and answer plausibly from nothing.
+	/// </summary>
+	[Fact]
+	public async Task The_Search_Tools_Answer_Through_The_Composed_Query_Over_The_Indexed_Folder()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma delta epsilon");
+		await File.WriteAllTextAsync(folder.Combine("other.md"), "zeta eta theta iota kappa");
+
+		using HostFixture host = new(folder, InProcessProfile);
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+
+		IIndexState state = host.Services.GetRequiredService<IIndexState>();
+		await WaitFor(() => state.Status == IndexStatus.Ready, "the initial index");
+
+		FilesAbout about = host.Services.GetRequiredService<SearchTools>().FindFilesAbout("alpha beta", maxFiles: 2);
+
+		about.Files.Should().NotBeEmpty();
+		about.Files.Select(file => file.Path).Should().Contain("notes.md");
+		about.Files.Should().OnlyContain(file => file.Path == "notes.md" || file.Path == "other.md");
 	}
 
 	/// <summary>

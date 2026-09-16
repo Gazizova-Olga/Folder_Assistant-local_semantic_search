@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Status | Draft — containment, the read tools and the text search written and implemented; mutation not yet |
-| Version | 0.3.0 |
+| Status | Draft — containment, the read tools, the text search and the file-level semantic search written and implemented; mutation not yet |
+| Version | 0.4.0 |
 | Owner | Tools |
-| Last updated | 2026-09-15 |
+| Last updated | 2026-09-16 |
 
 ## Purpose
 
@@ -21,13 +21,15 @@ cannot reach anything outside the folder, and cannot touch the index's own metad
 
 **Out of scope**
 
-- Semantic search over the index ([SPEC-110](SPEC-110-rag-retrieval.md)); the tool that calls it
-  is an orchestration concern ([SPEC-100](SPEC-100-conversation-orchestration.md)).
+- How the index ranks a query ([SPEC-110](SPEC-110-rag-retrieval.md)). The tools here that ask it
+  do so through its contract and add nothing to the ranking; the passage-level search tool that
+  reduces hits under a token budget is an orchestration concern
+  ([SPEC-100](SPEC-100-conversation-orchestration.md)).
 - How a tool failure is reported to the model. The facade that turns an exception into a string the
   model must report belongs to the agent layer, and is not built.
 
-This version writes the containment rule, the four read tools and the text search. The mutation
-tools are not built; they are named and not described.
+This version writes the containment rule, the four read tools, the text search and the file-level
+semantic search. The mutation tools are not built; they are named and not described.
 
 ## The rule
 
@@ -240,6 +242,48 @@ share-read, as the other tools' do, and do not retry.
 The result carries `FilesSearched` — how many files were actually read — so that "no matches" over
 zero files reads differently from "no matches" over three hundred.
 
+## The search tools
+
+A second holder, `SearchTools`, apart from the read tools for a reason that is a contract and not a
+file layout: **a search tool's failure is fatal where a file tool's is a string.** A swallowed retrieval
+fault is indistinguishable from "nothing relevant", and a model that believed it had searched would
+answer from prior knowledge. The holder is what the facade that enforces that difference will tell the
+two groups apart by. It holds no guard: it names no path a caller supplied, and the paths it returns
+come from the index.
+
+### `FindFilesAbout(query, maxFiles)`
+
+Which files are about a topic, by meaning: each file with the score of its best passage and how many
+of its passages ranked, best first. The tool exists because a question about a folder is often "where
+is this discussed" before it is "what does it say", and the passage-level search answers the second.
+
+**It goes through the composed query and nothing else.** The holder is built over the `IRetrievalQuery`
+the composition root wrapped — the telemetry decorator, whichever backend the profile chose, and the
+readiness guard — and asks it for passages. A file-level search that read every vector itself would be a
+second retrieval path beside the measured one: unobserved on `GET /metrics`, a full scan whatever the
+store, and a second place to get model scoping wrong. So this tool adds nothing to the ranking; it folds
+passages into files.
+
+- **Over-fetched, then folded.** The query is asked for `maxFiles × 5` passages, at most **100**. Passages
+  are grouped by file; a file's score is its best passage's, and its `MatchingChunks` is how many of its
+  passages were in the pool. Files are ordered by score, then by path for a total order.
+- **`maxFiles` defaults to 10 and is cut to 20**, with the cut said in the note; below 1 throws.
+- **The two ways the pool can hide a file are each said.** More files in the pool than asked for is a
+  cut: `Truncated` is set and the note says how many the pool spanned. A pool that came back full with
+  nothing cut is not a cut, but a file whose every passage ranks below the pool is not listed, and the
+  note says so. Both are what the caller needs to decide whether to ask again with a narrower query.
+- **An empty result is a result**, with a note saying no passage ranked — which is what a query against
+  an index that holds no vectors for the active model produces, by `SPEC-110`'s rule that a never-indexed
+  model version returns nothing.
+- **Refusal passes through.** While the first index builds, or after it failed, the composed query
+  throws `IndexNotReadyException`; the tool does not catch it, because a refusal is the caller's signal
+  and observing it is not a licence to answer. An empty query throws.
+- Paths are shown as the read tools show them: relative to the root, platform separator.
+
+Not applied here, deliberately: the low-confidence screen and the token-budget reducer. Both belong to
+the passage-level search tool, which returns text and has a budget to spend; this tool returns names and
+scores, and the score is there so a caller can see a weak best match for what it is.
+
 ## Contracts
 
 ```csharp
@@ -298,7 +342,19 @@ internal static class WordBoundary
 	static Boolean IsWordChar(Char c);
 	static Boolean IsWholeWord(String text, Int32 index, Int32 length);
 }
+
+internal sealed class SearchTools
+{
+	SearchTools(IRetrievalQuery query, String databasePath);
+	FilesAbout FindFilesAbout(String query, Int32 maxFiles = 10);   // IndexNotReadyException passes through
+}
+
+internal sealed record FileRelevance(String Path, Double Score, Int32 MatchingChunks);
+internal sealed record FilesAbout(String Query, IReadOnlyList<FileRelevance> Files, Boolean Truncated, String? Note);
 ```
+
+The search bounds, as constants on `SearchTools`: `MaxFiles` 20, `CandidatesPerFile` 5,
+`MaxCandidates` 100.
 
 The bounds, as constants on `ReadTools`: `MaxEntries` 500, `MaxLinesPerRead` 400,
 `MaxCharsPerRead` 64,000, `MaxRetrieveChars` 200,000, `MaxFileBytes` 16 MB, `MaxMatches` 200,
@@ -388,6 +444,22 @@ The text search, its matcher first and the tool over it:
   scanner-extensions test; the per-line deadline check removed fails exactly the deadline test; the
   link skip removed from the walk fails exactly the two walk tests, `FindFiles`'s and the search's.
 
+The file-level semantic search, over a query that answers with fixed hits:
+
+- Passages fold into files scored by their best passage — placed deliberately not first among the
+  file's hits — and counted; equal scores order by path; the composed query is called once with the
+  database path, the query text and the over-fetched `k`; the pool cap and the `maxFiles` cut are
+  applied and said; more files than asked for are cut with the flag and the count; a full pool with
+  nothing cut carries its own note; no hits is an empty result with a note; a not-ready refusal passes
+  through unchanged; an empty query and a zero count throw.
+- A host test resolves the holder from the real composition root over an indexed folder and asserts
+  it answers with that folder's files — the wiring to the wrapped query and the bootstrapped database
+  is the thing no unit test can reach.
+- Mutation kills, each restored byte-for-byte: the over-fetch removed fails three tests; the path
+  tiebreak inverted fails exactly the tie test; the best-passage fold replaced by the first passage
+  fails the fold test — a first fixture that listed each file's best passage first let that mutation
+  live, which is why the fixture says what it does.
+
 ## Open questions
 
 - Whether an application-execution link (the reparse tag Windows Store and WSL use for a
@@ -404,6 +476,10 @@ The text search, its matcher first and the tool over it:
 
 ## Changelog
 
+- **0.4.0** (2026-09-16) — the file-level semantic search, `FindFilesAbout`, in its own holder over
+  the composed retrieval query: over-fetched passages folded into files scored by their best passage,
+  bounded and said; refusal passes through; no ranking of its own. The scope line on semantic search
+  narrowed to the ranking itself, which stays SPEC-110's.
 - **0.3.0** (2026-09-15) — the text search: a literal or regex line scan over the scanner's own
   extensions and size bound, on the same walk as `FindFiles`; whole-word through one shared rule;
   bounded by matching lines, matched characters, a whole-search deadline and the caller's token,

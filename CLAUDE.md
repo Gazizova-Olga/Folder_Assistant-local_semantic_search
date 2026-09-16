@@ -32,10 +32,10 @@ The tree is in three states, and the middle one is the one to watch
   database; embedding and retrieval telemetry served at `GET /metrics`.
 - **Built but unreachable** — retrieval (`IRetrievalQuery`, two backends) and the context reducer
   are composed in `Program.cs` and called by nothing on the request path. Every vector written is
-  one the running application never reads. The containment guard (`WorkspacePathGuard`) and the
-  read tools and text search over it (`ReadTools`, all `SPEC-101`) are built, tested and registered,
-  and nothing resolves them: the agent that would reflect the holder's methods into tools does not
-  exist.
+  one the running application never reads. The containment guard (`WorkspacePathGuard`), the read
+  tools and text search over it (`ReadTools`) and the file-level semantic search over the wrapped
+  query (`SearchTools`, all `SPEC-101`) are built, tested and registered, and nothing resolves them:
+  the agent that would reflect the holders' methods into tools does not exist.
 - **Not built** — the mutation tools, the agent and provider adapter, the chat surface, the
   conversation database. The parts of the architecture below that describe them are intent.
 
@@ -300,7 +300,15 @@ half-built index: results from a partial index are indistinguishable from genuin
 ones. A query vector is compared only against vectors sharing its model version — scoring
 across embedding spaces is meaningless.
 
-### Tools — guard, read tools and text search built, the rest not
+### Tools — guard, read tools, text search and file-level semantic search built, the rest not
+
+The search holder (`SearchTools`) exists beside the read holder and holds `FindFilesAbout`: which files
+are about a topic, each scored by its best passage. It is built over the **wrapped** `IRetrievalQuery`
+the root composed, never over a reader of its own, so a file-level search is timed by the same
+decorator, served by the same backend and refused by the same readiness guard as a passage search;
+it over-fetches passages and folds them into files, and adds no ranking of its own. It is its own
+holder because its failure contract differs: a search failure is fatal, a file failure is a string,
+and the holder is what a facade tells the two apart by. `IndexNotReadyException` passes through it.
 
 The read holder (`ReadTools`) exists: `InspectDirectory`, `ReadFile`, `Retrieve`, `FindFiles`,
 `SearchText`, each over the holder's own guard. Every bound is a code constant, every cut is said in
@@ -318,7 +326,8 @@ note, and the caller's token, which throws. `WholeWord` goes through one shared 
 for the literal and the regex form alike, so no two tools can mean different things by it.
 
 File tools are split into two holders — **read** (`InspectDirectory`, `ReadFile`, `Retrieve`,
-`FindFiles`, `SearchText`) and **mutation** (`Create`, `Update`, `ReplaceLines`, `Delete`). The split is
+`FindFiles`, `SearchText`) and **mutation** (`Create`, `Update`, `ReplaceLines`, `Delete`) — with the
+**search** holder (`FindFilesAbout`) beside them under the fatal contract. The split is
 the contract, not file layout: it is what lets a roster grant an agent the ability to read
 the folder without the ability to change it, so "which agent can destroy data" is answerable
 by reading one line of configuration. There is no shell-execution tool.

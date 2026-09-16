@@ -66,6 +66,10 @@ colour-coded.
   line by line, returning each matching line with its file and line number. It reads the files, not
   the index, so it answers exact lookups and works before the first index is ready. Bounded by
   matching lines, matched characters, a deadline and the caller's cancellation, and every cut is said.
+- The **file-level semantic search**, in its own holder: which files are about a topic, by meaning,
+  each with its best passage's score. It asks the same wrapped retrieval query the passage search
+  will, so it is timed by the same instrument and refused by the same readiness check, and adds no
+  ranking of its own.
 
 **Not built**
 
@@ -193,8 +197,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch built
-    class convdb,snippet,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about built
+    class convdb,snippet,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

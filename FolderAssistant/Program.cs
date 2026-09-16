@@ -155,6 +155,14 @@ internal sealed class Program
 				config.Indexing.MaxTextFileSizeBytes);
 		});
 
+		// The search tools, over the composed retrieval query — the wrapped one, so a file-level search is
+		// timed and refused by the same instrument and the same readiness check as a passage search. A
+		// separate holder from the read tools because a search failure is fatal where a file failure is a
+		// string, and the holder is what tells the two apart. Resolved by nothing yet, like the read tools.
+		builder.Services.AddSingleton(sp => new SearchTools(
+			sp.GetRequiredService<IRetrievalQuery>(),
+			sp.GetRequiredService<DatabaseBootstrapResult>().DatabasePath));
+
 		// The front end: watcher, reconciler, per-change pipeline and outbox dispatcher, composed by
 		// the library and started by the indexing service once the whole-folder pass has succeeded.
 		builder.Services.AddSingleton<IFolderIndexer>(sp =>
