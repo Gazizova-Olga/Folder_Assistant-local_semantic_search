@@ -120,8 +120,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
-    class cosine,vecq,floor,reducer,guard,readt built
-    class convdb,snippet,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch built
+    class convdb,snippet,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -156,7 +156,7 @@ composition without a caller.
 |---|---|---|
 | **A1** — every caller-supplied path resolves through one containment guard: outside the root, a link or junction at any segment, a hard link named outside the root, a `subst` letter for a path that is, and the metadata folder are refused; SPEC-101 written with it | `guard` | **Landed** 2026-09-15 |
 | **A2** — read tools: listing, numbered line range, bounded whole file, glob over a self-walked list; bounds as constants, a note for every cut, an exception for every hard failure; SPEC-101 0.2.0 | `readt` | **Landed** 2026-09-15 |
-| **A3** — `SearchText` | `textsearch` | Queued |
+| **A3** — `SearchText`: a literal or regex line scan over the scanner's own extensions and size bound, on the same walk as `FindFiles`; whole-word through one shared rule; bounded by matching lines, matched characters, a deadline and the caller's token, each said in the note; SPEC-101 0.3.0 | `textsearch` | **Landed** 2026-09-15 |
 | **A4** — `FindFilesAbout` through the retrieval seams | `about` | Queued |
 | **A5** — mutation tools | `mutate` | Queued |
 | **A6** — text extraction registry | `extract` | Queued |

@@ -33,11 +33,11 @@ The tree is in three states, and the middle one is the one to watch
 - **Built but unreachable** — retrieval (`IRetrievalQuery`, two backends) and the context reducer
   are composed in `Program.cs` and called by nothing on the request path. Every vector written is
   one the running application never reads. The containment guard (`WorkspacePathGuard`) and the
-  read tools over it (`ReadTools`, both `SPEC-101`) are built, tested and registered, and nothing
-  resolves them: the agent that would reflect the holder's methods into tools does not exist.
-- **Not built** — the text search and mutation tools, the agent and provider adapter, the chat
-  surface, the conversation database. The parts of the architecture below that describe them are
-  intent.
+  read tools and text search over it (`ReadTools`, all `SPEC-101`) are built, tested and registered,
+  and nothing resolves them: the agent that would reflect the holder's methods into tools does not
+  exist.
+- **Not built** — the mutation tools, the agent and provider adapter, the chat surface, the
+  conversation database. The parts of the architecture below that describe them are intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -296,18 +296,25 @@ half-built index: results from a partial index are indistinguishable from genuin
 ones. A query vector is compared only against vectors sharing its model version — scoring
 across embedding spaces is meaningless.
 
-### Tools — guard and read tools built, the rest not
+### Tools — guard, read tools and text search built, the rest not
 
-The read holder (`ReadTools`) exists: `InspectDirectory`, `ReadFile`, `Retrieve`, `FindFiles`, each
-over the holder's own guard. Every bound is a code constant, every cut is said in the result's note
-with a `Truncated` flag, and every hard failure is the ordinary exception — the facade that turns one
-into the string the model must report is Phase B. `FindFiles` matches a glob against a list its own
-walk builds, skipping the metadata folder, the scanner's ignored directory names and every link, so
-the matcher never touches the live tree. A pattern with no separator matches the file name at any
-depth; that is the form a model reaches for first.
+The read holder (`ReadTools`) exists: `InspectDirectory`, `ReadFile`, `Retrieve`, `FindFiles`,
+`SearchText`, each over the holder's own guard. Every bound is a code constant, every cut is said in
+the result's note with a `Truncated` flag, and every hard failure is the ordinary exception — the
+facade that turns one into the string the model must report is Phase B. `FindFiles` and `SearchText`
+share one walk that builds its own list, skipping the metadata folder, the scanner's ignored directory
+names and every link, so neither the matcher nor the search touches the live tree. A pattern with no
+separator matches the file name at any depth; that is the form a model reaches for first.
+
+`SearchText` reads exactly the files the index does — the scanner's extension list, asked of the
+scanner, and its size bound, passed in from the same configuration value — so a search and the index
+cannot disagree about what the folder contains. It is bounded four ways and says which one applied:
+matching lines, matched characters, a whole-search deadline that returns a partial result with a
+note, and the caller's token, which throws. `WholeWord` goes through one shared `WordBoundary` rule
+for the literal and the regex form alike, so no two tools can mean different things by it.
 
 File tools are split into two holders — **read** (`InspectDirectory`, `ReadFile`, `Retrieve`,
-`FindFiles`) and **mutation** (`Create`, `Update`, `ReplaceLines`, `Delete`). The split is
+`FindFiles`, `SearchText`) and **mutation** (`Create`, `Update`, `ReplaceLines`, `Delete`). The split is
 the contract, not file layout: it is what lets a roster grant an agent the ability to read
 the folder without the ability to change it, so "which agent can destroy data" is answerable
 by reading one line of configuration. There is no shell-execution tool.

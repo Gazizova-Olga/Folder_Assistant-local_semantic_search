@@ -61,11 +61,14 @@ colour-coded.
   and refuses the index's own metadata folder for every operation.
 - The **read tools** over that guard: list a directory, read a numbered line range, read a bounded
   whole file, find files by glob. Every cut is said in the result; every hard failure is an exception.
+- The **text search** beside them: a literal or regular-expression scan of the folder's text files,
+  line by line, returning each matching line with its file and line number. It reads the files, not
+  the index, so it answers exact lookups and works before the first index is ready. Bounded by
+  matching lines, matched characters, a deadline and the caller's cancellation, and every cut is said.
 
 **Not built**
 
-- The text search and mutation tools, the agent and provider adapter, the chat surface, the
-  conversation database.
+- The mutation tools, the agent and provider adapter, the chat surface, the conversation database.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits and
 read the telemetry**. You cannot yet ask it a question.
@@ -189,8 +192,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
-    class cosine,vecq,floor,reducer,guard,readt built
-    class convdb,snippet,textsearch,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch built
+    class convdb,snippet,about,mutate,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

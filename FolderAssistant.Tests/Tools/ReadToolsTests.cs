@@ -12,9 +12,10 @@ namespace FolderAssistant.Tests.Tools;
 public sealed class ReadToolsTests
 {
 	private const String Metadata = ".folderassistant";
+	private const Int64 SearchFileBytes = 1_048_576;
 
 	private static ReadTools Tools(TempFolder root)
-		=> new(new WorkspacePathGuard(root.Path, Metadata));
+		=> new(new WorkspacePathGuard(root.Path, Metadata), SearchFileBytes);
 
 	// --- InspectDirectory ---------------------------------------------------------------------------
 
@@ -392,5 +393,204 @@ public sealed class ReadToolsTests
 		Action act = () => Tools(root).FindFiles("../*.txt");
 
 		act.Should().Throw<ArgumentException>();
+	}
+
+	// --- SearchText ---------------------------------------------------------------------------------
+
+	[Fact]
+	public void Matching_Lines_Come_Back_With_File_And_Line_In_Walk_Order()
+	{
+		using TempFolder root = new();
+		Directory.CreateDirectory(root.Combine("docs"));
+		File.WriteAllText(root.Combine("top.md"), "alpha\nneedle here\nomega");
+		File.WriteAllText(root.Combine("docs", "inner.txt"), "first needle\nno\nneedle again, needle twice");
+		File.WriteAllText(root.Combine("docs", "quiet.txt"), "nothing to see");
+
+		TextSearchResult result = Tools(root).SearchText("needle");
+
+		result.Pattern.Should().Be("needle");
+		result.Matches.Select(match => (match.Path, match.Line, match.Text)).Should().Equal(
+			("top.md", 2, "needle here"),
+			(Path.Combine("docs", "inner.txt"), 1, "first needle"),
+			(Path.Combine("docs", "inner.txt"), 3, "needle again, needle twice"));
+		result.FilesSearched.Should().Be(3);
+		result.Truncated.Should().BeFalse();
+		result.Note.Should().BeNull();
+	}
+
+	[Fact]
+	public void The_Search_Reads_Only_The_Scanners_Extensions_And_Skips_What_The_Walk_Skips()
+	{
+		using TempFolder root = new();
+		using TempFolder outside = new();
+		File.WriteAllText(outside.Combine("secret.txt"), "needle outside");
+		Directory.CreateDirectory(root.Combine("bin"));
+		Directory.CreateDirectory(root.Combine(Metadata));
+		Directory.CreateDirectory(root.Combine("keep"));
+		File.WriteAllText(root.Combine("bin", "built.txt"), "needle in bin");
+		File.WriteAllText(root.Combine(Metadata, "manifest.txt"), "needle in metadata");
+		File.WriteAllText(root.Combine("keep", "kept.txt"), "needle kept");
+		File.WriteAllText(root.Combine("keep", "image.dat"), "needle in a format the index never reads");
+		LinkFixtures.CreateDirectoryLink(root.Combine("escape"), outside.Path);
+
+		TextSearchResult result = Tools(root).SearchText("needle");
+
+		result.Matches.Select(match => match.Path).Should().Equal(Path.Combine("keep", "kept.txt"));
+		result.FilesSearched.Should().Be(1);
+	}
+
+	[Fact]
+	public void A_Path_Narrows_The_Search_And_A_Missing_Or_Refused_One_Throws()
+	{
+		using TempFolder root = new();
+		Directory.CreateDirectory(root.Combine("a"));
+		Directory.CreateDirectory(root.Combine("b"));
+		File.WriteAllText(root.Combine("a", "one.txt"), "needle");
+		File.WriteAllText(root.Combine("b", "two.txt"), "needle");
+		ReadTools tools = Tools(root);
+
+		TextSearchResult narrowed = tools.SearchText("needle", path: "b");
+		Action missing = () => tools.SearchText("needle", path: "nope");
+		Action file = () => tools.SearchText("needle", path: Path.Combine("a", "one.txt"));
+		Action refused = () => tools.SearchText("needle", path: "..");
+
+		narrowed.Matches.Select(match => match.Path).Should().Equal(Path.Combine("b", "two.txt"));
+		missing.Should().Throw<DirectoryNotFoundException>();
+		file.Should().Throw<DirectoryNotFoundException>();
+		refused.Should().Throw<WorkspaceContainmentException>();
+	}
+
+	[Fact]
+	public void Regex_Case_And_Whole_Word_Reach_The_Matcher()
+	{
+		using TempFolder root = new();
+		File.WriteAllText(root.Combine("words.txt"), "Cat\nconcatenate\ncat food\nc.t");
+		ReadTools tools = Tools(root);
+
+		TextSearchResult literal = tools.SearchText("cat");
+		TextSearchResult ignoreCase = tools.SearchText("cat", ignoreCase: true);
+		TextSearchResult wholeWord = tools.SearchText("cat", wholeWord: true);
+		TextSearchResult regex = tools.SearchText("^c.t$", regex: true);
+		TextSearchResult regexIgnoreCase = tools.SearchText("^c.t$", regex: true, ignoreCase: true);
+		Action badRegex = () => tools.SearchText("(", regex: true);
+		Action empty = () => tools.SearchText("");
+
+		literal.Matches.Select(match => match.Line).Should().Equal(2, 3);
+		ignoreCase.Matches.Select(match => match.Line).Should().Equal(1, 2, 3);
+		wholeWord.Matches.Select(match => match.Line).Should().Equal(3);
+		regex.Matches.Select(match => match.Line).Should().Equal(4);
+		regexIgnoreCase.Matches.Select(match => match.Line).Should().Equal(1, 4);
+		badRegex.Should().Throw<ArgumentException>();
+		empty.Should().Throw<ArgumentException>();
+	}
+
+	[Fact]
+	public void A_Long_Line_Is_Shortened_Around_The_Match_And_Said_So()
+	{
+		using TempFolder root = new();
+		String line = new String('a', 1000) + "needle" + new String('b', 1000);
+		File.WriteAllText(root.Combine("wide.txt"), line + "\nshort needle");
+
+		TextSearchResult result = Tools(root).SearchText("needle");
+
+		result.Matches.Should().HaveCount(2);
+		result.Matches[0].Text.Should().StartWith("…").And.EndWith("…").And.Contain("needle");
+		result.Matches[0].Text.Should().HaveLength(ReadTools.MaxSearchLineChars + 2);
+		result.Matches[1].Text.Should().Be("short needle");
+		result.Truncated.Should().BeFalse();
+		result.Note.Should().Contain("1 line(s) shortened");
+	}
+
+	[Fact]
+	public void The_Line_Bound_Cuts_The_Search_And_Says_So()
+	{
+		using TempFolder root = new();
+		File.WriteAllLines(root.Combine("many.txt"), Enumerable.Range(1, ReadTools.MaxSearchLines + 7).Select(i => $"needle {i}"));
+
+		TextSearchResult result = Tools(root).SearchText("needle");
+
+		result.Matches.Should().HaveCount(ReadTools.MaxSearchLines);
+		result.Matches[^1].Line.Should().Be(ReadTools.MaxSearchLines);
+		result.Truncated.Should().BeTrue();
+		result.Note.Should().Contain($"cut at {ReadTools.MaxSearchLines} matching lines");
+	}
+
+	[Fact]
+	public void The_Character_Bound_Cuts_The_Search_Before_The_Line_Bound_Does()
+	{
+		using TempFolder root = new();
+		// Each matching line is shown at MaxSearchLineChars plus one ellipsis, so the payload bound is
+		// crossed long before the line bound is.
+		String wide = "needle" + new String('w', ReadTools.MaxSearchLineChars * 2);
+		File.WriteAllLines(root.Combine("wide.txt"), Enumerable.Repeat(wide, ReadTools.MaxSearchLines));
+
+		TextSearchResult result = Tools(root).SearchText("needle");
+
+		Int32 shownLength = ReadTools.MaxSearchLineChars + 1;
+		result.Matches.Should().HaveCount(ReadTools.MaxSearchChars / shownLength);
+		result.Truncated.Should().BeTrue();
+		result.Note.Should().Contain($"cut at {ReadTools.MaxSearchChars:N0} characters");
+	}
+
+	[Fact]
+	public void The_Deadline_Returns_What_Was_Found_With_A_Note()
+	{
+		using TempFolder root = new();
+		File.WriteAllText(root.Combine("a.txt"), "needle a\nneedle a again");
+		File.WriteAllText(root.Combine("b.txt"), "needle b");
+		ReadTools tools = new(new WorkspacePathGuard(root.Path, Metadata), SearchFileBytes, TimeSpan.Zero);
+
+		TextSearchResult result = tools.SearchText("needle");
+
+		// The deadline is checked after each line, so at most the first line of the first file is seen.
+		result.Matches.Should().HaveCountLessThanOrEqualTo(1);
+		result.FilesSearched.Should().Be(1);
+		result.Truncated.Should().BeTrue();
+		result.Note.Should().Contain("deadline");
+	}
+
+	[Fact]
+	public void A_Cancelled_Search_Throws_Rather_Than_Returning_A_Partial_Result()
+	{
+		using TempFolder root = new();
+		File.WriteAllText(root.Combine("a.txt"), "needle");
+		using CancellationTokenSource cancelled = new();
+		cancelled.Cancel();
+
+		Action act = () => Tools(root).SearchText("needle", cancellationToken: cancelled.Token);
+
+		act.Should().Throw<OperationCanceledException>();
+	}
+
+	[Fact]
+	public void An_Oversize_File_And_A_File_Held_By_A_Writer_Are_Skipped_And_Counted()
+	{
+		using TempFolder root = new();
+		File.WriteAllText(root.Combine("held.txt"), "needle held");
+		File.WriteAllText(root.Combine("plain.txt"), "needle plain");
+		using (FileStream big = File.Create(root.Combine("big.txt")))
+		{
+			big.SetLength(SearchFileBytes + 1);
+		}
+
+		using FileStream writer = new(root.Combine("held.txt"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+		TextSearchResult result = Tools(root).SearchText("needle");
+
+		result.Matches.Select(match => match.Path).Should().Equal("plain.txt");
+		result.FilesSearched.Should().Be(2);
+		result.Truncated.Should().BeFalse();
+		result.Note.Should().Contain("1 file(s) above the").And.Contain("1 file(s) could not be read");
+	}
+
+	[Fact]
+	public void A_Byte_Order_Mark_Does_Not_Reach_A_Matched_Line()
+	{
+		using TempFolder root = new();
+		File.WriteAllText(root.Combine("bom.txt"), "needle first", new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+		TextSearchResult result = Tools(root).SearchText("needle");
+
+		result.Matches.Single().Text.Should().Be("needle first");
 	}
 }

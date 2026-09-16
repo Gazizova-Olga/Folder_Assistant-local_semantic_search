@@ -144,14 +144,15 @@ internal sealed class Program
 
 		// The read tools over their own containment guard. Composed and resolved by nothing: the agent
 		// that would reflect the holder's methods into tools does not exist yet. The mutation holder,
-		// when it exists, gets a second guard over the same root — the split is the contract.
+		// when it exists, gets a second guard over the same root — the split is the contract. The text
+		// search takes the scanner's size bound so it reads exactly the files the index does.
 		builder.Services.AddSingleton(sp =>
 		{
 			AgentConfig config = sp.GetRequiredService<AgentConfig>();
 
-			return new ReadTools(new WorkspacePathGuard(
-				config.ResolveAnalyzedFolderPath(),
-				config.Persistence.MetadataFolderName));
+			return new ReadTools(
+				new WorkspacePathGuard(config.ResolveAnalyzedFolderPath(), config.Persistence.MetadataFolderName),
+				config.Indexing.MaxTextFileSizeBytes);
 		});
 
 		// The front end: watcher, reconciler, per-change pipeline and outbox dispatcher, composed by

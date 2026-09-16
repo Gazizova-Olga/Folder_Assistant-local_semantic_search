@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Status | Draft — containment and the read tools written and implemented; text search and mutation not yet |
-| Version | 0.2.0 |
+| Status | Draft — containment, the read tools and the text search written and implemented; mutation not yet |
+| Version | 0.3.0 |
 | Owner | Tools |
 | Last updated | 2026-09-15 |
 
@@ -26,7 +26,7 @@ cannot reach anything outside the folder, and cannot touch the index's own metad
 - How a tool failure is reported to the model. The facade that turns an exception into a string the
   model must report belongs to the agent layer, and is not built.
 
-This version writes the containment rule and the four read tools. The text search and the mutation
+This version writes the containment rule, the four read tools and the text search. The mutation
 tools are not built; they are named and not described.
 
 ## The rule
@@ -107,9 +107,9 @@ would make that split a matter of which methods a class happens to expose.
 
 ## The read tools
 
-Four methods on one holder, `ReadTools`, over its own guard. Every path argument goes through
-`Resolve` first, so a refusal is the guard's exception and not a tool's opinion. The rules that hold
-across all four:
+Five methods on one holder, `ReadTools`, over its own guard: four readers and the text search. Every
+path argument goes through `Resolve` first, so a refusal is the guard's exception and not a tool's
+opinion. The rules that hold across all five:
 
 - **A result is a record with an explicit `Note`.** A bound that cut the result, a range that ran
   past the end of the file, entries hidden from a listing — each is said in the note, and the record
@@ -190,6 +190,56 @@ Results are relative paths, in walk order. At most **200** matches; the walk sto
 `Truncated` is set, and the note says so. The walk also stops after examining **100,000** entries,
 with a note, so a pattern that matches nothing in an enormous tree still returns.
 
+## The text search
+
+### `SearchText(pattern, regex, ignoreCase, wholeWord, path, cancellationToken)`
+
+A line-by-line scan of the folder's text files for a literal string or a regular expression, returning
+each matching line with its relative path and 1-based line number — the shape of `grep -rn`. It reads
+the files, not the index, which is what makes it useful for the two things semantic search is not: an
+exact lookup (an identifier, an error string, a date), and the window before the first index is ready.
+
+**Which files.** The same walk as `FindFiles` (files first, then subdirectories, both in name order;
+links, the metadata folder and the scanner's ignored directory names left out), starting at `path` —
+the root by default — which must resolve to an existing directory or the tool throws. Of the files
+walked, only those the indexing scanner would read are searched: its extension allow-list, asked of
+the scanner, and its size bound, taken from the same configuration value the scanner takes it from
+(`Indexing:MaxTextFileSizeBytes`) and passed to the holder at construction. A file above the bound is
+skipped and counted in the note. Every extension on that list is plain text; the extraction registry
+that will say which formats can be scanned as raw lines does not exist yet, and until it does the
+scanner's list is the whole answer.
+
+**Matching.** A literal pattern is an ordinal substring; `ignoreCase` makes it ordinal-ignore-case.
+With `regex` the pattern is a .NET regular expression, culture-invariant, with `IgnoreCase` when asked
+and a one-second match timeout per line. `wholeWord` is decided **after** a candidate is found, by one
+rule for both forms (`WordBoundary`: a word character is a letter, a digit or an underscore, and a
+match is whole when the characters either side of it are not), and a candidate that fails it is passed
+over — the search continues along the line, from one character on for a literal and from the next
+regex match for an expression. An empty pattern, and an expression that does not parse, throw. A line is
+reported once, at its first whole match, however many it holds.
+
+**Bounded four ways, and each says so.**
+
+- At most **200** matching lines. The bound ends the search; `Truncated` is set and the note says to
+  narrow the pattern or the path.
+- At most **64,000** characters of matched text in one result. The same cut, named separately in the
+  note. A line longer than **400** characters is not returned whole but as a window of that many
+  characters around its first match, with an ellipsis at each end that was cut; the note counts the
+  lines so shortened. Without this one minified line would spend the whole payload on itself.
+- A whole-search deadline of **10 seconds**, checked after each line and each file. Past it, what has
+  been found is returned with `Truncated` set and a note saying how many files were searched, because
+  a partial answer that says it is partial is worth more than none.
+- The caller's cancellation token, checked at the same points. Cancellation is not a bound: it throws
+  `OperationCanceledException`, since a caller that has cancelled does not want a partial result.
+
+**What is skipped is counted.** A file the read fails on — held by a writer, or gone since the walk
+listed it — is skipped and counted, and the search goes on: one locked file must not end a search of
+the rest. The note carries the count; `Truncated` is not set, because no bound applied. Reads open
+share-read, as the other tools' do, and do not retry.
+
+The result carries `FilesSearched` — how many files were actually read — so that "no matches" over
+zero files reads differently from "no matches" over three hundred.
+
 ## Contracts
 
 ```csharp
@@ -213,11 +263,13 @@ internal sealed class WorkspaceContainmentException : InvalidOperationException
 
 internal sealed class ReadTools
 {
-	ReadTools(WorkspacePathGuard guard);
+	ReadTools(WorkspacePathGuard guard, Int64 maxSearchFileBytes);
 	DirectoryListing InspectDirectory(String path);
 	FileLines ReadFile(String path, Int32 startLine = 1, Int32? endLine = null);
 	FileText Retrieve(String path);
 	FileMatches FindFiles(String pattern);
+	TextSearchResult SearchText(String pattern, Boolean regex = false, Boolean ignoreCase = false,
+		Boolean wholeWord = false, String path = ".", CancellationToken cancellationToken = default);
 }
 
 internal sealed record DirectoryEntry(String Name, Boolean IsDirectory, Int64? SizeBytes, DateTime ModifiedUtc);
@@ -226,17 +278,33 @@ internal sealed record NumberedLine(Int32 Number, String Text);
 internal sealed record FileLines(String Path, IReadOnlyList<NumberedLine> Lines, Int32 TotalLines, Boolean Truncated, String? Note);
 internal sealed record FileText(String Path, String Text, Int64 TotalBytes, Boolean Truncated, String? Note);
 internal sealed record FileMatches(String Pattern, IReadOnlyList<String> Paths, Boolean Truncated, String? Note);
+internal sealed record TextMatch(String Path, Int32 Line, String Text);
+internal sealed record TextSearchResult(String Pattern, IReadOnlyList<TextMatch> Matches, Int32 FilesSearched, Boolean Truncated, String? Note);
 
 internal sealed class GlobPattern
 {
 	static GlobPattern Parse(String pattern);   // throws ArgumentException
 	Boolean IsMatch(String relativePath);       // '/'-separated
 }
+
+internal sealed class TextMatcher
+{
+	static TextMatcher Create(String pattern, Boolean regex, Boolean ignoreCase, Boolean wholeWord);   // throws ArgumentException
+	Int32 IndexIn(String line);                 // first whole match, or -1
+}
+
+internal static class WordBoundary
+{
+	static Boolean IsWordChar(Char c);
+	static Boolean IsWholeWord(String text, Int32 index, Int32 length);
+}
 ```
 
 The bounds, as constants on `ReadTools`: `MaxEntries` 500, `MaxLinesPerRead` 400,
 `MaxCharsPerRead` 64,000, `MaxRetrieveChars` 200,000, `MaxFileBytes` 16 MB, `MaxMatches` 200,
-`MaxExamined` 100,000, `SniffBytes` 8 KB.
+`MaxExamined` 100,000, `SniffBytes` 8 KB, `MaxSearchLines` 200, `MaxSearchChars` 64,000,
+`MaxSearchLineChars` 400, `DefaultSearchDeadline` 10 s. The search's file-size bound is the
+constructor argument, not a constant, because it is the scanner's.
 
 ## Sharp edges
 
@@ -249,6 +317,14 @@ The bounds, as constants on `ReadTools`: `MaxEntries` 500, `MaxLinesPerRead` 400
   the platform the tree is developed on; a Linux host with a hard link into the root from outside
   it would read that file. Recorded rather than closed, because the tools do not yet exist to make
   the exposure real.
+- **The text search does not sniff for binary content.** It trusts the scanner's extension list, as
+  the index does; a binary file carrying a text extension is read line by line and any NUL-bearing
+  line that happens to match is returned. The per-line window and the payload bound cap what that
+  can cost; the file readers' NUL check is not applied because the search would then refuse files
+  the index has embedded.
+- **A regular expression with a catastrophic backtracking pattern** hits the one-second per-line
+  timeout and throws `RegexMatchTimeoutException`, which ends the search as a hard failure rather
+  than a partial result. The deadline covers slow searches, not a single line that never finishes.
 
 ## Test strategy
 
@@ -292,6 +368,26 @@ The read tools, each asserted on its arithmetic directly and never through an en
   Developer Mode on; where the probe fails, that one test is reported as skipped with the reason,
   never as passed. CI's Windows runner is elevated, so there it runs.
 
+The text search, its matcher first and the tool over it:
+
+- The matcher as a table: literal, case-insensitive, whole-word, regex and their combinations, each
+  against lines that should and should not match, asserting the **index** reported — including an
+  overlapping candidate (`aa` in `aaa aa` is whole at 4), an anchored expression whose only
+  candidate fails the word rule (`^the` in `these the` is no match), and a zero-length regex match.
+  An empty pattern and an unparseable expression throw; a literal that looks like a broken
+  expression does not.
+- The tool: matches come back with file, line and text in walk order, one per line; only the
+  scanner's extensions are read and the walk's exclusions hold; `path` narrows the search and a
+  missing directory, a file, or a refused path throws; each flag reaches the matcher; a long line is
+  shortened around the match with the note counting it; the line bound and the character bound each
+  cut with their own note; a zero deadline returns a partial result with the flag and note; a
+  cancelled token throws; an oversize file and a file held by a writer are skipped and counted; a
+  byte-order mark does not reach a matched line.
+- Mutation kills, each restored byte-for-byte: the whole-word rule removed fails the whole-word table
+  rows and the search's whole-word case; the extension check removed fails exactly the
+  scanner-extensions test; the per-line deadline check removed fails exactly the deadline test; the
+  link skip removed from the walk fails exactly the two walk tests, `FindFiles`'s and the search's.
+
 ## Open questions
 
 - Whether an application-execution link (the reparse tag Windows Store and WSL use for a
@@ -308,6 +404,10 @@ The read tools, each asserted on its arithmetic directly and never through an en
 
 ## Changelog
 
+- **0.3.0** (2026-09-15) — the text search: a literal or regex line scan over the scanner's own
+  extensions and size bound, on the same walk as `FindFiles`; whole-word through one shared rule;
+  bounded by matching lines, matched characters, a whole-search deadline and the caller's token,
+  each said in the note. The holder now takes the scanner's size bound at construction.
 - **0.2.0** (2026-09-15) — the four read tools: listing, numbered line range, bounded whole file,
   glob over a self-walked list. Bounds as code constants; notes for every cut; exceptions for every
   hard failure. The holder is composed in `Program.cs` and held by nothing.
