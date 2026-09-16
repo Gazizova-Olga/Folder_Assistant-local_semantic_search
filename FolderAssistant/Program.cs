@@ -187,9 +187,10 @@ internal sealed class Program
 
 		// The chat client and the agent over it, each a factory so a host boots without a provider it can
 		// reach: nothing here connects, and a configuration that cannot name a provider at all fails when
-		// the agent is first asked for, with a sentence saying what is missing. Resolved by nothing yet —
-		// the tools are reflected in and the turn is run by the phase that follows — and the agent is built
-		// with no tools until then, so what exists is an agent that can talk and cannot yet read the folder.
+		// the agent is first asked for, with a sentence saying what is missing. The agent is handed every
+		// tool the three holders have, each through the facade of its group — the file tools under the
+		// string contract, the search tools under the fatal one — so what exists is an agent that can read,
+		// search and change the folder. Resolved by nothing yet: the turn runner is the phase that follows.
 		builder.Services.AddSingleton(sp =>
 		{
 			AgentConfig config = sp.GetRequiredService<AgentConfig>();
@@ -197,11 +198,20 @@ internal sealed class Program
 			return ProviderClientFactory.Create(config.Provider, config.ConnectionTimeout);
 		});
 
-		builder.Services.AddSingleton(sp => AgentFactory.Create(
-			sp.GetRequiredService<AgentConfig>(),
-			sp.GetRequiredService<IChatClient>(),
-			tools: [],
-			sp.GetService<ILoggerFactory>()));
+		builder.Services.AddSingleton(sp =>
+		{
+			ILogger<ToolFacade> toolLogger = sp.GetRequiredService<ILogger<ToolFacade>>();
+
+			return AgentFactory.Create(
+				sp.GetRequiredService<AgentConfig>(),
+				sp.GetRequiredService<IChatClient>(),
+				tools:
+				[
+					.. ToolSet.ForFiles(sp.GetRequiredService<ReadTools>(), sp.GetRequiredService<MutationTools>(), toolLogger),
+					.. ToolSet.ForSearch(sp.GetRequiredService<SearchTools>(), toolLogger),
+				],
+				sp.GetService<ILoggerFactory>());
+		});
 
 		// The front end: watcher, reconciler, per-change pipeline and outbox dispatcher, composed by
 		// the library and started by the indexing service once the whole-folder pass has succeeded.

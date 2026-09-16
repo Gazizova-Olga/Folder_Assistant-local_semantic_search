@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.AI;
 
 namespace FolderAssistant.Tests;
 
@@ -348,7 +349,9 @@ public sealed class HostStartupTests
 
 	/// <summary>
 	/// The agent's wiring: the handle resolves from the real root over the configured provider without
-	/// touching the network — a client is built, not connected — and carries the configured name. A
+	/// touching the network — a client is built, not connected — carries the configured name, and holds
+	/// every tool the three holders have, each under its group's facade with the search holder's alone under
+	/// the fatal one. A
 	/// configuration that cannot name a provider fails when the handle is asked for, with the sentence
 	/// that says what to set, never at boot: the host has to come up for the index whether or not a
 	/// model is reachable.
@@ -378,6 +381,11 @@ public sealed class HostStartupTests
 
 		handle.Name.Should().Be("Archivist");
 		handle.Agent.Name.Should().Be("Archivist");
+		IReadOnlyList<AITool> tools = handle.Tools;
+		tools.Select(tool => tool.Name).Should().BeEquivalentTo(
+			"InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "Create", "Update", "ReplaceLines", "Delete", "FindFilesAbout");
+		tools.OfType<ToolFacade>().Where(tool => tool.Group == ToolGroup.Search).Select(tool => tool.Name).Should().Equal("FindFilesAbout");
+		tools.OfType<ToolFacade>().Should().HaveCount(tools.Count);
 		keylessResolve.Should().Throw<InvalidOperationException>().WithMessage("*Provider:ApiKey*");
 	}
 

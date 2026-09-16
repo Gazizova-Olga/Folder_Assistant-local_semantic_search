@@ -37,10 +37,11 @@ The tree is in three states, and the middle one is the one to watch
   (`MutationTools`) and the file-level semantic search over the wrapped query (`SearchTools`, all
   `SPEC-101`) are built, tested and registered, and nothing resolves them. The provider client
   and the agent over it (`ProviderClientFactory`, `AgentFactory`, `AgentHandle`; `SPEC-140`,
-  `SPEC-100`) are built the same way: one agent, with no tools yet, registered and resolved by
-  nothing. The reflection that would hand the holders' methods to it does not exist.
-- **Not built** — the tool facades, the roster and the turn runner, the chat surface, the
-  conversation database. The parts of the architecture below that describe them are intent.
+  `SPEC-100`) are built the same way, and so are the tool reflection and the facade (`ToolReflection`,
+  `ToolFacade`, `ToolSet`): the one agent holds every tool the three holders have, each under its
+  group's failure contract, and is registered and resolved by nothing. Nothing runs a turn.
+- **Not built** — the roster and the turn runner, the chat surface, the conversation database. The
+  parts of the architecture below that describe them are intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -385,7 +386,7 @@ is indistinguishable from "nothing relevant", and the model would answer from pr
 believing it had searched. A file tool failure returns a `TOOL_FAILED:` string the model must
 report rather than answer around.
 
-### Agent — provider client and agent factory built, reached by nothing
+### Agent — provider client, agent factory and tool facades built, reached by nothing
 
 One provider family in two shapes, OpenAI-compatible and Azure, built by `ProviderClientFactory`
 (`SPEC-140`). A client is **built, not connected**: nothing reaches the network at construction, so
@@ -402,7 +403,20 @@ offline rule.
 system prompt **verbatim**, or one built from the name and description; the tool list as what it may
 call, none meaning none; and `AgentHandle` owning agent and client together, because the framework's
 agent does not own its client and a client is a pipeline something has to end. The root registers
-both as factories, with no tools, resolved by nothing.
+both as factories, resolved by nothing.
+
+The tools the agent holds are the holders' own methods, reflected (`ToolReflection`): a public method
+carrying a `[Description]` is a tool named after it, with the holder's parameter descriptions as its
+schema, and nothing is described twice. Each is wrapped in **one facade** (`ToolFacade`) that times the
+call, writes one structured log line and applies the failure contract of its **group**, and the group
+is decided by the holder's type in one place (`ToolSet`), so a call site cannot put the search holder
+under the file contract. A file tool that throws returns `TOOL_FAILED: <tool>: <message>`, logged at
+warning, and the built prompt tells the model what that prefix means. A search tool that throws — the
+index's readiness refusal included — throws through unchanged, logged at error, and **the turn ends**:
+the agent's tool-calling loop is built by `AgentFactory` with no tolerance for a failed iteration,
+because the framework's default hands the model a generic error string and lets it answer, which is
+exactly the swallowed fault. A cancellation of the caller's token is classified by the token before the
+exception type and passes through both groups. Two tools with one name are refused at construction.
 
 ### Persistence — index database live, conversation database not built
 

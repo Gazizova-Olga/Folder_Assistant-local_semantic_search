@@ -15,7 +15,7 @@ machine unless you deliberately point the chat side at a hosted provider.
 | AI stack | `Microsoft.Extensions.AI`, built towards the Microsoft Agent Framework; Ollama for local embeddings |
 | Storage | SQLite via `Microsoft.Data.Sqlite`, WAL mode; `sqlite-vec` native k-NN by default, brute-force cosine where it has no binary |
 | Observability | OpenTelemetry metrics exported for Prometheus at `GET /metrics`; structured logging |
-| Quality gates | Zero-warning build enforced with SonarAnalyzer; ~550 xUnit tests; CI on Ubuntu and Windows for every push |
+| Quality gates | Zero-warning build enforced with SonarAnalyzer; ~700 xUnit tests; CI on Ubuntu and Windows for every push |
 | Method | Spec-first: every behavioural change starts from a versioned spec in `docs/specs/` and ships with it |
 
 ## Why it exists
@@ -81,11 +81,16 @@ colour-coded.
 - The **provider client and the agent**: one client family in two shapes, OpenAI-compatible (a local
   Ollama chat model included, with no key) and Azure OpenAI, built but never connected at startup,
   with the SDK's network timeout set to the configured one; and one agent over it, with the
-  configured prompt verbatim. It has no tools yet and nothing runs a turn through it.
+  configured prompt verbatim.
+- The **tool reflection and the facades**: every method the three holders describe is a tool named
+  after it, each wrapped in a facade that times it, logs it and applies its group's failure contract.
+  A file tool's failure comes back to the model as a `TOOL_FAILED:` string it is told to report; a
+  search tool's failure ends the turn, because a swallowed retrieval fault reads exactly like "nothing
+  relevant". The agent holds all ten. Nothing runs a turn through it yet.
 
 **Not built**
 
-- The tool facades, the roster and the turn runner, the chat surface, the conversation database.
+- The roster and the turn runner, the chat surface, the conversation database.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits and
 read the telemetry**. You cannot yet ask it a question.
@@ -209,8 +214,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider built
-    class convdb,snippet,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade built
+    class convdb,snippet,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

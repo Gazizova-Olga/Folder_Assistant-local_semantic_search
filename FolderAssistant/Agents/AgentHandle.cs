@@ -13,20 +13,25 @@ internal sealed class AgentHandle : IDisposable
 {
 	private readonly IChatClient _client;
 
-	public AgentHandle(String name, AIAgent agent, IChatClient client)
+	public AgentHandle(String name, AIAgent agent, IChatClient client, IReadOnlyList<AITool> tools)
 	{
 		ArgumentException.ThrowIfNullOrWhiteSpace(name);
 		ArgumentNullException.ThrowIfNull(agent);
 		ArgumentNullException.ThrowIfNull(client);
+		ArgumentNullException.ThrowIfNull(tools);
 		this.Name = name;
 		this.Agent = agent;
 		this._client = client;
+		this.Tools = tools;
 	}
 
 	/// <summary>The agent's name, as configured: the key a registry holds it under.</summary>
 	public String Name { get; }
 
 	public AIAgent Agent { get; }
+
+	/// <summary>What the agent may call — the list it was built with, so what it holds can be read without running a turn.</summary>
+	public IReadOnlyList<AITool> Tools { get; }
 
 	public void Dispose() => this._client.Dispose();
 }

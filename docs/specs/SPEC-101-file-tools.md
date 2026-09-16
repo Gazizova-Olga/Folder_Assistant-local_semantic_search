@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Status | Draft — containment, the read tools, the text search, the file-level semantic search and the mutation tools written and implemented |
-| Version | 0.6.0 |
+| Status | Draft — containment, the read tools, the text search, the file-level semantic search and the mutation tools written and implemented; the facade over them is SPEC-100's and is built |
+| Version | 0.7.0 |
 | Owner | Tools |
 | Last updated | 2026-09-16 |
 
@@ -25,12 +25,13 @@ cannot reach anything outside the folder, and cannot touch the index's own metad
   do so through its contract and add nothing to the ranking; the passage-level search tool that
   reduces hits under a token budget is an orchestration concern
   ([SPEC-100](SPEC-100-conversation-orchestration.md)).
-- How a tool failure is reported to the model. The facade that turns an exception into a string the
-  model must report belongs to the agent layer, and is not built.
+- How a tool failure is reported to the model. The facade that turns an exception into the string the
+  model must report — or lets it end the turn — is the agent layer's
+  ([SPEC-100](SPEC-100-conversation-orchestration.md)).
 
 This version writes the containment rule, the four read tools, the text search, the file-level
-semantic search and the four mutation tools. All of it is built and registered; nothing at runtime
-resolves it yet.
+semantic search and the four mutation tools. All of it is built and registered, and the agent holds
+every method here through SPEC-100's facade; nothing runs a turn yet.
 
 ## The rule
 
@@ -120,8 +121,8 @@ opinion. The rules that hold across all five:
   or a silently shortened answer.
 - **A hard failure is an exception, not an empty result.** A missing file, a path that is a directory
   where a file was asked for, a binary file, a bad line range — each throws its ordinary .NET
-  exception. The facade that turns those into the string the model must report belongs to the agent
-  layer and is not built; until then the exception is the contract.
+  exception. The facade that turns those into the string the model must report is the agent layer's
+  ([SPEC-100](SPEC-100-conversation-orchestration.md)); the exception is this layer's contract.
 - **Bounds are code constants**, stated below. Per-call budgets are deferred for the same reason
   the reducer's are ([SPEC-110](SPEC-110-rag-retrieval.md)): the caller is a model, and a model that
   can raise a bound will.
@@ -251,8 +252,8 @@ zero files reads differently from "no matches" over three hundred.
 A second holder, `SearchTools`, apart from the read tools for a reason that is a contract and not a
 file layout: **a search tool's failure is fatal where a file tool's is a string.** A swallowed retrieval
 fault is indistinguishable from "nothing relevant", and a model that believed it had searched would
-answer from prior knowledge. The holder is what the facade that enforces that difference will tell the
-two groups apart by. It holds no guard: it names no path a caller supplied, and the paths it returns
+answer from prior knowledge. The holder is what the facade that enforces that difference tells the two
+groups apart by ([SPEC-100](SPEC-100-conversation-orchestration.md)). It holds no guard: it names no path a caller supplied, and the paths it returns
 come from the index.
 
 ### `FindFilesAbout(query, maxFiles)`
@@ -642,6 +643,9 @@ and the reports made — never through an index that would still look right afte
 - [SPEC-130 — Persistence](SPEC-130-persistence.md)
 
 ## Changelog
+
+- **0.7.0** (2026-09-16) — the facade over these holders exists (SPEC-100 0.4.0): the three passages
+  that said it was not built now point at it. No behaviour here changed.
 
 - **0.6.0** (2026-09-16) — the text search asks the extraction registry (SPEC-120 0.18.0) which
   formats scan as raw lines, and the holder takes the registry at construction; the readers' NUL

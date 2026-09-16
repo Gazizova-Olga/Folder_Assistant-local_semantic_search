@@ -1,7 +1,9 @@
 using FluentAssertions;
 using FolderAssistant.Agents;
+using FolderAssistant.Retrieval;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FolderAssistant.Tests.Agents;
 
@@ -86,5 +88,65 @@ public sealed class AgentFactoryTests
 
 		inner.Calls[0].Options!.Temperature.Should().Be(0.2f);
 		inner.Calls[0].Options!.MaxOutputTokens.Should().Be(512);
+	}
+
+	/// <summary>
+	/// The file contract through the real loop: the failure string is what the loop hands the model as the
+	/// tool's result, and the model's next turn is the answer. Asserted on the messages the loop sent back,
+	/// not on the facade alone, because the loop is what could have turned the string into something else.
+	/// </summary>
+	[Fact]
+	public async Task A_File_Tools_Failure_Reaches_The_Model_As_The_String_And_The_Turn_Goes_On()
+	{
+		ScriptedChatClient client = new(
+			ScriptedChatClient.Call("ReadFile", new() { ["path"] = "missing.md" }),
+			ScriptedChatClient.Text("The file is not there."));
+		AIFunction inner = AIFunctionFactory.Create(new Func<String, String>(path => throw new FileNotFoundException($"'{path}' is not a file in the workspace.")), "ReadFile");
+		using AgentHandle handle = AgentFactory.Create(new AgentConfig(), client, tools: [new ToolFacade(inner, ToolGroup.File, NullLogger.Instance)]);
+
+		AgentResponse response = await handle.Agent.RunAsync("read missing.md");
+
+		response.Text.Should().Be("The file is not there.");
+		client.Calls.Should().HaveCount(2);
+		FunctionResultContent result = client.Calls[1].Messages.SelectMany(message => message.Contents).OfType<FunctionResultContent>().Single();
+		result.Result!.ToString().Should().Be("TOOL_FAILED: ReadFile: 'missing.md' is not a file in the workspace.");
+	}
+
+	/// <summary>
+	/// The search contract through the real loop: the turn ends with the tool's exception and the model is
+	/// never asked again. The loop's own default would have sent the model a generic error and let it answer.
+	/// </summary>
+	[Fact]
+	public async Task A_Search_Tools_Failure_Ends_The_Turn_Before_The_Model_Is_Asked_Again()
+	{
+		ScriptedChatClient client = new(
+			ScriptedChatClient.Call("FindFilesAbout", new() { ["query"] = "topic" }),
+			ScriptedChatClient.Text("never reached"));
+		IndexNotReadyException refusal = new("The index is still building.");
+		AIFunction inner = AIFunctionFactory.Create(new Func<String, String>(query => throw refusal), "FindFilesAbout");
+		using AgentHandle handle = AgentFactory.Create(new AgentConfig(), client, tools: [new ToolFacade(inner, ToolGroup.Search, NullLogger.Instance)]);
+
+		Func<Task> run = () => handle.Agent.RunAsync("what is this about");
+
+		(await run.Should().ThrowAsync<IndexNotReadyException>()).Which.Should().BeSameAs(refusal);
+		client.Calls.Should().ContainSingle();
+	}
+
+	[Fact]
+	public void Two_Tools_With_One_Name_Are_Refused()
+	{
+		AITool first = AIFunctionFactory.Create(() => "a", "ReadFile");
+		AITool second = AIFunctionFactory.Create(() => "b", "ReadFile");
+
+		Action create = () => AgentFactory.Create(new AgentConfig(), new RecordingChatClient(), tools: [first, second]);
+
+		create.Should().Throw<InvalidOperationException>().WithMessage("*ReadFile*");
+	}
+
+	[Fact]
+	public void The_Built_Prompt_Says_What_A_Failure_String_Means()
+	{
+		AgentFactory.Instructions(new AgentConfig(), "x", "y").Should().Contain("TOOL_FAILED:").And.Contain("do not answer around it");
+		AgentFactory.Instructions(new AgentConfig { SystemPrompt = "Mine." }, "x", "y").Should().Be("Mine.");
 	}
 }
