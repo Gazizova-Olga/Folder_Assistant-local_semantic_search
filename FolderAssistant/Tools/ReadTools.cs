@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing;
 
 namespace FolderAssistant.Tools;
@@ -66,25 +67,31 @@ internal sealed class ReadTools
 	internal static readonly TimeSpan DefaultSearchDeadline = TimeSpan.FromSeconds(10);
 
 	private readonly WorkspacePathGuard _guard;
+	private readonly TextExtractorRegistry _extractors;
 	private readonly Int64 _maxSearchFileBytes;
 	private readonly TimeSpan _searchDeadline;
 
 	/// <param name="guard">The holder's own containment guard.</param>
+	/// <param name="extractors">
+	/// The one source of which files the index reads, asked which of them can be scanned as raw lines.
+	/// </param>
 	/// <param name="maxSearchFileBytes">
 	/// The size above which a file is not searched: the indexing scanner's own bound, so the search and
 	/// the index read the same files.
 	/// </param>
-	public ReadTools(WorkspacePathGuard guard, Int64 maxSearchFileBytes)
-		: this(guard, maxSearchFileBytes, DefaultSearchDeadline)
+	public ReadTools(WorkspacePathGuard guard, TextExtractorRegistry extractors, Int64 maxSearchFileBytes)
+		: this(guard, extractors, maxSearchFileBytes, DefaultSearchDeadline)
 	{
 	}
 
 	/// <summary>The deadline is a parameter here so a test can make it fire without waiting ten seconds.</summary>
-	internal ReadTools(WorkspacePathGuard guard, Int64 maxSearchFileBytes, TimeSpan searchDeadline)
+	internal ReadTools(WorkspacePathGuard guard, TextExtractorRegistry extractors, Int64 maxSearchFileBytes, TimeSpan searchDeadline)
 	{
 		ArgumentNullException.ThrowIfNull(guard);
+		ArgumentNullException.ThrowIfNull(extractors);
 		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxSearchFileBytes);
 		this._guard = guard;
+		this._extractors = extractors;
 		this._maxSearchFileBytes = maxSearchFileBytes;
 		this._searchDeadline = searchDeadline;
 	}
@@ -316,7 +323,9 @@ internal sealed class ReadTools
 		foreach (WalkEntry entry in this.Walk(resolved.FullPath, resolved.RelativePath.Replace(Path.DirectorySeparatorChar, '/')))
 		{
 			cancellationToken.ThrowIfCancellationRequested();
-			if (entry.IsDirectory || !LocalTextFileScanner.IsIndexableExtension(entry.Info.Extension))
+			// Only a format whose bytes are its lines: a document in a container is the index's to read through
+			// its extractor, and scanning its raw bytes would match inside the packaging.
+			if (entry.IsDirectory || !this._extractors.SupportsRawLineScanning(entry.Info.Extension))
 			{
 				continue;
 			}

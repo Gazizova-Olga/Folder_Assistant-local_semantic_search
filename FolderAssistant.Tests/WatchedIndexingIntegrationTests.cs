@@ -1,5 +1,6 @@
 using FluentAssertions;
 using FolderAssistant.Embedding;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing;
 using FolderAssistant.Indexing.Outbox;
 using FolderAssistant.Indexing.Scanning;
@@ -49,6 +50,7 @@ public sealed class WatchedIndexingIntegrationTests
 			vectorizer,
 			new FolderIndexRepository(writer),
 			reader,
+			TextExtractorRegistry.Default,
 			indexing,
 			persistence.MetadataFolderName);
 
@@ -57,7 +59,7 @@ public sealed class WatchedIndexingIntegrationTests
 			{
 				RootPath = folder.Path,
 				MetadataFolderName = persistence.MetadataFolderName,
-				IndexableExtensions = LocalTextFileScanner.IndexableExtensions,
+				IndexableExtensions = TextExtractorRegistry.Default.Extensions,
 				MaxContentBytes = indexing.MaxTextFileSizeBytes,
 				QuietWindow = TimeSpan.FromMilliseconds(100),
 				ReconciliationInterval = TimeSpan.Zero,

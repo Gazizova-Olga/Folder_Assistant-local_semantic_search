@@ -50,6 +50,10 @@ colour-coded.
   that catches dropped events, and a durable outbox that delivers one changed file at a time to the
   embedding pipeline with retry and backoff.
 - The **index database** — files, chunks, vectors and the outbox in a folder-scoped SQLite file.
+- The **text extraction registry** — the one source of which files are read and how each is
+  decoded, asked by the indexing pass, the per-file delivery, the watcher and the text search alike.
+  Plain text today; document formats wait until a rebuilt passage is verified against its chunk
+  hash.
 - **Telemetry** — a structured log line per embed call, and retrieval metrics at `GET /metrics`.
 
 **Built and tested, not yet reachable at runtime**
@@ -144,7 +148,7 @@ flowchart TB
         textsearch["SearchText<br/>index-independent, bounded four ways"]
         about["FindFilesAbout<br/>file-level semantic, same seams"]
         mutate["Mutation tools<br/>Create · Update · ReplaceLines · Delete"]
-        extract["Text extraction registry<br/>plain text; docx/pdf after snippet verification"]
+        extract["Text extraction registry<br/>one source of the extension list; plain text; docx/pdf after snippet verification"]
     end
 
     subgraph agent["Agent and orchestration — Phase B, SPEC-100/140"]
@@ -200,9 +204,9 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate built
-    class convdb,snippet,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class convdb,snippet,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

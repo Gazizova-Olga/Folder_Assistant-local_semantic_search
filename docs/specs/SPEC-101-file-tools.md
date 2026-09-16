@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — containment, the read tools, the text search, the file-level semantic search and the mutation tools written and implemented |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | Tools |
 | Last updated | 2026-09-16 |
 
@@ -168,9 +168,10 @@ and the note points at `ReadFile` for the rest.
 
 - **A file above 16 MB** throws, before any of it is read. Nothing a line range or a bounded read
   returns from such a file is worth reading it through, and the indexer's own bound is 1 MB.
-- **A file whose first 8 KB contain a NUL byte** throws as not a text file. This is the only binary
-  detection there is until the extraction registry exists; a PDF or a `.docx` is refused, not
-  returned as its raw bytes.
+- **A file whose first 8 KB contain a NUL byte** throws as not a text file. The readers read any
+  extension a caller names, not only the ones the extraction registry knows, so this sniff stays
+  beside the registry: a PDF or a `.docx` is refused, not returned as its raw bytes, whether or not
+  an extractor for it exists yet.
 
 ### `FindFiles(pattern)`
 
@@ -203,14 +204,16 @@ the files, not the index, which is what makes it useful for the two things seman
 exact lookup (an identifier, an error string, a date), and the window before the first index is ready.
 
 **Which files.** The same walk as `FindFiles` (files first, then subdirectories, both in name order;
-links, the metadata folder and the scanner's ignored directory names left out), starting at `path` —
-the root by default — which must resolve to an existing directory or the tool throws. Of the files
-walked, only those the indexing scanner would read are searched: its extension allow-list, asked of
-the scanner, and its size bound, taken from the same configuration value the scanner takes it from
-(`Indexing:MaxTextFileSizeBytes`) and passed to the holder at construction. A file above the bound is
-skipped and counted in the note. Every extension on that list is plain text; the extraction registry
-that will say which formats can be scanned as raw lines does not exist yet, and until it does the
-scanner's list is the whole answer.
+links, the metadata folder and the scanner's ignored directory names left out), starting at `path`
+— the root by default — which must resolve to an existing directory or the tool throws. Of the
+files walked, only those the index would read **and** whose format scans as raw lines are searched
+— asked of the text extraction registry ([SPEC-120](SPEC-120-rag-indexing.md)), the one source of
+both questions, which the holder takes at construction — within the scanner's size bound, taken
+from the same configuration value the scanner takes it from (`Indexing:MaxTextFileSizeBytes`). A
+file above the bound is skipped and counted in the note. A format the index reads through an
+extractor but whose bytes are not its lines (a document in a container) is not searched: scanning it
+raw would match inside the packaging. Today every registered format is plain text, so the two
+questions have one answer; the search asks the narrower one so that stays true when they part.
 
 **Matching.** A literal pattern is an ordinal substring; `ignoreCase` makes it ordinal-ignore-case.
 With `regex` the pattern is a .NET regular expression, culture-invariant, with `IgnoreCase` when asked
@@ -381,7 +384,7 @@ internal sealed class WorkspaceContainmentException : InvalidOperationException
 
 internal sealed class ReadTools
 {
-	ReadTools(WorkspacePathGuard guard, Int64 maxSearchFileBytes);
+	ReadTools(WorkspacePathGuard guard, TextExtractorRegistry extractors, Int64 maxSearchFileBytes);
 	DirectoryListing InspectDirectory(String path);
 	FileLines ReadFile(String path, Int32 startLine = 1, Int32? endLine = null);
 	FileText Retrieve(String path);
@@ -559,7 +562,8 @@ The text search, its matcher first and the tool over it:
   An empty pattern and an unparseable expression throw; a literal that looks like a broken
   expression does not.
 - The tool: matches come back with file, line and text in walk order, one per line; only the
-  scanner's extensions are read and the walk's exclusions hold; `path` narrows the search and a
+  registry's extensions are read, only those that scan as raw lines (a staged container format the
+  registry reads is left alone) and the walk's exclusions hold; `path` narrows the search and a
   missing directory, a file, or a refused path throws; each flag reaches the matcher; a long line is
   shortened around the match with the note counting it; the line bound and the character bound each
   cut with their own note; a zero deadline returns a partial result with the flag and note; a
@@ -638,6 +642,10 @@ and the reports made — never through an index that would still look right afte
 - [SPEC-130 — Persistence](SPEC-130-persistence.md)
 
 ## Changelog
+
+- **0.6.0** (2026-09-16) — the text search asks the extraction registry (SPEC-120 0.18.0) which
+  formats scan as raw lines, and the holder takes the registry at construction; the readers' NUL
+  sniff stays beside it, since they read any extension a caller names.
 
 - **0.5.0** (2026-09-16) — the mutation tools, `Create`, `Update`, `ReplaceLines` and `Delete`, in
   their own holder over a second guard: every write a temporary file and a retried rename, every

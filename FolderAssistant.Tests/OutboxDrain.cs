@@ -1,4 +1,5 @@
 using FolderAssistant.Embedding;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing;
 using FolderAssistant.Indexing.Outbox;
 using FolderAssistant.Persistence;
@@ -36,6 +37,7 @@ internal static class OutboxDrain
 			vectorizer ?? new ProgrammableEmbeddingVectorizer(config.ModelVersionId, config.VectorDimension),
 			new FolderIndexRepository(writer ?? new SqliteBlobVectorStoreWriter()),
 			reader ?? new SqliteBlobVectorStoreReader(),
+			TextExtractorRegistry.Default,
 			config,
 			new PersistenceConfig().MetadataFolderName);
 

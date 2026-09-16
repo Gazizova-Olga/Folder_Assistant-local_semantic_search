@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using FolderAssistant.Embedding;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing;
 using FolderAssistant.Indexing.Outbox;
 using FolderAssistant.Indexing.Scanning;
@@ -29,6 +30,11 @@ internal sealed class Program
 		// the ones the test asked for.
 		builder.Services.Configure<AgentConfig>(builder.Configuration.GetSection(AgentConfig.SectionName));
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<IOptions<AgentConfig>>().Value);
+
+		// The one source of which files this system reads and how each is decoded. Every walker over the
+		// folder — the whole-folder pass, the per-file delivery, the watcher's filter, the text search — is
+		// handed this instance, so no two of them can disagree about what the corpus is.
+		builder.Services.AddSingleton(TextExtractorRegistry.Default);
 
 		builder.Services.AddSingleton<IndexState>();
 		builder.Services.AddSingleton<IIndexState>(sp => sp.GetRequiredService<IndexState>());
@@ -138,6 +144,7 @@ internal sealed class Program
 				sp.GetRequiredService<IVectorizer>(),
 				new FolderIndexRepository(sp.GetRequiredService<IVectorStoreWriter>()),
 				sp.GetRequiredService<IVectorStoreReader>(),
+				sp.GetRequiredService<TextExtractorRegistry>(),
 				config.Indexing,
 				config.Persistence.MetadataFolderName);
 		});
@@ -151,6 +158,7 @@ internal sealed class Program
 
 			return new ReadTools(
 				new WorkspacePathGuard(config.ResolveAnalyzedFolderPath(), config.Persistence.MetadataFolderName),
+				sp.GetRequiredService<TextExtractorRegistry>(),
 				config.Indexing.MaxTextFileSizeBytes);
 		});
 
@@ -182,14 +190,15 @@ internal sealed class Program
 			AgentConfig config = sp.GetRequiredService<AgentConfig>();
 			FolderIndexStore store = sp.GetRequiredService<FolderIndexStore>();
 
-			// The extension list and the size bound are the scanner's own, from one source of truth.
-			// Left at the library's defaults, every binary in the folder would be recorded, queued and
-			// delivered to a bridge that refuses each one, and an oversize file would be read whole.
+			// The extension list is the extraction registry's and the size bound the scanner's, from one
+			// source of truth each. Left at the library's defaults, every binary in the folder would be
+			// recorded, queued and delivered to a bridge that refuses each one, and an oversize file would
+			// be read whole.
 			FolderIndexerOptions options = new()
 			{
 				RootPath = config.ResolveAnalyzedFolderPath(),
 				MetadataFolderName = config.Persistence.MetadataFolderName,
-				IndexableExtensions = LocalTextFileScanner.IndexableExtensions,
+				IndexableExtensions = sp.GetRequiredService<TextExtractorRegistry>().Extensions,
 				MaxContentBytes = config.Indexing.MaxTextFileSizeBytes,
 				QuietWindow = TimeSpan.FromMilliseconds(config.Indexing.DebounceMilliseconds),
 				ReconciliationInterval = TimeSpan.FromSeconds(config.Indexing.ReconciliationIntervalSeconds),
@@ -234,7 +243,8 @@ internal sealed class Program
 				sp.GetRequiredService<IVectorizer>(),
 				sp.GetRequiredService<IVectorStoreWriter>(),
 				sp.GetRequiredService<IVectorStoreReader>(),
-				config.Persistence.MetadataFolderName);
+				config.Persistence.MetadataFolderName,
+				sp.GetRequiredService<TextExtractorRegistry>());
 
 			// Only a network-bound embedder implements the probe seam; for the in-process ones this is
 			// null and the first pass just starts. The cast is how the composition root avoids knowing

@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
-using System.Text;
 using FolderAssistant.Embedding;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing.Outbox;
 using FolderAssistant.Persistence;
 
@@ -44,6 +44,7 @@ internal sealed class RagBridgeVectorizationService : IVectorizationService, IDi
 	private readonly IVectorizer _vectorizer;
 	private readonly FolderIndexRepository _repository;
 	private readonly IVectorStoreReader _vectorStoreReader;
+	private readonly TextExtractorRegistry _extractors;
 	private readonly IndexingConfig _config;
 	private readonly String _metadataFolderName;
 
@@ -65,6 +66,7 @@ internal sealed class RagBridgeVectorizationService : IVectorizationService, IDi
 		IVectorizer vectorizer,
 		FolderIndexRepository repository,
 		IVectorStoreReader vectorStoreReader,
+		TextExtractorRegistry extractors,
 		IndexingConfig config,
 		String metadataFolderName)
 	{
@@ -73,6 +75,7 @@ internal sealed class RagBridgeVectorizationService : IVectorizationService, IDi
 		ArgumentNullException.ThrowIfNull(vectorizer);
 		ArgumentNullException.ThrowIfNull(repository);
 		ArgumentNullException.ThrowIfNull(vectorStoreReader);
+		ArgumentNullException.ThrowIfNull(extractors);
 		ArgumentNullException.ThrowIfNull(config);
 		ArgumentException.ThrowIfNullOrWhiteSpace(metadataFolderName);
 
@@ -81,6 +84,7 @@ internal sealed class RagBridgeVectorizationService : IVectorizationService, IDi
 		this._vectorizer = vectorizer;
 		this._repository = repository;
 		this._vectorStoreReader = vectorStoreReader;
+		this._extractors = extractors;
 		this._config = config;
 		this._metadataFolderName = metadataFolderName;
 	}
@@ -101,16 +105,19 @@ internal sealed class RagBridgeVectorizationService : IVectorizationService, IDi
 		ArgumentNullException.ThrowIfNull(content);
 		ArgumentNullException.ThrowIfNull(metadata);
 
-		if (this.IsInsideMetadataFolder(metadata.AbsolutePath) || !LocalTextFileScanner.IsIndexableExtension(metadata.Extension))
+		ITextExtractor? extractor = this._extractors.Find(metadata.Extension);
+		if (this.IsInsideMetadataFolder(metadata.AbsolutePath) || extractor is null)
 		{
 			return;
 		}
 
+		// Decoded by the same extractor the whole-folder pass uses for this extension, so a file reads
+		// the same whichever path indexed it.
 		String text;
-
-		using (StreamReader reader = new(content, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true))
+		using (MemoryStream buffer = new())
 		{
-			text = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+			await content.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+			text = extractor.Extract(buffer.ToArray());
 		}
 
 		// A corpus-fitted embedder cannot be fitted from one file, and embedding against no fit at all

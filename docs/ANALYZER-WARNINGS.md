@@ -57,15 +57,16 @@ Four warnings stood between the tree and the gate. None was silenced.
 | Rule | Site | How it was cleared |
 | --- | --- | --- |
 | `S3878` — array created for a `params` parameter | `FolderIndexingPipelineTests.cs(54)` | Genuinely redundant. `BeEquivalentTo(["real.md"])` became `BeEquivalentTo("real.md")`; the array was doing nothing. |
-| `S2325` — could be static | `LocalTextFileScanner.Enumerate` | **Suppressed.** Kept an instance method by design — see below. |
+| `S2325` — could be static | `LocalTextFileScanner.Enumerate` | **Suppressed** at the time, kept an instance method by design — see below. **Suppression removed 2026-09-16:** the scanner now holds the extraction registry and `Enumerate` walks with it, so the method reads instance data and the rule no longer fires. |
 | `S2325` — could be static | `SimpleTokenizer.Tokenize` | **Suppressed**, same reason. |
 | `S2325` — could be static | `TextChunker.Chunk` | **Suppressed**, same reason. |
 
-**Why the three `S2325` sites are suppressed rather than made static.** All three types are used as
-instantiable collaborators: each is a `new()` field on `FolderIndexingPipeline` and is constructed
-directly at test call sites (`new LocalTextFileScanner()`, `new TextChunker()`). Making the methods
-static would change how every caller reaches them, and would buy nothing at runtime. The analyzer
-is reporting a fact about the method body; it is not reporting a problem with the design.
+**Why the `S2325` sites are suppressed rather than made static** (two remain:
+`SimpleTokenizer.Tokenize` and `TextChunker.Chunk`). Both types are used as instantiable
+collaborators: each is a `new()` field on `FolderIndexingPipeline` and is constructed directly at
+test call sites (`new TextChunker()`). Making the methods static would change how every caller
+reaches them, and would buy nothing at runtime. The analyzer is reporting a fact about the method
+body; it is not reporting a problem with the design.
 
 `S3267` on `FileChangeFeed.ShouldIgnore` was cleared one commit earlier by fixing the code — the
 detail is at the end of this file.

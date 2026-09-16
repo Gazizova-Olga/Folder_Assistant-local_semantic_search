@@ -1,4 +1,5 @@
 using FolderAssistant.Embedding;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
@@ -59,7 +60,8 @@ internal sealed record IndexingResult(
 /// </summary>
 internal sealed class FolderIndexingPipeline
 {
-	private readonly LocalTextFileScanner _scanner = new();
+	private readonly TextExtractorRegistry _extractors;
+	private readonly LocalTextFileScanner _scanner;
 	private readonly SimpleTokenizer _tokenizer = new();
 	private readonly TextChunker _chunker = new();
 	private readonly FolderIndexRepository _repository;
@@ -92,12 +94,17 @@ internal sealed class FolderIndexingPipeline
 	/// The index's own folder, by its configured name, which the comparison at the start of a pass
 	/// must not record. Null takes the configured default.
 	/// </param>
+	/// <param name="extractors">
+	/// The one source of which files are read and how each is decoded. Null takes the registry the
+	/// application runs with; the composition root passes its registered instance.
+	/// </param>
 	internal FolderIndexingPipeline(
 		IVectorizer? vectorizer,
 		IVectorStoreWriter vectorStoreWriter,
 		IVectorStoreReader vectorStoreReader,
-		String? metadataFolderName = null)
-		: this(vectorizer, new SqliteFolderManifestReader(vectorStoreReader), vectorStoreWriter, vectorStoreReader, metadataFolderName)
+		String? metadataFolderName = null,
+		TextExtractorRegistry? extractors = null)
+		: this(vectorizer, new SqliteFolderManifestReader(vectorStoreReader), vectorStoreWriter, vectorStoreReader, metadataFolderName, extractors)
 	{
 	}
 
@@ -106,12 +113,15 @@ internal sealed class FolderIndexingPipeline
 		IFolderManifestReader manifestReader,
 		IVectorStoreWriter vectorStoreWriter,
 		IVectorStoreReader vectorStoreReader,
-		String? metadataFolderName = null)
+		String? metadataFolderName = null,
+		TextExtractorRegistry? extractors = null)
 	{
 		ArgumentNullException.ThrowIfNull(manifestReader);
 		ArgumentNullException.ThrowIfNull(vectorStoreWriter);
 		ArgumentNullException.ThrowIfNull(vectorStoreReader);
 
+		this._extractors = extractors ?? TextExtractorRegistry.Default;
+		this._scanner = new LocalTextFileScanner(this._extractors);
 		this._vectorizer = vectorizer;
 		this._manifestReader = manifestReader;
 		this._vectorStoreReader = vectorStoreReader;
@@ -362,7 +372,7 @@ internal sealed class FolderIndexingPipeline
 	private ReconcileResult Record(String analyzedFolderPath, FolderIndexStore store, IndexingConfig config)
 	{
 		IndexablePathFilter filter = new(
-			this._metadataFolderName, LocalTextFileScanner.IndexableExtensions, config.MaxTextFileSizeBytes);
+			this._metadataFolderName, this._extractors.Extensions, config.MaxTextFileSizeBytes);
 
 		Reconciler reconciler = new(analyzedFolderPath, filter, store, new Sha256ContentHasher());
 

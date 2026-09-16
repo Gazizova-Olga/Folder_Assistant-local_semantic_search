@@ -1,6 +1,6 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
+using FolderAssistant.Extraction;
 
 namespace FolderAssistant.Indexing;
 
@@ -8,41 +8,33 @@ namespace FolderAssistant.Indexing;
 /// Walks the analyzed folder and returns the text files worth indexing.
 ///
 /// <para>
-/// An extension allowlist rather than a binary sniff: the set is the initial scope, and something
-/// unreadable that happens to look like text costs an embedding and pollutes the index.
+/// Which files are text is the extraction registry's answer, not a list of this scanner's own: an
+/// extension allowlist rather than a binary sniff, because the set is the declared scope and something
+/// unreadable that happens to look like text costs an embedding and pollutes the index. The registry
+/// also decodes each file, so a file reads the same here as it does on the per-file delivery path.
 /// </para>
 /// </summary>
 internal sealed class LocalTextFileScanner
 {
-	private static readonly HashSet<String> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
-	{
-		".txt", ".md", ".markdown", ".json", ".yml", ".yaml", ".xml", ".ini", ".toml", ".csv", ".log",
-		".cs", ".csproj", ".props", ".targets", ".sln", ".slnx", ".js", ".ts", ".jsx", ".tsx", ".py",
-		".java", ".go", ".rs", ".sql", ".ps1", ".sh", ".html", ".css", ".scss",
-	};
-
 	private static readonly HashSet<String> IgnoredDirectoryNames = new(StringComparer.OrdinalIgnoreCase)
 	{
 		".git", ".vs", "bin", "obj", "node_modules", ".folderassistant",
 	};
 
-	/// <summary>
-	/// Whether this system reads files of that extension at all.
-	///
-	/// <para>
-	/// Exposed so that the per-file delivery path asks the same question this scanner does, rather than
-	/// keeping a second list beside it. Two lists would drift, and the drift would be silent: a file
-	/// indexed by one path and ignored by the other looks exactly like a file that was never saved.
-	/// </para>
-	/// </summary>
-	public static Boolean IsIndexableExtension(String? extension)
-		=> !String.IsNullOrWhiteSpace(extension) && AllowedExtensions.Contains(extension);
+	private readonly TextExtractorRegistry _extractors;
 
-	/// <summary>
-	/// The extensions this system reads, for a walker that takes a list rather than asking per file.
-	/// The same set as <see cref="IsIndexableExtension"/> consults, so the two cannot drift.
-	/// </summary>
-	public static IReadOnlyCollection<String> IndexableExtensions => AllowedExtensions;
+	/// <summary>Over the registry the application runs with.</summary>
+	public LocalTextFileScanner()
+		: this(TextExtractorRegistry.Default)
+	{
+	}
+
+	/// <param name="extractors">The one source of which extensions are read, and how each is decoded.</param>
+	public LocalTextFileScanner(TextExtractorRegistry extractors)
+	{
+		ArgumentNullException.ThrowIfNull(extractors);
+		this._extractors = extractors;
+	}
 
 	/// <summary>
 	/// The directory names this scanner does not descend into, for a walker that must skip the same
@@ -65,10 +57,6 @@ internal sealed class LocalTextFileScanner
 	/// this, a long way from the call that got it wrong.
 	/// </para>
 	/// </summary>
-	[SuppressMessage("Minor Code Smell", "S2325:Methods and properties that do not access instance data should be static",
-		Justification = "Kept an instance method by design: LocalTextFileScanner is used as an instantiable " +
-			"collaborator — a new() field on the pipeline, and new LocalTextFileScanner() at test call sites. " +
-			"Making it static would change how every caller reaches it for no behavioural gain.")]
 	public IEnumerable<ScannedTextFile> Enumerate(String rootPath, Int64 maxTextFileSizeBytes)
 	{
 		if (String.IsNullOrWhiteSpace(rootPath))
@@ -78,7 +66,7 @@ internal sealed class LocalTextFileScanner
 
 		String fullRoot = Path.GetFullPath(rootPath);
 
-		return Walk(fullRoot, fullRoot, maxTextFileSizeBytes);
+		return this.Walk(fullRoot, fullRoot, maxTextFileSizeBytes);
 	}
 
 	/// <summary>
@@ -88,7 +76,7 @@ internal sealed class LocalTextFileScanner
 	public IReadOnlyList<ScannedTextFile> Scan(String rootPath, Int64 maxTextFileSizeBytes)
 		=> this.Enumerate(rootPath, maxTextFileSizeBytes).ToArray();
 
-	private static IEnumerable<ScannedTextFile> Walk(
+	private IEnumerable<ScannedTextFile> Walk(
 		String rootPath,
 		String directoryPath,
 		Int64 maxTextFileSizeBytes)
@@ -100,7 +88,7 @@ internal sealed class LocalTextFileScanner
 				continue;
 			}
 
-			foreach (ScannedTextFile nested in Walk(rootPath, subDirectory, maxTextFileSizeBytes))
+			foreach (ScannedTextFile nested in this.Walk(rootPath, subDirectory, maxTextFileSizeBytes))
 			{
 				yield return nested;
 			}
@@ -109,7 +97,8 @@ internal sealed class LocalTextFileScanner
 		foreach (String filePath in Directory.EnumerateFiles(directoryPath))
 		{
 			String extension = Path.GetExtension(filePath);
-			if (!AllowedExtensions.Contains(extension))
+			ITextExtractor? extractor = this._extractors.Find(extension);
+			if (extractor is null)
 			{
 				continue;
 			}
@@ -135,7 +124,7 @@ internal sealed class LocalTextFileScanner
 				continue;
 			}
 
-			String content = DecodeText(bytes);
+			String content = extractor.Extract(bytes);
 
 			if (String.IsNullOrWhiteSpace(content))
 			{
@@ -161,17 +150,6 @@ internal sealed class LocalTextFileScanner
 				Content: content,
 				FileType: extension.TrimStart('.').ToLowerInvariant());
 		}
-	}
-
-	/// <summary>
-	/// Decodes as <c>File.ReadAllText</c> would: UTF-8 unless a byte-order mark says otherwise, with
-	/// the mark itself left out of the text.
-	/// </summary>
-	private static String DecodeText(Byte[] bytes)
-	{
-		using StreamReader reader = new(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-
-		return reader.ReadToEnd();
 	}
 
 	private static String Sha256(String value)

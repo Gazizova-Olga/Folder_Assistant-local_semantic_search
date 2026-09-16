@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
 using FolderAssistant.Embedding;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing;
 using FolderAssistant.Indexing.Outbox;
 using FolderAssistant.Indexing.Scanning;
@@ -71,6 +72,7 @@ public sealed class FileRecordOwnershipTests
 			vectorizer,
 			new FolderIndexRepository(new SqliteBlobVectorStoreWriter()),
 			new SqliteBlobVectorStoreReader(),
+			TextExtractorRegistry.Default,
 			Config,
 			new PersistenceConfig().MetadataFolderName);
 

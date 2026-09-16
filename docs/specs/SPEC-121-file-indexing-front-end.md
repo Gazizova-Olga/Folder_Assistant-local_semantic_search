@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.19.0 |
+| Version | 0.20.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-16 |
 
@@ -469,9 +469,10 @@ queued; the delivery does not write it and could not.
 - **The metadata folder.** The database lives inside the watched folder, so indexing it would make every
   write a change to that folder, and the indexer would never go quiet — each pass triggering the next for
   as long as the process runs.
-- **An extension this system does not read.** The question is asked of the scanner rather than answered
-  from a second list beside it; two lists would drift silently, and a file indexed by one path and
-  ignored by the other looks exactly like a file that was never saved.
+- **An extension this system does not read.** The question is asked of the text extraction registry
+  ([SPEC-120](SPEC-120-rag-indexing.md)), the one source the scanner walks with, rather than
+  answered from a second list beside it; two lists would drift silently, and a file indexed by one
+  path and ignored by the other looks exactly like a file that was never saved.
 - **A delete for something never indexed.** Delivery is at-least-once, so a delete can arrive twice or
   arrive for a file whose upsert was skipped. Treating it as an error would abandon the operation once
   its attempts ran out and mark a file failed for having nothing to remove.

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.17.0 |
+| Version | 0.18.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-14 |
+| Last updated | 2026-09-16 |
 
 ## Purpose
 
@@ -31,7 +31,9 @@ as it changes.
 ## Enumeration
 
 - An extension allow-list, not a binary sniff. The set is the declared scope; something
-  unreadable that happens to look like text costs an embedding and pollutes the index.
+  unreadable that happens to look like text costs an embedding and pollutes the index. The list is
+  the text extraction registry's (below), not the scanner's; the scanner asks it per file, for
+  whether the file is read at all and for the text once it is.
 - Files above a configured size are skipped.
 - Build, VCS and metadata directories are not descended into.
 - The content hash the scanner takes is SHA-256 over the file's **bytes**, before decoding. It is
@@ -46,6 +48,40 @@ as it changes.
   folder contains is recorded by the front end's comparison, which the pass runs first (Delta
   handling, below). The scan still fails loudly on a root it cannot read rather than returning
   an empty result, but nothing hangs on that any more — see the sharp edge below for where it went.
+
+## Text extraction
+
+One registry, `TextExtractorRegistry`, is the single source of which files this system reads and how
+each is turned into text. It holds extractors, each of which claims a set of extensions, says
+whether its formats **scan as raw lines** — whether the bytes on disk are the text — and turns a
+file's bytes into its text. Everything that walks the folder asks that one instance: the
+whole-folder pass through the scanner, the per-file delivery through the bridge, the watcher's
+filter through the extension list the host hands it
+([SPEC-121](SPEC-121-file-indexing-front-end.md)), and the text search
+([SPEC-101](SPEC-101-file-tools.md)). Two lists would drift, and the drift would be silent: a file
+indexed by one path and ignored by another looks exactly like a file that was never saved.
+
+- **Bytes in, text out.** Both writers of a file's record hash the file's bytes before decoding
+  (above), so the bytes are already in hand; an extractor that took a path would open the file a
+  second time under a writer the first open just survived.
+- **An extension claimed by two extractors is refused at construction.** Letting the later one win
+  would make which text a file yields depend on registration order, which nothing reading the index
+  could tell from the outside.
+- **One extractor exists: plain text**, decoding as `File.ReadAllText` decodes — UTF-8 unless a
+  byte-order mark says otherwise, the mark left out — over the extensions the scanner used to list
+  for itself. It scans as raw lines. Extractors for documents in containers (`.docx`, `.pdf`) are in
+  scope only once a rebuilt snippet is verified against its chunk hash
+  ([SPEC-110](SPEC-110-rag-retrieval.md)): without that check, a passage rebuilt from the file's
+  bytes at a token window taken over extracted text is a wrong passage under a real path and a real
+  score.
+- **Raw-line scanning is a property of the format, asked separately from "read at all".** The text
+  search reads only formats that scan as raw lines; a container format the index reads would
+  otherwise be scanned through its packaging. An extension nothing reads answers false to both
+  questions.
+
+The application registers one instance in its composition root and hands it to every consumer. The
+scanner and the pipeline take it at construction, with the application's default where a test builds
+them bare.
 
 ## Chunking
 
@@ -378,9 +414,11 @@ trust.
   boot and serve while the folder quietly stopped being followed.
 - **Scanner filters** — a file over `MaxTextFileSizeBytes` is excluded and one exactly on the
   limit is kept; `bin`, `obj`, `.git`, `.vs`, `node_modules` and the metadata folder are not
-  scanned, nested or otherwise; an extension outside the allowlist is excluded; empty and
-  whitespace-only files are skipped; the file id tracks the path while the hash tracks the
-  content; an unreadable root throws rather than reporting an empty folder.
+  scanned, nested or otherwise; an extension the registry does not know is excluded, and one it does
+  know is decoded by that format's extractor rather than by the scanner (a staged container format
+  yields its extractor's text, not its bytes); empty and whitespace-only files are skipped; the file
+  id tracks the path while the hash tracks the content; an unreadable root throws rather than
+  reporting an empty folder.
 - **Chunk window arithmetic** — consecutive chunks overlap by exactly the configured count; a
   trailing window already covered by the previous chunk is dropped, and dropping it loses no
   token across a sweep of token counts against six size/overlap combinations; zero

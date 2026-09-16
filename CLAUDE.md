@@ -186,6 +186,15 @@ also the only one that opens a socket, which is why offline-by-construction is a
 
 ### Indexing — live
 
+**Which files are text is one object's answer.** `TextExtractorRegistry` (`SPEC-120`) holds the
+extractors — plain text today — and is the one source of the extension list and of each format's
+decoding. The whole-folder pass, the per-file delivery, the watcher's filter and the text search are
+all handed the same registered instance; a second list would drift, and a file indexed by one path
+and ignored by another looks exactly like a file that was never saved. Document formats in
+containers (`.docx`, `.pdf`) get an extractor only once a rebuilt snippet is verified against its
+chunk hash, and the text search asks separately whether a format scans as raw lines, so such a
+format is never scanned through its packaging.
+
 A durable **outbox indexer** in its own assembly (`src/FolderAssistant.Indexing`): a debounced
 filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
 delivers one changed file at a time to the embedding pipeline with retry and backoff.
@@ -332,12 +341,13 @@ ending it found. Every completed mutation is reported to the running front end t
 fails is a note on the result, never a failure of a write that happened. Both holders read a file
 through one `TextFile` helper, so they cannot mean different things by "a text file".
 
-`SearchText` reads exactly the files the index does — the scanner's extension list, asked of the
-scanner, and its size bound, passed in from the same configuration value — so a search and the index
-cannot disagree about what the folder contains. It is bounded four ways and says which one applied:
-matching lines, matched characters, a whole-search deadline that returns a partial result with a
-note, and the caller's token, which throws. `WholeWord` goes through one shared `WordBoundary` rule
-for the literal and the regex form alike, so no two tools can mean different things by it.
+`SearchText` reads exactly the files the index does — the extension list asked of the text
+extraction registry, narrowed to the formats that scan as raw lines, and the scanner's size bound
+passed in from the same configuration value — so a search and the index cannot disagree about what
+the folder contains. It is bounded four ways and says which one applied: matching lines, matched
+characters, a whole-search deadline that returns a partial result with a note, and the caller's
+token, which throws. `WholeWord` goes through one shared `WordBoundary` rule for the literal and the
+regex form alike, so no two tools can mean different things by it.
 
 File tools are split into two holders — **read** (`InspectDirectory`, `ReadFile`, `Retrieve`,
 `FindFiles`, `SearchText`) and **mutation** (`Create`, `Update`, `ReplaceLines`, `Delete`) — with the

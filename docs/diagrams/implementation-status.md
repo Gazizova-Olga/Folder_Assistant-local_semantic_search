@@ -63,7 +63,7 @@ flowchart TB
         textsearch["SearchText<br/>index-independent, bounded four ways"]
         about["FindFilesAbout<br/>file-level semantic, same seams"]
         mutate["Mutation tools<br/>Create · Update · ReplaceLines · Delete"]
-        extract["Text extraction registry<br/>plain text; docx/pdf after snippet verification"]
+        extract["Text extraction registry<br/>one source of the extension list; plain text; docx/pdf after snippet verification"]
     end
 
     subgraph agent["Agent and orchestration — Phase B, SPEC-100/140"]
@@ -119,9 +119,9 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel live
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate built
-    class convdb,snippet,extract,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class convdb,snippet,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -161,7 +161,7 @@ composition without a caller.
 | **A3** — `SearchText`: a literal or regex line scan over the scanner's own extensions and size bound, on the same walk as `FindFiles`; whole-word through one shared rule; bounded by matching lines, matched characters, a deadline and the caller's token, each said in the note; SPEC-101 0.3.0 | `textsearch` | **Landed** 2026-09-15 |
 | **A4** — `FindFilesAbout` in its own search holder over the composed, wrapped retrieval query: over-fetched passages folded into files scored by their best passage, bounded and said, refusal passing through; SPEC-101 0.4.0 | `about` | **Landed** 2026-09-16 |
 | **A5** — mutation tools in their own holder over a second guard: `Create`, `Update`, `ReplaceLines`, `Delete`; every write a temporary file and a retried rename, every delete retried, reads not; each completed mutation reported to the running front end with its own kind, advisory; SPEC-101 0.5.0 | `mutate` | **Landed** 2026-09-16 |
-| **A6** — text extraction registry | `extract` | Queued |
+| **A6** — text extraction registry: `ITextExtractor`, a plain-text extractor, `TextExtractorRegistry` as the one source of the extension list and of each format's decoding, asked by the scanner, the bridge, the watcher's filter and the text search, which reads only formats that scan as raw lines; `.docx`/`.pdf` wait on snippet verification; SPEC-120 0.18.0, SPEC-101 0.6.0. Live: the running pass reads through it | `extract` | **Landed** 2026-09-16 |
 
 ## The gap, stated plainly
 

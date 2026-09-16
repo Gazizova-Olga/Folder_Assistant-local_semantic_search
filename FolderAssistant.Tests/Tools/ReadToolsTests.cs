@@ -1,5 +1,6 @@
 using System.Text;
 using FluentAssertions;
+using FolderAssistant.Extraction;
 using FolderAssistant.Tools;
 
 namespace FolderAssistant.Tests.Tools;
@@ -15,7 +16,7 @@ public sealed class ReadToolsTests
 	private const Int64 SearchFileBytes = 1_048_576;
 
 	private static ReadTools Tools(TempFolder root)
-		=> new(new WorkspacePathGuard(root.Path, Metadata), SearchFileBytes);
+		=> new(new WorkspacePathGuard(root.Path, Metadata), TextExtractorRegistry.Default, SearchFileBytes);
 
 	// --- InspectDirectory ---------------------------------------------------------------------------
 
@@ -538,7 +539,7 @@ public sealed class ReadToolsTests
 		using TempFolder root = new();
 		File.WriteAllText(root.Combine("a.txt"), "needle a\nneedle a again");
 		File.WriteAllText(root.Combine("b.txt"), "needle b");
-		ReadTools tools = new(new WorkspacePathGuard(root.Path, Metadata), SearchFileBytes, TimeSpan.Zero);
+		ReadTools tools = new(new WorkspacePathGuard(root.Path, Metadata), TextExtractorRegistry.Default, SearchFileBytes, TimeSpan.Zero);
 
 		TextSearchResult result = tools.SearchText("needle");
 
@@ -592,5 +593,36 @@ public sealed class ReadToolsTests
 		TextSearchResult result = Tools(root).SearchText("needle");
 
 		result.Matches.Single().Text.Should().Be("needle first");
+	}
+
+	/// <summary>
+	/// The registry decides which files the search reads, and it asks for more than "read at all": a
+	/// format whose text sits inside a container is the index's to read through its extractor, and
+	/// scanning its bytes raw would match inside the packaging. A registry that reads such a format is
+	/// staged here, and the search must leave its files alone while still counting the plain ones.
+	/// </summary>
+	[Fact]
+	public void The_Search_Reads_Only_Formats_That_Scan_As_Raw_Lines()
+	{
+		using TempFolder root = new();
+		File.WriteAllText(root.Combine("plain.txt"), "needle plain");
+		File.WriteAllText(root.Combine("packed.fake"), "needle inside a container");
+		TextExtractorRegistry registry = new(new PlainTextExtractor(), new ContainerFormat(".fake"));
+		ReadTools tools = new(new WorkspacePathGuard(root.Path, Metadata), registry, SearchFileBytes);
+
+		TextSearchResult result = tools.SearchText("needle");
+
+		registry.IsSupported(".fake").Should().BeTrue("the index reads the format; the search must still not scan it raw");
+		result.Matches.Select(match => match.Path).Should().Equal("plain.txt");
+		result.FilesSearched.Should().Be(1);
+	}
+
+	private sealed class ContainerFormat(String extension) : ITextExtractor
+	{
+		public IReadOnlyCollection<String> Extensions { get; } = [extension];
+
+		public Boolean SupportsRawLineScanning => false;
+
+		public String Extract(Byte[] bytes) => "extracted";
 	}
 }

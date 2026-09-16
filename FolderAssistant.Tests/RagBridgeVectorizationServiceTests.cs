@@ -3,6 +3,7 @@ using System.Text;
 using FluentAssertions;
 using FolderAssistant.Embedding;
 using FolderAssistant.Embedding.Lsa;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing;
 using FolderAssistant.Indexing.Outbox;
 using FolderAssistant.Indexing.Scanning;
@@ -179,17 +180,20 @@ public sealed class RagBridgeVectorizationServiceTests
 	}
 
 	/// <summary>
-	/// The extension question is asked in one place. A second list here would drift from the scanner's,
-	/// and the drift would be silent: a file indexed by one path and ignored by the other is
-	/// indistinguishable from a file that was never saved.
+	/// The extension question is asked of the extraction registry, the same instance the scanner walks
+	/// with. A second list here would drift from it, and the drift would be silent: a file indexed by
+	/// one path and ignored by the other is indistinguishable from a file that was never saved.
 	/// </summary>
 	[Fact]
-	public void The_Extension_Rule_Is_The_Scanners_Own()
+	public void The_Extension_Rule_Is_The_Registrys_Own()
 	{
-		LocalTextFileScanner.IsIndexableExtension(".md").Should().BeTrue();
-		LocalTextFileScanner.IsIndexableExtension(".png").Should().BeFalse();
-		LocalTextFileScanner.IsIndexableExtension("").Should().BeFalse();
-		LocalTextFileScanner.IsIndexableExtension(null).Should().BeFalse();
+		TextExtractorRegistry registry = TextExtractorRegistry.Default;
+
+		registry.IsSupported(".md").Should().BeTrue();
+		registry.IsSupported(".png").Should().BeFalse();
+		registry.IsSupported("").Should().BeFalse();
+		registry.IsSupported(null).Should().BeFalse();
+		new LocalTextFileScanner(registry).Should().NotBeNull();
 	}
 
 	/// <summary>
@@ -309,6 +313,7 @@ public sealed class RagBridgeVectorizationServiceTests
 				resolved,
 				new FolderIndexRepository(writer),
 				reader,
+				TextExtractorRegistry.Default,
 				config,
 				".folderassistant");
 

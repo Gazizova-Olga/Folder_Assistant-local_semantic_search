@@ -1,4 +1,5 @@
 using FluentAssertions;
+using FolderAssistant.Extraction;
 using FolderAssistant.Indexing;
 
 namespace FolderAssistant.Tests;
@@ -202,4 +203,36 @@ public sealed class LocalTextFileScannerTests
 
 	private static IReadOnlyList<ScannedTextFile> Scan(TempFolder folder)
 		=> new LocalTextFileScanner().Scan(folder.Path, MaxBytes);
+
+	/// <summary>
+	/// The registry is the one source of both questions the scanner asks — which files, and what text —
+	/// so a format it does not know is skipped and a format it does know is decoded by that format's
+	/// extractor, not by the scanner's own idea of UTF-8.
+	/// </summary>
+	[Fact]
+	public void The_Registry_Decides_Which_Files_Are_Read_And_How()
+	{
+		using TempFolder folder = new();
+		File.WriteAllText(folder.Combine("notes.md"), "plain text");
+		File.WriteAllText(folder.Combine("packed.fake"), "raw bytes nobody should see");
+		File.WriteAllText(folder.Combine("other.zzz"), "unknown format");
+		TextExtractorRegistry registry = new(new PlainTextExtractor(), new ContainerFormat(".fake"));
+
+		IReadOnlyList<ScannedTextFile> scanned = new LocalTextFileScanner(registry).Scan(folder.Path, MaxBytes);
+
+		scanned.Select(file => (file.RelativePath, file.Content)).Should().BeEquivalentTo(new[]
+		{
+			("notes.md", "plain text"),
+			("packed.fake", "extracted"),
+		});
+	}
+
+	private sealed class ContainerFormat(String extension) : ITextExtractor
+	{
+		public IReadOnlyCollection<String> Extensions { get; } = [extension];
+
+		public Boolean SupportsRawLineScanning => false;
+
+		public String Extract(Byte[] bytes) => "extracted";
+	}
 }
