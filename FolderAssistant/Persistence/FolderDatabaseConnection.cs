@@ -47,10 +47,22 @@ internal static class FolderDatabaseConnection
 		// handle while another connection is preparing a statement. It also turns contention into
 		// SQLITE_LOCKED, which the busy handler is never invoked for — so it silently defeats the
 		// busy_timeout set below. WAL is what actually lets the indexer write while retrieval reads.
+		//
+		// No pooling either, and this one is a measured decision (SPEC-130). With the pool, eight
+		// concurrent bootstraps of one folder fault about once in 1,500 with SQLITE_ERROR out of BEGIN,
+		// and the error text shows two threads on one sqlite3 handle — one fault the pool hands out
+		// twice, with no clearing of pools anywhere in the process. Without the pool: none in the same
+		// count. The price is the open — about 0.35 ms per connection on the development machine
+		// against about 0.01 ms pooled — and, larger, the page cache a pooled connection kept warm
+		// between operations: a fresh connection reads its pages again, about 10 ms on a retrieval
+		// over 24,000 vectors and a tenth more on a cold index of 4,000 files, measured both ways on
+		// one tree. Every caller here opens per operation and pays it. A retry around BEGIN would
+		// have hidden this presentation of the shared handle and left the others.
 		SqliteConnection connection = new(new SqliteConnectionStringBuilder
 		{
 			DataSource = databasePath,
 			Mode = mode,
+			Pooling = false,
 		}.ToString());
 
 		connection.Open();

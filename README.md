@@ -121,7 +121,7 @@ flowchart TB
     subgraph persistence["Persistence — SPEC-130"]
         direction LR
         boot["FolderDatabaseBootstrapper<br/>manifest.db, WAL, migrations"]
-        conn["FolderDatabaseConnection<br/>foreign_keys, busy_timeout, no shared cache"]
+        conn["FolderDatabaseConnection<br/>foreign_keys, busy_timeout, no shared cache, no pool"]
         blob["Blob vector store<br/>chunk_vector"]
         vec["sqlite-vec store<br/>vec0 per model"]
         convdb["conversations.db<br/>bootstrapper, ConversationStore"]
@@ -411,11 +411,13 @@ Two things to know before trusting a green run:
 - **Tests that need Ollama or the `sqlite-vec` native binary return early without asserting** when
   those are absent, because xUnit 2 has no dynamic skip. `OllamaLiveIntegrationTests` and
   `SqliteVecBackendTests` are the two suites, and they are a documented exception, not a convention.
-- **One test is known to go red about one run in five to ten.** The concurrent-bootstrap test in
-  `PersistenceConcurrencyTests` exposes a `Microsoft.Data.Sqlite` connection-pooling fault that was
-  measured at 70 failures in 100,000 pooled bootstraps and 0 in 40,000 unpooled. Both candidate fixes
-  are written up in [SPEC-130](docs/specs/SPEC-130-persistence.md); the choice is deliberately open.
-  The test keeps its concurrency because that is what makes the property testable.
+- **The concurrent-bootstrap test used to go red about one run in five to ten.** It exposed a
+  `Microsoft.Data.Sqlite` connection-pooling fault: one handle reached by two threads, about once in
+  1,500 concurrent opens. Pooling is off on every connection since 2026-09-16, at a measured cost of
+  about ten milliseconds on a retrieval over 24,000 vectors, mostly the page cache a pooled
+  connection kept warm; the measurement and the rejected alternative are in
+  [SPEC-130](docs/specs/SPEC-130-persistence.md). If that test goes red again with `SQLite Error 1`
+  out of `BeginTransaction`, keep the log: it means a connection opened outside the factory.
 
 ### Benchmarks
 

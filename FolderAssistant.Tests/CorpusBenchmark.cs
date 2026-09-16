@@ -203,9 +203,10 @@ public sealed class CorpusBenchmark
 	}
 
 	/// <summary>
-	/// The size of the log beside the database, which the database size above does not include. Read while this
-	/// process still holds pooled connections, so SQLite has not folded it away on a last close — the state a
-	/// running application leaves the folder in.
+	/// The size of the log beside the database, which the database size above does not include. Since the
+	/// factory stopped pooling (SPEC-130 0.14.0) the last connection to close folds the log away itself, so
+	/// this reads 0 KB whether or not the pass's truncating checkpoint ran; it is kept because a figure
+	/// above zero would mean a connection was left open across the pass, which is worth seeing.
 	/// </summary>
 	private static Int64 WriteAheadLogKilobytes(String databasePath)
 	{

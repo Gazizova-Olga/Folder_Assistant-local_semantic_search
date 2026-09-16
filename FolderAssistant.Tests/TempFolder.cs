@@ -27,8 +27,10 @@ internal sealed class TempFolder : IDisposable
 	/// holding it and tries once more.
 	///
 	/// <para>
-	/// A disposed <see cref="SqliteConnection"/> does not close its handle: it goes back to a pool keyed on
-	/// the connection string, keeping the file open and the directory undeletable. Every test that touches a
+	/// A disposed pooled <see cref="SqliteConnection"/> does not close its handle: it goes back to a pool
+	/// keyed on the connection string, keeping the file open and the directory undeletable. The
+	/// application's factory opens without the pool (SPEC-130 0.14.0); the raw connections tests open for
+	/// themselves still pool, which is why this stays. Every test that touches a
 	/// database therefore used to leave its folder behind — 31,360 of them, 5.9 GB, before this was noticed.
 	/// The first failure is silent and the cost only shows up as a full disk much later, which is why the
 	/// retry is here rather than a comment saying the operating system will get round to it.

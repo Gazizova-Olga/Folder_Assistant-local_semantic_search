@@ -395,12 +395,16 @@ Rules that bite:
   which faults when a handle is finalized while another connection prepares a statement,
   and it converts contention into a lock error for which the busy handler is never invoked,
   quietly defeating `busy_timeout`.
-- **The concurrent-bootstrap test goes red about one run in five to ten, and that is not the
-  shared cache.** It is `Microsoft.Data.Sqlite` connection pooling — measured: 70 failures in
-  100,000 pooled bootstraps, 0 in 40,000 unpooled (`SPEC-130` 0.10.0 holds both candidate fixes;
-  neither is chosen yet). Recognise it by `SQLITE_ERROR` (code 1) out of `BeginTransaction`, never
-  `SQLITE_BUSY`. **Do not lower the test's concurrency**; eight concurrent bootstraps is what makes
-  the property testable.
+- **No connection pooling either**, since 2026-09-16 (`SPEC-130` 0.14.0). The pool handed one
+  `sqlite3` handle to two threads about once in 1,500 concurrent opens — measured with no pool
+  clearing anywhere in the process, so a running application was exposed, not only the suite — and
+  showed as `SQLITE_ERROR` (code 1) out of `BeginTransaction`, never `SQLITE_BUSY`. The price,
+  measured both ways on one tree: an open costs about 0.35 ms against 0.01 ms pooled, and a fresh
+  connection has a cold page cache — about 10 ms on a retrieval over 24,000 vectors, a tenth more
+  on a cold index. A retry around `BEGIN` was rejected because it hides one presentation of a
+  shared handle and leaves the rest. If
+  that error signature ever returns, something is opening a connection outside the factory. **Do not
+  lower the concurrent-bootstrap test's concurrency**; eight is what makes the property testable.
 - **No store runs DDL.** Schema creation lives in one bootstrapper per database, run once
   before the server accepts a request. DDL from the request path costs a round-trip per
   turn and forces read paths onto write-capable connections.

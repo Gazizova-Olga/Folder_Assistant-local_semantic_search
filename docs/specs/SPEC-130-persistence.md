@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.13.0 |
+| Version | 0.14.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-14 |
+| Last updated | 2026-09-16 |
 
 ## Purpose
 
@@ -168,6 +168,9 @@ from `chunk_manifest` is what enforces it: chunks for an id no row carries are r
   handle while another connection is preparing a statement. It also converts contention into
   `SQLITE_LOCKED`, for which the busy handler is never invoked — so it quietly defeats the
   busy timeout as well.
+- **Connection pooling is off**, on every connection, by decision (below): the pool hands one
+  `sqlite3` handle to two threads about once in 1,500 concurrent opens of one file, and an open
+  without it costs about 0.35 ms on the development machine, which every caller pays per operation.
 - **All connections open through one helper** (`FolderDatabaseConnection`), so these settings
   cannot drift apart between call sites. They already had: the shared-cache flag reached all
   four sites by someone copying a working connection string, and the writer ran with no busy
@@ -175,11 +178,12 @@ from `chunk_manifest` is what enforces it: chunks for an id no row carries are r
 - Regression guard: `PersistenceConcurrencyTests` — concurrent bootstraps under GC pressure,
   and retrieval reading while the indexer writes.
 
-### Known: concurrent bootstraps fault intermittently, and the cause is connection pooling
+### Decided: connection pooling is off, because the pool shares a handle between threads
 
-`Concurrent_Bootstraps_Of_The_Same_Folder_Never_Fault` goes red in roughly one run in five
-(**measured: 3 red in 15, and 1 in 10, in isolation**), with `SQLITE_ERROR` (code 1) raised
-from `BeginTransaction` inside `FolderDatabaseBootstrapper`.
+Until 0.14.0, `Concurrent_Bootstraps_Of_The_Same_Folder_Never_Fault` went red in roughly one run
+in five (**measured: 3 red in 15, and 1 in 10, in isolation**; three in about eight full runs on
+2026-09-16), with `SQLITE_ERROR` (code 1) raised from `BeginTransaction` inside
+`FolderDatabaseBootstrapper`. What follows is the finding as it was recorded, then the decision.
 
 **It is not the shared-cache fault and not a busy-timeout shortfall.** It is never
 `SQLITE_BUSY`, and the busy handler is not invoked for `SQLITE_ERROR`, so the timeout every
@@ -207,16 +211,52 @@ What is *not* established is the mechanism inside `Microsoft.Data.Sqlite` (10.0.
 pooled handle be reached twice. Only that pooling is required for the fault, which is as far as
 the measurement reaches.
 
-**Nothing here is changed for it yet.** `Pooling=False` would remove the fault and make every
-connection pay a full open; a retry around `BEGIN` would hide this presentation of a shared
-handle while leaving the others. Neither is a decision to take from a bug hunt, so the finding is
-recorded and the choice left open. It must not be "fixed" by lowering the test's concurrency,
-which is the only thing making the property testable at all.
+**Decided 2026-09-16: `Pooling=False` on every connection**, set in the one factory. Two candidates
+were on the table — no pool, or a retry around `BEGIN` — and the retry was never a fix: it would
+hide this presentation of a shared handle while leaving the others, including the one that
+corrupts a reader mid-statement. What settled the cost side was re-measuring both on the tree that
+takes the decision, driven the same way — eight concurrent bootstraps of one folder, 4,000 rounds
+— but with **no pool clearing anywhere in the process** (one temp folder, one subdirectory per
+round, nothing disposed until the end), so that the suite's own folder cleanup could not be what
+triggered it:
 
-**The same pooling behaviour has a second, non-flaky symptom**, worth knowing because it is
-silent: a disposed connection returns to the pool still holding its database file open, so a test
-directory containing a database cannot be deleted straight away. `TempFolder` closes the pools and
-retries; without that, every test touching a database leaves its folder behind.
+| connection string | faults in 32,000 bootstraps | one open, pragmas and one query |
+|---|---|---|
+| pooled | **1** (`SQL logic error` out of `BEGIN`, round 3,095) | 8–12 µs |
+| `Pooling=False` | **0** | 350–390 µs |
+
+The fault happens with nothing clearing pools, so it is the pool's and not the suite's, and a
+running application — one pool, the dispatcher writing while request threads read — shares the
+exposure.
+
+The price is more than the open. A pooled connection kept its page cache warm between operations; a
+fresh one reads its pages again. `CorpusBenchmark` at 4,000 files, run both ways on the tree that
+takes the decision, one run each (scan time varied 2.9–3.9 s between runs, so treat the figures as
+the shape, not the number):
+
+| figure | pooled | `Pooling=False` |
+|---|---|---|
+| blob retrieval p50 over 24,000 vectors | 109 ms (97–112) | 119 ms (111–134) |
+| `sqlite-vec` retrieval p50 | 6 ms (6–6) | 15 ms (14–17) |
+| `sqlite-vec` cold index, 4,000 files | 4.9 s | 5.5 s |
+| write-ahead log left after the pass, both stores | 0 KB | 0 KB |
+
+About ten milliseconds on a query and a tenth more on a cold index with the placeholder embedder —
+beside a model turn measured in seconds and an embed measured at hundreds of milliseconds per chunk.
+None of that is a reason to keep a handle two threads can hold. The test keeps its concurrency;
+eight concurrent bootstraps is what makes the property testable at all.
+
+One consequence for the checkpoint rule above: with no pool, the last connection to close folds the
+log away itself, so between operations the log is gone whether or not the truncating checkpoint ran.
+The checkpoint keeps its two moments for the case it was written for — a reader holding a
+connection across the pass — and the benchmark's log figure now reads zero unless a connection was
+left open, which is what makes it still worth printing.
+
+**The pool had a second, non-flaky symptom**, worth knowing because it is silent: a disposed
+connection returned to the pool still holding its database file open, so a test directory containing
+a database could not be deleted straight away. The factory's connections no longer do that; the
+tests that open a raw `SqliteConnection` of their own still pool, so `TempFolder` still closes the
+pools and retries.
 
 ## Migration
 
