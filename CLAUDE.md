@@ -35,10 +35,12 @@ The tree is in three states, and the middle one is the one to watch
   one the running application never reads. The containment guard (`WorkspacePathGuard`), the read
   tools and text search over it (`ReadTools`), the mutation tools over a second guard
   (`MutationTools`) and the file-level semantic search over the wrapped query (`SearchTools`, all
-  `SPEC-101`) are built, tested and registered, and nothing resolves them: the agent that would
-  reflect the holders' methods into tools does not exist.
-- **Not built** — the agent and provider adapter, the chat surface, the conversation database. The
-  parts of the architecture below that describe them are intent.
+  `SPEC-101`) are built, tested and registered, and nothing resolves them. The provider client
+  and the agent over it (`ProviderClientFactory`, `AgentFactory`, `AgentHandle`; `SPEC-140`,
+  `SPEC-100`) are built the same way: one agent, with no tools yet, registered and resolved by
+  nothing. The reflection that would hand the holders' methods to it does not exist.
+- **Not built** — the tool facades, the roster and the turn runner, the chat surface, the
+  conversation database. The parts of the architecture below that describe them are intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -382,6 +384,25 @@ read means a genuine external writer and should say so promptly.
 is indistinguishable from "nothing relevant", and the model would answer from prior knowledge
 believing it had searched. A file tool failure returns a `TOOL_FAILED:` string the model must
 report rather than answer around.
+
+### Agent — provider client and agent factory built, reached by nothing
+
+One provider family in two shapes, OpenAI-compatible and Azure, built by `ProviderClientFactory`
+(`SPEC-140`). A client is **built, not connected**: nothing reaches the network at construction, so
+the host boots with a provider it cannot reach and the first turn fails instead of startup. What is
+refused at construction is a configuration that names no provider at all — the hosted API without
+a key, Azure without an endpoint or a key — with a sentence naming the key and the environment
+variable, because a client that would fail every call with a transport error is a plausible failure
+a page later. The SDK's own network timeout defaults to 100 seconds whatever the host configures, so
+both option shapes set it to the configured connection timeout. This factory is the one place
+document text can leave the machine, and `SPEC-000` names it as the deliberate exception to the
+offline rule.
+
+`AgentFactory` makes the framework's chat-client agent from the configuration: the configured
+system prompt **verbatim**, or one built from the name and description; the tool list as what it may
+call, none meaning none; and `AgentHandle` owning agent and client together, because the framework's
+agent does not own its client and a client is a pipeline something has to end. The root registers
+both as factories, with no tools, resolved by nothing.
 
 ### Persistence — index database live, conversation database not built
 

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — placeholder |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | — |
 | Last updated | 2026-09-16 |
 
@@ -69,6 +69,10 @@ an admission of what is not yet decided; it is not a description of anything.
   here — it belongs in a separate assembly or publish, so the guarantee stays "it is not in
   the binary" rather than "the configuration says not to". That, and not modularity, is the
   criterion for ever splitting an assembly; the contracts already provide the modularity.
+  **The chat provider is the one deliberate exception** ([SPEC-140](SPEC-140-provider-adapters.md)):
+  it is not a profile, it is chosen by the operator in `Provider` configuration and by nothing else,
+  and it is the one place document text can leave the machine. The sentence above is true of
+  embedding and retrieval and of nothing that talks to a chat model.
 - **A named profile that cannot resolve is a startup failure, never a fallback.** An unknown
   name, or one whose implementation is unavailable on this platform, throws. Falling back
   would run a configuration nobody asked for while reporting success, and the result would be

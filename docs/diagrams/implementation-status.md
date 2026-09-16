@@ -120,8 +120,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate built
-    class convdb,snippet,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider built
+    class convdb,snippet,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -162,6 +162,19 @@ composition without a caller.
 | **A4** — `FindFilesAbout` in its own search holder over the composed, wrapped retrieval query: over-fetched passages folded into files scored by their best passage, bounded and said, refusal passing through; SPEC-101 0.4.0 | `about` | **Landed** 2026-09-16 |
 | **A5** — mutation tools in their own holder over a second guard: `Create`, `Update`, `ReplaceLines`, `Delete`; every write a temporary file and a retried rename, every delete retried, reads not; each completed mutation reported to the running front end with its own kind, advisory; SPEC-101 0.5.0 | `mutate` | **Landed** 2026-09-16 |
 | **A6** — text extraction registry: `ITextExtractor`, a plain-text extractor, `TextExtractorRegistry` as the one source of the extension list and of each format's decoding, asked by the scanner, the bridge, the watcher's filter and the text search, which reads only formats that scan as raw lines; `.docx`/`.pdf` wait on snippet verification; SPEC-120 0.18.0, SPEC-101 0.6.0. Live: the running pass reads through it | `extract` | **Landed** 2026-09-16 |
+
+## Phase B ledger — the agent and orchestration
+
+| Item | Block | State |
+|---|---|---|
+| **B1** — provider and agent factory: one client family in two shapes (OpenAI-compatible, Azure), built not connected, refused at construction with a sentence when the configuration names no provider, `NetworkTimeout` set to the configured connection timeout, sampling defaults through the builder; `AgentFactory` and `AgentHandle` owning agent and client together; registered in the root, resolved by nothing; SPEC-140 0.2.0, SPEC-100 0.3.0 | `provider` | **Landed** 2026-09-16 |
+| **B2** — tool reflection and the two facades | `facade` | Queued |
+| **B3** — roster, catalog, registry, routing | `roster` | Queued |
+| **B4** — `WorkflowRunner` and `IAgentExecution` | `runner` | Queued |
+| **B5** — readable provider errors | `provider` | Queued |
+| **B6** — `SearchIndex` | `searchidx` | Queued |
+| **B7** — index batching across a turn | `batching` | Queued |
+| **B8** — console loop and host | `console` | Queued |
 
 ## The gap, stated plainly
 

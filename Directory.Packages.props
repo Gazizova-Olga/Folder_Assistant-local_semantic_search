@@ -44,9 +44,21 @@
 			Upstream took no new dependency for this, because its agent already referenced the OpenAI SDK
 			from the first commit. Here the agent arrives later, so this genuinely is a new dependency and
 			says so rather than repeating that it is free. It is not a network egress: the endpoint is
-			localhost, and nothing in the assembly can reach anything else.
+			localhost, and the embedder reaches nothing else. The pin follows the agent framework below,
+			which requires the abstraction at its own version (10.10.0 for 1.21.0); the two move together.
 		-->
-		<PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+		<PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
+		<!--
+			The agent. Microsoft Agent Framework gives the chat-client-backed agent, its sessions and its tool
+			invocation; its OpenAI package adapts the OpenAI SDK client the tree already carries. Azure.AI.OpenAI
+			is the second shape of the same family — the Azure OpenAI client is the OpenAI client with a
+			resource endpoint and its own authentication — and is the one reason the agent can be pointed at a
+			hosted provider (SPEC-140). That is the trust boundary SPEC-000 draws: document text leaves the
+			machine only when the operator configures a hosted chat endpoint, and never for embedding.
+		-->
+		<PackageVersion Include="Microsoft.Agents.AI" Version="1.21.0" />
+		<PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.21.0" />
+		<PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
 		<!--
 			Metrics. The retrieval sink records through a Meter, and these two carry it out of the process:
 			the hosting package registers the meter with the host, and the Prometheus exporter serves it from

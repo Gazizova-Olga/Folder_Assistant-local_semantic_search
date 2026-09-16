@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
+using FolderAssistant.Agents;
 using FolderAssistant.Embedding;
 using FolderAssistant.Indexing;
 using FolderAssistant.Indexing.Scanning;
@@ -343,6 +344,41 @@ public sealed class HostStartupTests
 		(await File.ReadAllTextAsync(folder.Combine("written.md"))).Should().Be("by the tool");
 		await metadata.Should().ThrowAsync<WorkspaceContainmentException>();
 		host.Services.GetRequiredService<ReadTools>().Should().NotBeSameAs(tools);
+	}
+
+	/// <summary>
+	/// The agent's wiring: the handle resolves from the real root over the configured provider without
+	/// touching the network — a client is built, not connected — and carries the configured name. A
+	/// configuration that cannot name a provider fails when the handle is asked for, with the sentence
+	/// that says what to set, never at boot: the host has to come up for the index whether or not a
+	/// model is reachable.
+	/// </summary>
+	[Fact]
+	public async Task The_Agent_Resolves_Over_The_Configured_Provider_And_A_Missing_Key_Is_Said_When_Asked_For()
+	{
+		using TempFolder local = new();
+		using TempFolder keyless = new();
+		using HostFixture localHost = new(
+			local,
+			($"{AgentConfig.SectionName}:Indexing:Enabled", "false"),
+			($"{AgentConfig.SectionName}:Provider:Type", "OpenAI"),
+			($"{AgentConfig.SectionName}:Provider:Endpoint", "http://127.0.0.1:9/v1"),
+			($"{AgentConfig.SectionName}:Provider:DeploymentName", "local-model"),
+			($"{AgentConfig.SectionName}:AgentName", "Archivist"));
+		using HostFixture keylessHost = new(
+			keyless,
+			($"{AgentConfig.SectionName}:Indexing:Enabled", "false"),
+			($"{AgentConfig.SectionName}:Provider:Type", "OpenAI"));
+
+		await localHost.CreateClient().GetAsync("/");
+		await keylessHost.CreateClient().GetAsync("/");
+
+		AgentHandle handle = localHost.Services.GetRequiredService<AgentHandle>();
+		Action keylessResolve = () => keylessHost.Services.GetRequiredService<AgentHandle>();
+
+		handle.Name.Should().Be("Archivist");
+		handle.Agent.Name.Should().Be("Archivist");
+		keylessResolve.Should().Throw<InvalidOperationException>().WithMessage("*Provider:ApiKey*");
 	}
 
 	/// <summary>

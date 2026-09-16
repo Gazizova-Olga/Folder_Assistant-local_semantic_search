@@ -78,10 +78,14 @@ colour-coded.
   one, replace a line range, delete a file or a directory. Every write is a temporary file and a
   rename, retried while the indexer holds the file open; every completed change is reported to the
   index with its own kind, so the index follows the tool's edits without rediscovering them.
+- The **provider client and the agent**: one client family in two shapes, OpenAI-compatible (a local
+  Ollama chat model included, with no key) and Azure OpenAI, built but never connected at startup,
+  with the SDK's network timeout set to the configured one; and one agent over it, with the
+  configured prompt verbatim. It has no tools yet and nothing runs a turn through it.
 
 **Not built**
 
-- The agent and provider adapter, the chat surface, the conversation database.
+- The tool facades, the roster and the turn runner, the chat surface, the conversation database.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits and
 read the telemetry**. You cannot yet ask it a question.
@@ -205,8 +209,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate built
-    class convdb,snippet,provider,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider built
+    class convdb,snippet,facade,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
