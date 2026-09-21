@@ -38,10 +38,12 @@ The tree is in three states, and the middle one is the one to watch
   `SPEC-101`) are built, tested and registered, and nothing resolves them. The provider client
   and the agent over it (`ProviderClientFactory`, `AgentFactory`, `AgentHandle`; `SPEC-140`,
   `SPEC-100`) are built the same way, and so are the tool reflection and the facade (`ToolReflection`,
-  `ToolFacade`, `ToolSet`): the one agent holds every tool the three holders have, each under its
-  group's failure contract, and is registered and resolved by nothing. Nothing runs a turn.
-- **Not built** — the roster and the turn runner, the chat surface, the conversation database. The
-  parts of the architecture below that describe them are intent.
+  `ToolFacade`, `ToolSet`), and the roster over them (`Roster`, `AgentToolCatalog`, `AgentRegistry`,
+  `StaticWorkflowRoute`): one handle per roster entry holding exactly its allowlist plus one delegation
+  tool per target, the roster validated at startup and the coordinator every turn enters resolved by
+  nothing. Nothing runs a turn.
+- **Not built** — the turn runner, the chat surface, the conversation database. The parts of the
+  architecture below that describe them are intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -386,7 +388,7 @@ is indistinguishable from "nothing relevant", and the model would answer from pr
 believing it had searched. A file tool failure returns a `TOOL_FAILED:` string the model must
 report rather than answer around.
 
-### Agent — provider client, agent factory and tool facades built, reached by nothing
+### Agent — provider client, agent factory, tool facades and roster built, reached by nothing
 
 One provider family in two shapes, OpenAI-compatible and Azure, built by `ProviderClientFactory`
 (`SPEC-140`). A client is **built, not connected**: nothing reaches the network at construction, so
@@ -417,6 +419,28 @@ the agent's tool-calling loop is built by `AgentFactory` with no tolerance for a
 because the framework's default hands the model a generic error string and lets it answer, which is
 exactly the swallowed fault. A cancellation of the caller's token is classified by the token before the
 exception type and passes through both groups. Two tools with one name are refused at construction.
+
+The **roster** (`Roster`, `SPEC-100`) is which agents exist, what each may call and delegate to, and
+which one every turn enters. Three rosters are possible, in order of precedence: the operator's
+`Workflow:Agents`, whole; the default roster from code when `Workflow:UseDefaultRoster` is on — an
+`orchestrator` with no tools delegating to a `reader` holding every read and search tool and a
+`mutator` holding the four mutations plus `ReadFile` and `Retrieve`; otherwise one agent from the root
+configuration holding every tool. **The default roster lives in code, never in `appsettings.json`**:
+configuration arrays merge by index, so a shipped roster would be merged *into* an operator's entries
+rather than replaced by them. **`UseDefaultRoster` is off until the roster's cost against the single
+agent is measured** (plan §5.2 item 6): a read question through it costs two model round-trips and the
+specialist sees no history. An entry inherits the root provider for every field it does not declare
+and never its role. The roster is **validated whole at startup**, through the same startup filter as
+the database bootstrap, because nothing bounds delegation at runtime: a repeated name, an unknown tool
+or delegate, a self-delegation, a delegation cycle, a coordinator that does not exist, or several
+agents with none named all stop the host before it listens — never "the first one". The validation
+needs no provider, so a keyless host still boots and fails when the registry is first asked for.
+`AgentToolCatalog` holds every tool by name and narrows to an allowlist, refusing a name it lacks.
+`AgentRegistry` builds one handle per entry over its own client, with **one delegation tool per
+target** — named `delegate_to_<target>`, described by the target's description, running the target on
+the request alone with no session and nothing of the caller's conversation — under the fatal contract,
+because a delegate whose turn failed has nothing to report. `StaticWorkflowRoute.Coordinator` is
+where every turn enters; there is no per-turn routing decision.
 
 ### Persistence — index database live, conversation database not built
 

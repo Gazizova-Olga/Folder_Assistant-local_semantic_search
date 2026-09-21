@@ -15,6 +15,9 @@ internal record AgentConfig
 	/// <summary>Local indexing configuration (scan, chunk, tokenize, and embedding persistence).</summary>
 	public IndexingConfig Indexing { get; init; } = new();
 
+	/// <summary>The agent roster and how a turn is routed through it (SPEC-100).</summary>
+	public WorkflowConfig Workflow { get; init; } = new();
+
 	/// <summary>
 	/// Which bundle of module implementations to compose: vectorizer, vector store, and
 	/// retrieval strategy. See <see cref="CompositionProfiles"/> for the valid names. A named
@@ -212,4 +215,86 @@ internal record IndexingConfig
 	/// shape it does not recognise. Zero disables it; the comparison at start still runs.
 	/// </summary>
 	public Int32 ReconciliationIntervalSeconds { get; init; } = 300;
+}
+
+/// <summary>
+/// The roster and routing configuration (SPEC-100). The default roster is not here: it lives in code,
+/// because .NET merges configuration arrays by index, so a roster shipped in <c>appsettings.json</c>
+/// would be merged <em>into</em> an operator's own entries rather than replaced by them.
+/// </summary>
+internal record WorkflowConfig
+{
+	/// <summary>
+	/// Run the default roster from code — an orchestrator delegating to a reader and a mutator — when
+	/// no <see cref="Agents"/> are configured. Off, one agent holding every tool answers each turn. Off
+	/// by default until the roster's cost against the single agent has been measured.
+	/// </summary>
+	public Boolean UseDefaultRoster { get; init; }
+
+	/// <summary>
+	/// The agent every turn enters. Required when the roster holds more than one agent; a roster of one
+	/// routes to it. Never "the first one".
+	/// </summary>
+	public String? Coordinator { get; init; }
+
+	/// <summary>The operator's roster. Any entry here replaces the default roster entirely.</summary>
+	public List<AgentEntryConfig> Agents { get; init; } = [];
+}
+
+/// <summary>One agent in the roster: its role, what it may call, whom it may delegate to, and its provider.</summary>
+internal record AgentEntryConfig
+{
+	/// <summary>The agent's name, unique in the roster; the key a delegation names it by.</summary>
+	public String Name { get; init; } = "";
+
+	/// <summary>What the agent does, in a sentence. It is the description of the tool that delegates to it.</summary>
+	public String? Description { get; init; }
+
+	/// <summary>The agent's system prompt, verbatim. Unset, one is built from the name and description.</summary>
+	public String? SystemPrompt { get; init; }
+
+	/// <summary>The tools the agent may call, by name; none means none.</summary>
+	public List<String> Tools { get; init; } = [];
+
+	/// <summary>The agents this one may delegate to, by name; one delegation tool per target.</summary>
+	public List<String> Delegates { get; init; } = [];
+
+	/// <summary>Provider settings this agent declares for itself; whatever it leaves unset is the root's.</summary>
+	public ProviderOverrideConfig? Provider { get; init; }
+}
+
+/// <summary>
+/// The provider fields an agent may override, each nullable so that an unset field is told from a set
+/// one: an agent inherits the root provider for anything it does not declare. Its role — name,
+/// description, prompt — is never inherited, because the role is what makes it a different agent.
+/// </summary>
+internal record ProviderOverrideConfig
+{
+	public ProviderConfig.AiProviderType? Type { get; init; }
+
+	public String? Endpoint { get; init; }
+
+	public String? ApiKey { get; init; }
+
+	public String? DeploymentName { get; init; }
+
+	public Double? Temperature { get; init; }
+
+	public Int32? MaxTokens { get; init; }
+
+	/// <summary>The root provider with every field this override declares put in its place.</summary>
+	public ProviderConfig Apply(ProviderConfig root)
+	{
+		ArgumentNullException.ThrowIfNull(root);
+
+		return root with
+		{
+			Type = this.Type ?? root.Type,
+			Endpoint = this.Endpoint ?? root.Endpoint,
+			ApiKey = this.ApiKey ?? root.ApiKey,
+			DeploymentName = this.DeploymentName ?? root.DeploymentName,
+			Temperature = this.Temperature ?? root.Temperature,
+			MaxTokens = this.MaxTokens ?? root.MaxTokens,
+		};
+	}
 }

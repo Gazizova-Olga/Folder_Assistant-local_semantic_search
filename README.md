@@ -32,8 +32,8 @@ design:
   answered from a half-built index; an unknown embedding profile stops the application at startup
   instead of falling back; a scan that finds nothing throws instead of quietly indexing nothing.
 - **Reading is not writing.** The file tools are split into a read holder and a mutation holder,
-  each over its own containment guard, so which agent can change data will be answerable from one
-  line of configuration once there is a roster to grant them.
+  each over its own containment guard, and the roster grants tools by name, so which agent can change
+  data is answerable from one line of configuration.
 
 The full statement of purpose and principles is [SPEC-000](docs/specs/SPEC-000-system-concept.md).
 
@@ -86,11 +86,16 @@ colour-coded.
   after it, each wrapped in a facade that times it, logs it and applies its group's failure contract.
   A file tool's failure comes back to the model as a `TOOL_FAILED:` string it is told to report; a
   search tool's failure ends the turn, because a swallowed retrieval fault reads exactly like "nothing
-  relevant". The agent holds all ten. Nothing runs a turn through it yet.
+  relevant". Nothing runs a turn through it yet.
+- The **roster**: which agents exist, what each may call and delegate to, and which one every turn
+  enters. One agent holding every tool by default; a default roster in code — an orchestrator
+  delegating to a reader and a mutator — behind a switch until its cost is measured; or the operator's
+  own. Validated whole at startup, so a delegation cycle or an unknown tool stops the host before it
+  listens. Each agent is built over its own client with one delegation tool per target.
 
 **Not built**
 
-- The roster and the turn runner, the chat surface, the conversation database.
+- The turn runner, the chat surface, the conversation database.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits and
 read the telemetry**. You cannot yet ask it a question.
@@ -214,8 +219,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade built
-    class convdb,snippet,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade,roster built
+    class convdb,snippet,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

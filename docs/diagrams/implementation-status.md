@@ -1,7 +1,7 @@
 # Implementation status
 
 The whole structure the plan converges on, every block coloured by what is true of it now — as of
-2026-09-16. Updated with every commit that moves a block; at the end, every block is green.
+2026-09-18. Updated with every commit that moves a block; at the end, every block is green.
 
 **Five states, not two.** *Built but unreachable* is the category a diagram with only *done* and
 *not done* hides: retrieval is implemented twice over, tested, composed — and it still never runs.
@@ -120,8 +120,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade built
-    class convdb,snippet,roster,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade,roster built
+    class convdb,snippet,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -169,7 +169,7 @@ composition without a caller.
 |---|---|---|
 | **B1** — provider and agent factory: one client family in two shapes (OpenAI-compatible, Azure), built not connected, refused at construction with a sentence when the configuration names no provider, `NetworkTimeout` set to the configured connection timeout, sampling defaults through the builder; `AgentFactory` and `AgentHandle` owning agent and client together; registered in the root, resolved by nothing; SPEC-140 0.2.0, SPEC-100 0.3.0 | `provider` | **Landed** 2026-09-16 |
 | **B2** — tool reflection and the facades: every described public method of the three holders reflected into a function named after it; each wrapped in one facade that times the call, logs one structured line and applies its group's contract — a file tool's failure a `TOOL_FAILED:` string the prompt tells the model to report, a search tool's failure the exception itself, ending the turn through a loop built to tolerate none; the group decided by the holder's type in one place; the agent built with all ten and a duplicate name refused; SPEC-100 0.4.0, SPEC-101 0.7.0 | `facade` | **Landed** 2026-09-16 |
-| **B3** — roster, catalog, registry, routing | `roster` | Queued |
+| **B3** — roster, catalog, registry, routing: three rosters by precedence (the operator's whole, the default from code behind `Workflow:UseDefaultRoster`, one agent from the root holding every tool), validated whole at startup through the startup filter — repeated name, unknown tool or delegate, self-delegation, cycle, missing or unnamed coordinator all refused before the host listens; the catalog narrowing every tool by name; one handle per entry over its own client with one delegation tool per target under the fatal contract; the static route to the coordinator; provider inherited per field, the role never; the default roster off until measured; SPEC-100 0.5.0 | `roster` | **Landed** 2026-09-18 |
 | **B4** — `WorkflowRunner` and `IAgentExecution` | `runner` | Queued |
 | **B5** — readable provider errors | `provider` | Queued |
 | **B6** — `SearchIndex` | `searchidx` | Queued |

@@ -11,6 +11,9 @@ internal enum ToolGroup
 
 	/// <summary>A search tool: a failure ends the turn.</summary>
 	Search,
+
+	/// <summary>A delegation to another agent: a failure of the delegate's turn ends this turn too.</summary>
+	Delegation,
 }
 
 /// <summary>How one tool call ended, as the log line says it.</summary>

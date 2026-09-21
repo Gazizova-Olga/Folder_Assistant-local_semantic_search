@@ -376,8 +376,8 @@ public sealed class HostStartupTests
 		await localHost.CreateClient().GetAsync("/");
 		await keylessHost.CreateClient().GetAsync("/");
 
-		AgentHandle handle = localHost.Services.GetRequiredService<AgentHandle>();
-		Action keylessResolve = () => keylessHost.Services.GetRequiredService<AgentHandle>();
+		AgentHandle handle = localHost.Services.GetRequiredService<StaticWorkflowRoute>().Coordinator;
+		Action keylessResolve = () => keylessHost.Services.GetRequiredService<AgentRegistry>();
 
 		handle.Name.Should().Be("Archivist");
 		handle.Agent.Name.Should().Be("Archivist");
@@ -387,6 +387,47 @@ public sealed class HostStartupTests
 		tools.OfType<ToolFacade>().Where(tool => tool.Group == ToolGroup.Search).Select(tool => tool.Name).Should().Equal("FindFilesAbout");
 		tools.OfType<ToolFacade>().Should().HaveCount(tools.Count);
 		keylessResolve.Should().Throw<InvalidOperationException>().WithMessage("*Provider:ApiKey*");
+	}
+
+	/// <summary>
+	/// The roster from the real root: asked for, the default roster is three agents with the orchestrator
+	/// holding nothing but its two delegations and every turn entering it; and a roster whose delegation
+	/// forms a cycle stops the host before it listens, because nothing bounds delegation at runtime.
+	/// </summary>
+	[Fact]
+	public async Task The_Default_Roster_Resolves_From_The_Root_And_A_Cyclic_Roster_Fails_At_Boot()
+	{
+		using TempFolder folder = new();
+		using TempFolder cyclic = new();
+		using HostFixture host = new(
+			folder,
+			($"{AgentConfig.SectionName}:Indexing:Enabled", "false"),
+			($"{AgentConfig.SectionName}:Provider:Type", "OpenAI"),
+			($"{AgentConfig.SectionName}:Provider:Endpoint", "http://127.0.0.1:9/v1"),
+			($"{AgentConfig.SectionName}:Provider:DeploymentName", "local-model"),
+			($"{AgentConfig.SectionName}:Workflow:UseDefaultRoster", "true"),
+			($"{AgentConfig.SectionName}:Workflow:Coordinator", "orchestrator"));
+		using HostFixture cyclicHost = new(
+			cyclic,
+			($"{AgentConfig.SectionName}:Indexing:Enabled", "false"),
+			($"{AgentConfig.SectionName}:Workflow:Coordinator", "a"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:0:Name", "a"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:0:Description", "the a"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:0:Delegates:0", "b"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:1:Name", "b"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:1:Description", "the b"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:1:Delegates:0", "a"));
+
+		await host.CreateClient().GetAsync("/");
+		AgentRegistry registry = host.Services.GetRequiredService<AgentRegistry>();
+		Action boot = () => cyclicHost.CreateClient();
+
+		registry.Handles.Select(handle => handle.Name).Should().Equal("orchestrator", "reader", "mutator");
+		registry.Get("orchestrator").Tools.Select(tool => tool.Name).Should().Equal("delegate_to_reader", "delegate_to_mutator");
+		registry.Get("reader").Tools.Select(tool => tool.Name).Should().Contain("FindFilesAbout").And.NotContain("Delete");
+		registry.Get("mutator").Tools.Select(tool => tool.Name).Should().Contain("Delete").And.NotContain("FindFilesAbout");
+		host.Services.GetRequiredService<StaticWorkflowRoute>().Coordinator.Name.Should().Be("orchestrator");
+		boot.Should().Throw<Exception>().Which.ToString().Should().Contain("cycle: a -> b -> a");
 	}
 
 	/// <summary>

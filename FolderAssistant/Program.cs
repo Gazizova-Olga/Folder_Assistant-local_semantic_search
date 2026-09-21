@@ -9,7 +9,6 @@ using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
 using FolderAssistant.Tools;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 
@@ -185,33 +184,45 @@ internal sealed class Program
 			sp.GetRequiredService<IRetrievalQuery>(),
 			sp.GetRequiredService<DatabaseBootstrapResult>().DatabasePath));
 
-		// The chat client and the agent over it, each a factory so a host boots without a provider it can
-		// reach: nothing here connects, and a configuration that cannot name a provider at all fails when
-		// the agent is first asked for, with a sentence saying what is missing. The agent is handed every
-		// tool the three holders have, each through the facade of its group — the file tools under the
-		// string contract, the search tools under the fatal one — so what exists is an agent that can read,
-		// search and change the folder. Resolved by nothing yet: the turn runner is the phase that follows.
-		builder.Services.AddSingleton(sp =>
-		{
-			AgentConfig config = sp.GetRequiredService<AgentConfig>();
-
-			return ProviderClientFactory.Create(config.Provider, config.ConnectionTimeout);
-		});
-
+		// Every tool the application can grant, each through the facade of its group — the file tools under
+		// the string contract, the search tools under the fatal one — held by name so a roster entry's
+		// allowlist can be narrowed to exactly what it says.
 		builder.Services.AddSingleton(sp =>
 		{
 			ILogger<ToolFacade> toolLogger = sp.GetRequiredService<ILogger<ToolFacade>>();
 
-			return AgentFactory.Create(
-				sp.GetRequiredService<AgentConfig>(),
-				sp.GetRequiredService<IChatClient>(),
-				tools:
-				[
-					.. ToolSet.ForFiles(sp.GetRequiredService<ReadTools>(), sp.GetRequiredService<MutationTools>(), toolLogger),
-					.. ToolSet.ForSearch(sp.GetRequiredService<SearchTools>(), toolLogger),
-				],
+			return new AgentToolCatalog(
+			[
+				.. ToolSet.ForFiles(sp.GetRequiredService<ReadTools>(), sp.GetRequiredService<MutationTools>(), toolLogger),
+				.. ToolSet.ForSearch(sp.GetRequiredService<SearchTools>(), toolLogger),
+			]);
+		});
+
+		// The roster, validated whole before the server listens (the startup filter below takes it): an
+		// unknown coordinator, an unknown tool or delegate, a self-delegation or a cycle is a startup
+		// failure, never a first-turn surprise. It needs no provider, so a keyless host still boots.
+		builder.Services.AddSingleton(sp => Roster.Build(
+			sp.GetRequiredService<AgentConfig>(),
+			sp.GetRequiredService<AgentToolCatalog>().Names));
+
+		// The agents themselves, one handle per roster entry over its own client. Nothing here connects,
+		// and a configuration that cannot name a provider at all fails when the registry is first asked
+		// for, with a sentence saying what is missing. Resolved by nothing yet: the turn runner is the
+		// phase that follows.
+		builder.Services.AddSingleton(sp =>
+		{
+			AgentConfig config = sp.GetRequiredService<AgentConfig>();
+
+			return new AgentRegistry(
+				sp.GetRequiredService<Roster>(),
+				sp.GetRequiredService<AgentToolCatalog>(),
+				provider => ProviderClientFactory.Create(provider, config.ConnectionTimeout),
 				sp.GetService<ILoggerFactory>());
 		});
+
+		builder.Services.AddSingleton(sp => new StaticWorkflowRoute(
+			sp.GetRequiredService<Roster>(),
+			sp.GetRequiredService<AgentRegistry>()));
 
 		// The front end: watcher, reconciler, per-change pipeline and outbox dispatcher, composed by
 		// the library and started by the indexing service once the whole-folder pass has succeeded.
@@ -326,11 +337,13 @@ internal sealed class Program
 	{
 		[SuppressMessage("Major Code Smell", "S1144:Unused private types or members should be removed",
 			Justification = "False positive: the constructor is invoked by the DI container, and that invocation is " +
-				"the mechanism ordering the database bootstrap before the server accepts a request (SPEC-130). It " +
-				"looks unused precisely because nothing calls it explicitly.")]
-		public StartupDependencies(DatabaseBootstrapResult database)
+				"the mechanism ordering the database bootstrap before the server accepts a request (SPEC-130) and " +
+				"the roster's validation before a turn can run (SPEC-100). It looks unused precisely because " +
+				"nothing calls it explicitly.")]
+		public StartupDependencies(DatabaseBootstrapResult database, Roster roster)
 		{
 			_ = database;
+			_ = roster;
 		}
 
 		public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => next;

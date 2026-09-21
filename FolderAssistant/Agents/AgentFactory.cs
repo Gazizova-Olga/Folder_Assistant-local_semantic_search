@@ -37,6 +37,21 @@ internal static class AgentFactory
 	public static AgentHandle Create(AgentConfig config, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null)
 	{
 		ArgumentNullException.ThrowIfNull(config);
+
+		return Create(
+			String.IsNullOrWhiteSpace(config.AgentName) ? DefaultName : config.AgentName,
+			String.IsNullOrWhiteSpace(config.AgentDescription) ? DefaultDescription : config.AgentDescription,
+			config.SystemPrompt,
+			client,
+			tools,
+			loggerFactory);
+	}
+
+	/// <summary>The same, for a role the roster defines rather than the root configuration.</summary>
+	public static AgentHandle Create(String name, String description, String? systemPrompt, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(name);
+		ArgumentException.ThrowIfNullOrWhiteSpace(description);
 		ArgumentNullException.ThrowIfNull(client);
 		ArgumentNullException.ThrowIfNull(tools);
 
@@ -49,16 +64,13 @@ internal static class AgentFactory
 			throw new InvalidOperationException($"Two tools share one name: {String.Join(", ", duplicates)}. A model cannot tell them apart.");
 		}
 
-		String name = String.IsNullOrWhiteSpace(config.AgentName) ? DefaultName : config.AgentName;
-		String description = String.IsNullOrWhiteSpace(config.AgentDescription) ? DefaultDescription : config.AgentDescription;
-
 		ChatClientAgentOptions options = new()
 		{
 			Name = name,
 			Description = description,
 			ChatOptions = new ChatOptions
 			{
-				Instructions = Instructions(config, name, description),
+				Instructions = Instructions(systemPrompt, name, description),
 				Tools = tools.Count == 0 ? null : [.. tools],
 			},
 		};
@@ -79,11 +91,11 @@ internal static class AgentFactory
 			.Build();
 
 	/// <summary>The system prompt: the configured one verbatim, or one built from the name and description.</summary>
-	internal static String Instructions(AgentConfig config, String name, String description)
+	internal static String Instructions(String? systemPrompt, String name, String description)
 	{
-		if (!String.IsNullOrWhiteSpace(config.SystemPrompt))
+		if (!String.IsNullOrWhiteSpace(systemPrompt))
 		{
-			return config.SystemPrompt;
+			return systemPrompt;
 		}
 
 		return $"You are {name}, an assistant that {description}. "

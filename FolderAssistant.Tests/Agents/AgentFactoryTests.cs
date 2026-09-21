@@ -37,8 +37,8 @@ public sealed class AgentFactoryTests
 		AgentConfig named = new() { AgentName = "Archivist", AgentDescription = "keeps the notes" };
 		AgentConfig bare = new();
 
-		String fromNamed = AgentFactory.Instructions(named, "Archivist", "keeps the notes");
-		String fromBare = AgentFactory.Instructions(bare, AgentFactory.DefaultName, AgentFactory.DefaultDescription);
+		String fromNamed = AgentFactory.Instructions(named.SystemPrompt, "Archivist", "keeps the notes");
+		String fromBare = AgentFactory.Instructions(bare.SystemPrompt, AgentFactory.DefaultName, AgentFactory.DefaultDescription);
 
 		fromNamed.Should().StartWith("You are Archivist, an assistant that keeps the notes.");
 		fromBare.Should().StartWith($"You are {AgentFactory.DefaultName}, an assistant that {AgentFactory.DefaultDescription}.");
@@ -146,7 +146,7 @@ public sealed class AgentFactoryTests
 	[Fact]
 	public void The_Built_Prompt_Says_What_A_Failure_String_Means()
 	{
-		AgentFactory.Instructions(new AgentConfig(), "x", "y").Should().Contain("TOOL_FAILED:").And.Contain("do not answer around it");
-		AgentFactory.Instructions(new AgentConfig { SystemPrompt = "Mine." }, "x", "y").Should().Be("Mine.");
+		AgentFactory.Instructions(null, "x", "y").Should().Contain("TOOL_FAILED:").And.Contain("do not answer around it");
+		AgentFactory.Instructions("Mine.", "x", "y").Should().Be("Mine.");
 	}
 }
