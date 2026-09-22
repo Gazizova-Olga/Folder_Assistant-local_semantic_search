@@ -9,6 +9,7 @@ using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
 using FolderAssistant.Tools;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 
@@ -110,6 +111,7 @@ internal sealed class Program
 			.WithMetrics(metrics =>
 			{
 				metrics.AddMeter(LoggerRetrievalTelemetry.MeterName);
+				metrics.AddMeter(LoggerTurnTelemetry.MeterName);
 				metrics.AddPrometheusExporter();
 			});
 
@@ -205,24 +207,36 @@ internal sealed class Program
 			sp.GetRequiredService<AgentConfig>(),
 			sp.GetRequiredService<AgentToolCatalog>().Names));
 
-		// The agents themselves, one handle per roster entry over its own client. Nothing here connects,
-		// and a configuration that cannot name a provider at all fails when the registry is first asked
-		// for, with a sentence saying what is missing. Resolved by nothing yet: the turn runner is the
-		// phase that follows.
-		builder.Services.AddSingleton(sp =>
+		// What builds a chat client for an agent's effective provider. Registered on its own so that it is
+		// the one seam a host under test replaces to run a turn without a model.
+		builder.Services.AddSingleton<Func<ProviderConfig, IChatClient>>(sp =>
 		{
 			AgentConfig config = sp.GetRequiredService<AgentConfig>();
 
-			return new AgentRegistry(
-				sp.GetRequiredService<Roster>(),
-				sp.GetRequiredService<AgentToolCatalog>(),
-				provider => ProviderClientFactory.Create(provider, config.ConnectionTimeout),
-				sp.GetService<ILoggerFactory>());
+			return provider => ProviderClientFactory.Create(provider, config.ConnectionTimeout);
 		});
+
+		// The agents themselves, one handle per roster entry over its own client. Nothing here connects,
+		// and a configuration that cannot name a provider at all fails when the registry is first asked
+		// for, with a sentence saying what is missing.
+		builder.Services.AddSingleton(sp => new AgentRegistry(
+			sp.GetRequiredService<Roster>(),
+			sp.GetRequiredService<AgentToolCatalog>(),
+			sp.GetRequiredService<Func<ProviderConfig, IChatClient>>(),
+			sp.GetService<ILoggerFactory>()));
 
 		builder.Services.AddSingleton(sp => new StaticWorkflowRoute(
 			sp.GetRequiredService<Roster>(),
 			sp.GetRequiredService<AgentRegistry>()));
+
+		// The turn: the coordinator's session loaded, the agent run, the session saved, and the turn's
+		// telemetry recorded inside the execution. Sessions live for the life of the process; the
+		// conversation database is what replaces this store. The runner is what a front end talks to, and
+		// no front end exists, so it is resolved by nothing.
+		builder.Services.AddSingleton<ITurnTelemetry, LoggerTurnTelemetry>();
+		builder.Services.AddSingleton<IAgentSessionStore, InMemoryAgentSessionStore>();
+		builder.Services.AddSingleton<IAgentExecution, MicrosoftAgentExecution>();
+		builder.Services.AddSingleton<WorkflowRunner>();
 
 		// The front end: watcher, reconciler, per-change pipeline and outbox dispatcher, composed by
 		// the library and started by the indexing service once the whole-folder pass has succeeded.

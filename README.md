@@ -15,7 +15,7 @@ machine unless you deliberately point the chat side at a hosted provider.
 | AI stack | `Microsoft.Extensions.AI`, built towards the Microsoft Agent Framework; Ollama for local embeddings |
 | Storage | SQLite via `Microsoft.Data.Sqlite`, WAL mode; `sqlite-vec` native k-NN by default, brute-force cosine where it has no binary |
 | Observability | OpenTelemetry metrics exported for Prometheus at `GET /metrics`; structured logging |
-| Quality gates | Zero-warning build enforced with SonarAnalyzer; ~700 xUnit tests; CI on Ubuntu and Windows for every push |
+| Quality gates | Zero-warning build enforced with SonarAnalyzer; ~750 xUnit tests; CI on Ubuntu and Windows for every push |
 | Method | Spec-first: every behavioural change starts from a versioned spec in `docs/specs/` and ships with it |
 
 ## Why it exists
@@ -86,16 +86,22 @@ colour-coded.
   after it, each wrapped in a facade that times it, logs it and applies its group's failure contract.
   A file tool's failure comes back to the model as a `TOOL_FAILED:` string it is told to report; a
   search tool's failure ends the turn, because a swallowed retrieval fault reads exactly like "nothing
-  relevant". Nothing runs a turn through it yet.
+  relevant".
 - The **roster**: which agents exist, what each may call and delegate to, and which one every turn
   enters. One agent holding every tool by default; a default roster in code — an orchestrator
   delegating to a reader and a mutator — behind a switch until its cost is measured; or the operator's
   own. Validated whole at startup, so a delegation cycle or an unknown tool stops the host before it
   listens. Each agent is built over its own client with one delegation tool per target.
+- The **turn runner**: one turn of one conversation through the roster's coordinator — the agent's
+  session loaded, the agent run, the session saved when the turn succeeded — behind the chat-client
+  interface a front end will talk to. Sessions are held in memory until the conversation database
+  exists. Each turn is timed and classified inside the execution, because a streamed turn that fails
+  says so as text and ends cleanly, which anything watching from outside would count as a success.
+  No front end exists, so nothing calls it yet.
 
 **Not built**
 
-- The turn runner, the chat surface, the conversation database.
+- The semantic passage search tool, the chat surface (console, HTTP), the conversation database.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits and
 read the telemetry**. You cannot yet ask it a question.
@@ -170,7 +176,7 @@ flowchart TB
         provider["Provider + agent factory<br/>OpenAI-compatible, Azure; NetworkTimeout set"]
         facade["Tool facades<br/>file tools non-fatal · search tools fatal"]
         roster["Roster · catalog · registry · routing<br/>default roster in code; cycles refused at startup"]
-        runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution"]
+        runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]
         searchidx["SearchIndex tool<br/>embed, over-fetch, screen, reduce, memoize per turn"]
         batching["Index batching across a turn<br/>BeginBatch at the agent-run boundary"]
         console["Console loop<br/>beside the host; stdin EOF does not stop it"]
@@ -219,8 +225,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade,roster built
-    class convdb,snippet,runner,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade,roster,runner built
+    class convdb,snippet,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -261,7 +267,7 @@ somewhere you mean. It listens on `http://localhost:5000`:
 | Endpoint | Returns |
 |---|---|
 | `GET /` | The application name, the absolute path of the folder being indexed, the active profile, and a note if the default fell back to its blob twin. |
-| `GET /metrics` | Prometheus text: retrieval counters and latency histograms, per backend. |
+| `GET /metrics` | Prometheus text: retrieval counters and latency histograms, per backend; and turn counters and latency, per agent and status, once a turn has run. |
 
 **This writes to the folder it is pointed at.** It creates a `.folderassistant/` directory holding
 `manifest.db`, indexes every eligible text file, then keeps the index following the folder — watching

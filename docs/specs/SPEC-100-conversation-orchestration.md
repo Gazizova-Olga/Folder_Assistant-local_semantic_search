@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry and the route written and implemented; turn execution and session persistence not |
-| Version | 0.5.0 |
+| Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution and the runner written and implemented; durable session persistence and every front end not |
+| Version | 0.6.0 |
 | Owner | Agents |
-| Last updated | 2026-09-18 |
+| Last updated | 2026-09-21 |
 
 ## Purpose
 
@@ -29,10 +29,12 @@ Routes a turn to an agent, runs it, and keeps the conversation's state across tu
 
 ## Requirements
 
-Turn execution and session persistence are not built yet. What *is* built is the composition root
-those things will be assembled in, the agent factory that makes one agent from a role, the reflection
-and facade that hand the tool holders' methods to it, and the roster: which agents exist, what each
-may call and delegate to, and which one every turn enters. The rules below govern those now.
+Built: the composition root, the agent factory that makes one agent from a role, the reflection and
+facade that hand the tool holders' methods to it, the roster — which agents exist, what each may call
+and delegate to, and which one every turn enters — and the turn itself, behind the interface a front
+end talks to. Not built: a front end, so nothing runs a turn in the running application; and durable
+session persistence ([SPEC-130](SPEC-130-persistence.md)'s conversation database), so a conversation
+lives as long as the process.
 
 ### Configuration is bound lazily
 
@@ -208,10 +210,70 @@ is the agent framework's chat-client agent, and four things about it are decided
   clients exist, so there is no async half. It also carries the tool list the agent was built with, so
   what an agent may call can be read without running a turn.
 
-The composition root registers the catalog, the roster, the registry and the route as factories. The
-roster is resolved at startup by the filter; the registry and the route are resolved by nothing yet,
-so a host boots with a provider it cannot reach and a configuration that cannot name one fails when
-the registry is first asked for — never at boot.
+The composition root registers the catalog, the roster, the registry and the route as factories, and
+the function that builds a chat client for a provider as a service of its own — the one seam a host
+under test replaces to run a turn without a model. The roster is resolved at startup by the filter;
+the registry, the route, the execution and the runner are resolved by nothing yet, so a host boots
+with a provider it cannot reach and a configuration that cannot name one fails when the registry is
+first asked for — never at boot.
+
+### The turn
+
+**A turn is one call of one conversation, and it enters the coordinator.** `IAgentExecution` takes a
+conversation id and the turn's new messages; `MicrosoftAgentExecution` loads the coordinator's session
+for that conversation, runs the framework's agent over it, and saves the session.
+
+- **The session is stored serialized, keyed by agent *and* conversation** (`IAgentSessionStore`). Two
+  agents serving one conversation hold two sessions, and a key of the conversation alone would have
+  each overwrite the other's. The store today is `InMemoryAgentSessionStore`: sessions live as long as
+  the process and nothing bounds their number. The conversation database replaces it behind the same
+  seam.
+- **A failed turn saves nothing.** The store holds the serialized form, not the live object, so a
+  turn that fails — or is cancelled, or abandoned — leaves the conversation exactly as its last good
+  turn left it.
+- **A session that cannot be read starts a fresh one**, logged at warning with the agent and the
+  conversation. The blob is the framework's format, and one unreadable blob must not end every later
+  turn of its conversation.
+- **Delegates still run without a session** (above); only the coordinator's conversation is kept.
+- **Two concurrent turns of one conversation are not ordered.** Each loads, runs and saves; the later
+  save wins and the earlier turn is forgotten. Nothing calls the execution concurrently yet, and the
+  front end that could is where this is decided.
+
+**A failure reaches the caller in the one channel it still has.** Asked for a whole response, the
+execution throws the turn's own exception — a search tool's, a delegate's, the provider's. Asked for a
+stream, it yields what the turn produced, then **the failure as a last text update**
+(`The turn failed: <message>`), and the stream ends normally: a streamed response is already under way
+when it fails, and text is the only thing left to say so with. A streamed answer whose session then
+cannot be saved is followed by a text update saying the conversation will not remember it. Only a
+cancellation of the caller's token throws from a stream. The message is the exception's own until
+readable provider errors exist.
+
+**The turn's telemetry is recorded inside the execution, never in a decorator over it.** A failed
+streamed turn drains cleanly, so anything watching from outside would record a success. One record per
+turn — the coordinator's name, whether it was streamed, the latency, the status and, on a failure, the
+exception's type name — through `ITurnTelemetry`, whose default sink writes a structured log line
+(`turn agent=… streamed=… status=… latencyMs=…`, with `errorCode=` on a failure) and a meter,
+`FolderAssistant.Turns` (`agent.turn.duration`, `agent.turn.count`; tags `agent`, `streamed`,
+`status`), served at `GET /metrics` beside the retrieval meter. **`errorCode` is a log field only,
+never a tag**: its values are unbounded.
+
+- **Classified by the caller's token before the exception's type.** A cancellation while the caller's
+  token is cancelled is `Cancelled`; any other cancellation, and a `TimeoutException`, is `TimedOut` —
+  an HTTP client reports its own deadline as a cancellation. The index's still-building refusal is
+  `NotReady`, the expected state before the first index and kept out of the failure rate; a build that
+  failed is `Failed`, like everything else.
+- **A stream the caller stops reading is `Cancelled`, not `Success`.**
+- **The latency stops at the last update, before the session save.** The save is this application's
+  bookkeeping, not the turn the caller waited for. A turn whose save failed is `Failed` with the
+  latency of the answer.
+- Success, `Cancelled` and `NotReady` log at information; `TimedOut` and `Failed` at warning.
+
+**`WorkflowRunner` is the roster as an `IChatClient`, and the one thing a front end talks to.** Of the
+caller's options it reads the conversation id and nothing else: the model, the sampling and the tools
+are each agent's own. A call that names no conversation starts one, and every response and every
+streamed update carries the conversation's id so the caller can name it on the next turn. The messages
+of a call are the turn's new ones; the earlier turns are the session's. It owns nothing, so disposing
+it ends nothing.
 
 ## Contracts
 
@@ -263,7 +325,39 @@ internal sealed class AgentRegistry : IDisposable
 internal sealed class StaticWorkflowRoute
 {
 	StaticWorkflowRoute(Roster roster, AgentRegistry registry);
+	String CoordinatorName { get; }               // the roster's, readable before any client is built
 	AgentHandle Coordinator { get; }
+}
+
+internal interface IAgentSessionStore           // keyed by agent and conversation
+{
+	Task<JsonElement?> LoadAsync(String agentName, String conversationId, CancellationToken cancellationToken);
+	Task SaveAsync(String agentName, String conversationId, JsonElement session, CancellationToken cancellationToken);
+}
+
+internal interface IAgentExecution
+{
+	Task<AgentResponse> RunAsync(String conversationId, IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken);
+	IAsyncEnumerable<AgentResponseUpdate> RunStreamingAsync(String conversationId, IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken);
+}
+
+internal sealed class MicrosoftAgentExecution : IAgentExecution
+{
+	const String FailurePrefix = "The turn failed: ";
+	const String SaveFailurePrefix = "This turn could not be saved, so the conversation will not remember it: ";
+	MicrosoftAgentExecution(StaticWorkflowRoute route, IAgentSessionStore sessions, ITurnTelemetry telemetry, ILogger<MicrosoftAgentExecution>? logger = null);
+	static TurnStatus Classify(Exception exception, CancellationToken cancellationToken);
+}
+
+internal enum TurnStatus { Success, Cancelled, TimedOut, NotReady, Failed }
+
+internal sealed record TurnTelemetry(String Agent, Boolean Streamed, Double LatencyMs, TurnStatus Status, String? ErrorCode);
+
+internal interface ITurnTelemetry { void Record(TurnTelemetry turn); }
+
+internal sealed class WorkflowRunner : IChatClient
+{
+	WorkflowRunner(IAgentExecution execution);
 }
 
 internal static class ToolReflection
@@ -366,11 +460,36 @@ internal sealed class AgentHandle : IDisposable
   field it was checking, which the surviving mutant exposed; the cycle detection turned into a return
   fails the roster's cycle test and the host's boot test, and turned into a never-true check it ends
   the test host in a stack overflow, which is the recursion the check exists to stop.
+- **The turn, through a real agent over a scripted client** — the second turn of a conversation is
+  sent the first turn's question and answer and another conversation's turn is not; a failed turn is
+  the same exception instance, recorded `Failed`, with nothing saved; **a failed streamed turn yields
+  what it had, then the failure as text, and ends without throwing, recorded `Failed`** — the test a
+  decorator-based recording fails; a stream the caller stops reading is `Cancelled` with nothing
+  saved; a cancellation of the caller's token throws and is `Cancelled`, whole and streamed; a
+  cancellation nobody asked for is `TimedOut` and streams as a failure; the classification directly,
+  the still-building refusal `NotReady` and a failed build `Failed`; an unreadable session starts a
+  fresh one and says so at warning; the recorded latency excludes a slow save; a streamed answer whose
+  save fails says so after the answer and is `Failed`; the store keeps one session per agent and
+  conversation.
+- **The runner** — a call naming no conversation starts one and says which, two such calls start two;
+  a named conversation is the one the turn runs in; every streamed update carries it; it answers
+  `GetService` for itself and for nothing keyed.
+- **Host** — with the client function replaced by a scripted model, the runner resolves from the real
+  root, the coordinator calls the real `ReadFile` over the analyzed folder and is handed the file's
+  text, the conversation's next turn is sent the first, and the turn is a tagged series at
+  `GET /metrics`.
+- Mutation kills for the turn, each restored byte-for-byte: a streamed turn always recorded `Success`
+  fails the three streamed-failure tests; the unrecorded exit recorded `Success` fails the abandoned
+  stream and the streamed cancellation; the classification made type-only fails the unasked
+  cancellation and the direct classification test; the latency read after the save fails exactly the
+  latency test; the store keyed by conversation alone fails exactly the store test.
 
-Not covered: turn execution and session persistence, because they are not built yet.
+Not covered: a front end, durable session persistence, and two concurrent turns of one conversation.
 
 ## Open questions
 
+- **What two concurrent turns of one conversation should do** — serialise, refuse the second, or stay
+  last-save-wins — is the front end's to decide when one exists.
 - **Whether the default roster becomes the default** waits on the measurement above; the switch and
   both rosters exist so that the measurement is one configuration value away once a turn can run.
 
@@ -382,6 +501,11 @@ Not covered: turn execution and session persistence, because they are not built 
 
 ## Changelog
 
+- **0.6.0** (2026-09-21) — the turn: the execution over the coordinator with the session loaded and
+  saved per agent and conversation, in memory; a failed turn saving nothing; an unreadable session
+  starting fresh; a streamed failure as text; the turn's telemetry inside the execution with its
+  classification and a second meter; the runner as the chat client a front end talks to; the client
+  function registered as its own service. Written with their implementation.
 - **0.5.0** (2026-09-18) — the roster, the catalog, the registry with one delegation tool per target
   under a third, fatal group, and the static route; three rosters by precedence with the default in
   code and off until measured; per-field provider inheritance; every roster rule a startup failure

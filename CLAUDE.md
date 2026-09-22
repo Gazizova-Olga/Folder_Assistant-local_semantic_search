@@ -40,10 +40,11 @@ The tree is in three states, and the middle one is the one to watch
   `SPEC-100`) are built the same way, and so are the tool reflection and the facade (`ToolReflection`,
   `ToolFacade`, `ToolSet`), and the roster over them (`Roster`, `AgentToolCatalog`, `AgentRegistry`,
   `StaticWorkflowRoute`): one handle per roster entry holding exactly its allowlist plus one delegation
-  tool per target, the roster validated at startup and the coordinator every turn enters resolved by
-  nothing. Nothing runs a turn.
-- **Not built** — the turn runner, the chat surface, the conversation database. The parts of the
-  architecture below that describe them are intent.
+  tool per target, the roster validated at startup. The turn is built too (`MicrosoftAgentExecution`,
+  `WorkflowRunner`, sessions in memory), and **no front end exists, so the running application never
+  runs one.**
+- **Not built** — the `SearchIndex` passage tool, the chat surface (console, HTTP), the conversation
+  database. The parts of the architecture below that describe them are intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -388,7 +389,7 @@ is indistinguishable from "nothing relevant", and the model would answer from pr
 believing it had searched. A file tool failure returns a `TOOL_FAILED:` string the model must
 report rather than answer around.
 
-### Agent — provider client, agent factory, tool facades and roster built, reached by nothing
+### Agent — provider client, agent factory, tool facades, roster and the turn built, reached by nothing
 
 One provider family in two shapes, OpenAI-compatible and Azure, built by `ProviderClientFactory`
 (`SPEC-140`). A client is **built, not connected**: nothing reaches the network at construction, so
@@ -442,6 +443,23 @@ the request alone with no session and nothing of the caller's conversation — u
 because a delegate whose turn failed has nothing to report. `StaticWorkflowRoute.Coordinator` is
 where every turn enters; there is no per-turn routing decision.
 
+The **turn** (`MicrosoftAgentExecution` behind `IAgentExecution`, `SPEC-100`) loads the coordinator's
+session for the conversation, runs the agent, and saves the session **only when the turn succeeded** —
+the store holds the serialized form, so a failed, cancelled or abandoned turn leaves the conversation
+as its last good turn left it. Sessions are keyed by **agent and conversation** (two agents serving one
+conversation would otherwise overwrite each other) and held in memory until the conversation database
+replaces the store behind the same seam; a session that cannot be read starts a fresh one at warning.
+**The turn's telemetry is recorded inside the execution, never in a decorator over it**: a streamed
+turn that fails yields its failure as a last text update and drains normally — a response already
+under way has no other channel — so a wrapper would record a success. Classified by the caller's token
+before the exception type; a stream the caller stops reading is `Cancelled`, not `Success`; the
+still-building refusal is `NotReady` and stays out of the failure rate; the latency stops before the
+session save; `errorCode` is a log field and never a metric tag. `WorkflowRunner` is the roster as an
+`IChatClient`, the one thing a front end will talk to: it reads the conversation id from the caller's
+options and nothing else, and names the conversation on every response and update. The function that
+builds a chat client for a provider is registered as its own service, which is the one seam a host
+test replaces to run a turn without a model.
+
 ### Persistence — index database live, conversation database not built
 
 Two SQLite databases in the folder's metadata directory (`.folderassistant/`), and the split is
@@ -493,7 +511,9 @@ Telemetry sits in **decorators** over the composed seams — one for embedding, 
 retrieval — so every call is recorded regardless of which backend a profile selected.
 Compose through the provided `Wrap` helpers rather than the plain constructors: the
 wrappers re-expose the inner implementation's optional interfaces, and one that dropped
-them would disable fitting and health checks while still returning good-looking vectors.
+them would disable fitting and health checks while still returning good-looking vectors. The turn is
+the deliberate exception — recorded inside the execution, for the reason given under Agent — through
+its own meter, `FolderAssistant.Turns`, at the same endpoint.
 
 Two classifications are load-bearing. **Distinguish "still building" from "the build
 failed"** — the first is the expected condition every process hits before its first index

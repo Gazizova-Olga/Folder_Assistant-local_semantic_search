@@ -20,6 +20,9 @@ internal sealed class StaticWorkflowRoute
 		this._registry = registry;
 	}
 
+	/// <summary>The coordinator's name — the roster's, so it can be said of a turn that failed before any agent was built.</summary>
+	public String CoordinatorName => this._roster.Coordinator;
+
 	/// <summary>The agent every turn enters.</summary>
 	public AgentHandle Coordinator => this._registry.Get(this._roster.Coordinator);
 }

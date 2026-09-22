@@ -8,9 +8,11 @@ using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
+using FolderAssistant.Tests.Agents;
 using FolderAssistant.Tools;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -431,6 +433,45 @@ public sealed class HostStartupTests
 	}
 
 	/// <summary>
+	/// A turn through the real root, with the one seam replaced that a model would sit behind: the runner
+	/// resolves, the coordinator calls a real tool over the analyzed folder and reads its result, the next
+	/// turn of the conversation remembers the first, and the turn reaches the scrape endpoint as a series.
+	/// </summary>
+	[Fact]
+	public async Task A_Turn_Runs_Through_The_Composed_Runner_Over_The_Real_Tools()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma");
+		ScriptedChatClient model = new(
+			ScriptedChatClient.Call("ReadFile", new() { ["path"] = "notes.md" }),
+			ScriptedChatClient.Text("It holds three words."),
+			ScriptedChatClient.Text("The first is alpha."));
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"))
+		{
+			TestServices = services => services.AddSingleton<Func<ProviderConfig, IChatClient>>(_ => _ => model),
+		};
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+		WorkflowRunner runner = host.Services.GetRequiredService<WorkflowRunner>();
+
+		ChatResponse first = await runner.GetResponseAsync([new ChatMessage(ChatRole.User, "what is in notes.md?")]);
+		ChatResponse second = await runner.GetResponseAsync(
+			[new ChatMessage(ChatRole.User, "which is first?")],
+			new ChatOptions { ConversationId = first.ConversationId });
+		String metrics = await client.GetStringAsync("/metrics");
+
+		first.Text.Should().Be("It holds three words.");
+		model.Calls[1].Messages.SelectMany(message => message.Contents).OfType<FunctionResultContent>().Single()
+			.Result!.ToString().Should().Contain("alpha beta gamma");
+		second.Text.Should().Be("The first is alpha.");
+		model.Calls[2].Messages.Where(message => message.Role == ChatRole.User).Select(message => message.Text)
+			.Should().Equal("what is in notes.md?", "which is first?");
+		metrics.Should().Contain("agent_turn_count").And.Contain("agent_turn_duration");
+		metrics.Should().Contain("status=\"Success\"").And.Contain("streamed=\"false\"");
+	}
+
+	/// <summary>
 	/// The promise the default makes: an Ollama that is not there is a failed index with a message that
 	/// says what to do, never a quietly different embedder and never an index that reports building for
 	/// ever. Pinned against a port nothing listens on, so it holds on a machine that does run Ollama.
@@ -475,6 +516,9 @@ public sealed class HostStartupTests
 			this._settings = settings;
 		}
 
+		/// <summary>Registrations that replace the application's own, for the one seam a test stands in for: the model.</summary>
+		public Action<IServiceCollection>? TestServices { get; init; }
+
 		protected override void ConfigureWebHost(IWebHostBuilder builder)
 		{
 			builder.UseEnvironment(Environments.Production);
@@ -493,6 +537,11 @@ public sealed class HostStartupTests
 
 				configuration.AddInMemoryCollection(values);
 			});
+
+			if (this.TestServices is not null)
+			{
+				builder.ConfigureTestServices(this.TestServices);
+			}
 		}
 	}
 }
