@@ -84,6 +84,15 @@ internal sealed class Program
 		// retrieval output is a search tool, which belongs to the agent work.
 		builder.Services.AddSingleton<IContextReduction, TokenBudgetContextReducer>();
 
+		// Turns a hit back into its passage, verified against the chunk's hash before anything else sees
+		// it, over the same extraction registry the index reads through. Composed for the same consumer.
+		builder.Services.AddSingleton(sp =>
+		{
+			AgentConfig config = sp.GetRequiredService<AgentConfig>();
+
+			return new PassageBuilder(config.ResolveAnalyzedFolderPath(), sp.GetRequiredService<TextExtractorRegistry>());
+		});
+
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreWriter());
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<ModuleSet>().CreateVectorStoreReader());
 

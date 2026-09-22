@@ -124,7 +124,8 @@ internal sealed class SqliteVecRetrievalQuery : IRetrievalQuery
 				location.ChunkIndex,
 				location.TokenStart,
 				location.TokenEnd,
-				score));
+				score,
+				location.ChunkHash));
 		}
 
 		return hits;

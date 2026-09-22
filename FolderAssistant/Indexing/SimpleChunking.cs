@@ -175,6 +175,10 @@ internal sealed class TextChunker
 		return chunks;
 	}
 
-	private static String Sha256(String value)
+	/// <summary>
+	/// The hash a chunk is recorded under: SHA-256 of the single-space-joined chunk text, lower-case hex. The
+	/// passage builder hashes a rebuilt window with this same method, so the two cannot drift apart.
+	/// </summary>
+	internal static String Sha256(String value)
 		=> Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 }

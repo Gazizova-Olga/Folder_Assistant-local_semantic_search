@@ -9,7 +9,8 @@ internal sealed record RetrievalHit(
 	Int32 ChunkIndex,
 	Int32 TokenStart,
 	Int32 TokenEnd,
-	Double Score);
+	Double Score,
+	String ChunkHash);
 
 /// <summary>How many hits to return, and how weak a match is still worth returning.</summary>
 internal sealed record RetrievalOptions(Int32 TopK = 5, Double MinScore = 0.0);

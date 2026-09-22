@@ -131,5 +131,5 @@ public sealed class TokenBudgetContextReducerTests
 		=> new(maxPassages, maxTokens);
 
 	private static RetrievalCandidate Candidate(String path, Double score, String text, Int32 tokenCount = 10)
-		=> new(new RetrievalHit($"chunk-{path}", path, 0, 0, tokenCount, score), text, tokenCount);
+		=> new(new RetrievalHit($"chunk-{path}", path, 0, 0, tokenCount, score, "hash"), text, tokenCount);
 }

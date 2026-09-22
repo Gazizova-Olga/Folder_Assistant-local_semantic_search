@@ -197,9 +197,9 @@ extractors — plain text today — and is the one source of the extension list 
 decoding. The whole-folder pass, the per-file delivery, the watcher's filter and the text search are
 all handed the same registered instance; a second list would drift, and a file indexed by one path
 and ignored by another looks exactly like a file that was never saved. Document formats in
-containers (`.docx`, `.pdf`) get an extractor only once a rebuilt snippet is verified against its
-chunk hash, and the text search asks separately whether a format scans as raw lines, so such a
-format is never scanned through its packaging.
+containers (`.docx`, `.pdf`) are registrable now that a rebuilt passage is verified against its
+chunk hash (none is registered yet), and the text search asks separately whether a format scans as
+raw lines, so such a format is never scanned through its packaging.
 
 A durable **outbox indexer** in its own assembly (`src/FolderAssistant.Indexing`): a debounced
 filesystem watcher, a periodic reconciler as a safety net for dropped events, and a dispatcher that
@@ -299,9 +299,14 @@ that would call them do not.
   relevance, MMR diversity, and a **relative score-gap cutoff** — the calling model chooses
   how many results to ask for and does not reliably ask for few, so the cutoff drops
   candidates falling below a fraction of *this query's* best hit rather than trusting an
-  absolute floor. A rebuilt snippet is to be verified against `chunk.chunk_hash` before it
-  reaches the model (plan §5.2 item 1) — without that check an edit inside the settle window
-  yields a wrong passage under a real path and a real score.
+  absolute floor. **A rebuilt passage is verified against `chunk.chunk_hash` before anything sees
+  it** (`PassageBuilder`, `SPEC-110`): the file is re-read through the extraction registry, tokenized
+  and joined exactly as the chunker did, and hashed with the chunker's own method — one owner of the
+  rule, because a second copy of the join would not fail, it would mark every passage stale. A
+  mismatch yields a passage with **no text**, not a marked one: without the check an edit inside the
+  settle window yields a wrong passage under a real path and a real score, and a stale passage
+  handed over with its text is the same thing with a label. Composed, called by nothing until the
+  passage search tool exists.
 - **Text search** is an index-independent exact/regex folder scan, for literal lookups and
   for the window before the first index is ready.
 

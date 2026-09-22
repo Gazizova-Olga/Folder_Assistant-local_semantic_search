@@ -53,7 +53,7 @@ flowchart TB
         floor["RelevanceFloor<br/>low-confidence screen"]
         reducer["TokenBudgetContextReducer<br/>hybrid rerank, MMR, score gap"]
         rtel["RetrievalTelemetryQuery<br/>log line + meter"]
-        snippet["Snippet verification<br/>against chunk_hash"]
+        snippet["PassageBuilder<br/>verified against chunk_hash before anything sees it; stale yields no text"]
     end
 
     subgraph tools["Tools — Phase A, SPEC-101"]
@@ -63,7 +63,7 @@ flowchart TB
         textsearch["SearchText<br/>index-independent, bounded four ways"]
         about["FindFilesAbout<br/>file-level semantic, same seams"]
         mutate["Mutation tools<br/>Create · Update · ReplaceLines · Delete"]
-        extract["Text extraction registry<br/>one source of the extension list; plain text; docx/pdf after snippet verification"]
+        extract["Text extraction registry<br/>one source of the extension list; plain text; docx/pdf now registrable"]
     end
 
     subgraph agent["Agent and orchestration — Phase B, SPEC-100/140"]
@@ -120,8 +120,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade,roster,runner built
-    class convdb,snippet,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,mutate,provider,facade,roster,runner built
+    class convdb,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -151,6 +151,7 @@ composition without a caller.
 | §5.1 **1** — the default profile retrieves better than chance: `lsa-vec`, with a loud, default-only fallback to `lsa-blob` where the native store has no binary; benchmark re-run on this tree for every profile this machine can measure; SPEC-000 0.3.0, SPEC-131 0.8.0, SPEC-161 0.5.0, SPEC-162 0.7.0 | `profiles` | **Landed** 2026-09-15 |
 | Default moved to `ollama-vec` by the owner's decision, with `ollama-blob` as the store-only fallback; an unreachable Ollama fails the index loudly and never substitutes an embedder; every profile re-measured on this tree on Windows and Linux (`docs/benchmarks/`, `docs/benchmarks/linux/`); SPEC-000 0.4.0, SPEC-131 0.9.0, SPEC-161 0.6.0, SPEC-162 0.8.0 | `profiles` | **Landed** 2026-09-16 |
 | §5.1 **7** — SPEC-000 stops claiming an agent and a closed network | spec only | Queued, Phase D |
+| §5.2 **1** — a rebuilt passage is verified against `chunk_hash` before anything sees it: `ChunkHash` carried on the hit, `PassageBuilder` re-reading the file through the extraction registry, tokenizing and joining as the chunker does, hashing with the chunker's own method; a mismatch or a shrunken file yields a stale passage with no text, a missing file or a format without an extractor an unavailable one; composed in the root, called by nothing until B6; `.docx`/`.pdf` extractors now registrable; SPEC-110 0.12.0, SPEC-120 0.19.0 | `snippet` | **Landed** 2026-09-23 |
 
 ## Phase A ledger — containment and tools
 

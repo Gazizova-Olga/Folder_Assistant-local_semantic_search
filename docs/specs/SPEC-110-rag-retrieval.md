@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.11.0 |
+| Version | 0.12.0 |
 | Owner | Retrieval |
-| Last updated | 2026-09-14 |
+| Last updated | 2026-09-23 |
 
 ## Purpose
 
@@ -33,7 +33,9 @@ Both retrieval backends are implemented, and context assembly now exists as a se
 
 **Nothing calls the reducer yet.** It is composed and resolvable, in the same position retrieval
 itself occupied before the composition root registered it: the stage a consumer will run, with no
-consumer built. A semantic-search tool is what will use it, and that belongs to the agent work.
+consumer built. A semantic-search tool is what will use it, and that belongs to the agent work. The
+passage builder that turns a hit into verified text (below) is composed the same way, for the same
+consumer.
 
 Per-call telemetry wraps the composed query and is exported at `GET /metrics` (see Observability).
 It records what searches do, so until something searches it has nothing to record — the instrument
@@ -51,7 +53,12 @@ this repository does not have until the agent lands.
 IRetrievalQuery.Search(databasePath, queryText, options) -> IReadOnlyList<RetrievalHit>
 
 RetrievalOptions(TopK = 5, MinScore = 0.0)
-RetrievalHit(ChunkId, FilePath, ChunkIndex, TokenStart, TokenEnd, Score)
+RetrievalHit(ChunkId, FilePath, ChunkIndex, TokenStart, TokenEnd, Score, ChunkHash)
+
+PassageBuilder(rootPath, extractors).Rebuild(hits) -> IReadOnlyList<RebuiltPassage>   // one file read per file
+PassageBuilder.Rebuild(hit) -> RebuiltPassage
+RebuiltPassage(Hit, State, Text)          // Text non-null iff State is Verified; TokenCount = TokenEnd - TokenStart
+PassageState { Verified, Stale, Unavailable }
 ```
 
 **The contract is "return the top k", not "return every vector so the caller can rank them".**
@@ -153,7 +160,38 @@ conclusion drawn from it has been narrowed to the vectorizer it was taken on.
 
 A hit carries the file path and the token window, not just a score. Chunks store no text of
 their own, so a hit without its source cannot be turned back into a passage — and a score with
-nothing behind it is not a result.
+nothing behind it is not a result. It also carries the chunk's recorded hash, for the rule below.
+
+### A rebuilt passage is verified before anything sees it
+
+**A passage is the text that was embedded, or it is nothing.** `PassageBuilder` turns a hit back
+into its passage by re-reading the file now — bytes through the extraction registry's extractor for
+its extension, exactly as the index read it ([SPEC-120](SPEC-120-rag-indexing.md)) — tokenizing it
+with the chunker's tokenizer, and rejoining the window `[TokenStart, TokenEnd)` with single spaces,
+which is the chunker's own join. Nothing about that says the file is still the file that was
+embedded: an edit inside the settle window, or a file whose re-delivery was abandoned as `Failed`,
+yields a window of the wrong text under a real path and a real score — the silently plausible wrong
+answer this system exists to refuse. So the rebuilt window is **hashed before anything else is done
+with it**, with the chunker's own hash method over the same join, and compared to the hash the
+chunk was recorded under:
+
+- **`Verified`** — the hashes match, and the passage carries the text.
+- **`Stale`** — the file is there and the window does not hash to the chunk, or the window lies past
+  the end of what the file now holds. **The passage carries no text.** Marking a wrong passage stale
+  and handing it over anyway would put text a model could quote under a real path; the caller is
+  told the file changed since it was indexed, and shows nothing of it.
+- **`Unavailable`** — the file is gone, cannot be opened (share-read, no retry: a failing read is a
+  live writer, and a passage a moment late is not worth a retry loop), or has no extractor.
+
+The hash rule has one owner, the chunker (`TextChunker.Sha256`), and the builder calls it rather than
+restating it; a second copy of the join or the digest would not fail, it would mark every passage
+stale. The builder reads each file once for all the hits it holds, because a search over-fetches and
+a file's best passages sit together. It is what makes container formats registrable in SPEC-120: a
+window rebuilt from an extractor's text verifies against a hash taken over that same text, and one
+that cannot be rebuilt yields nothing rather than a slice of a ZIP.
+
+The builder is composed in the root over the analyzed folder and the same registry the index reads
+through, and — like the reducer — called by nothing until the semantic-search tool exists.
 
 ### Dimension mismatch
 

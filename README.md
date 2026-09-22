@@ -52,8 +52,8 @@ colour-coded.
 - The **index database** — files, chunks, vectors and the outbox in a folder-scoped SQLite file.
 - The **text extraction registry** — the one source of which files are read and how each is
   decoded, asked by the indexing pass, the per-file delivery, the watcher and the text search alike.
-  Plain text today; document formats wait until a rebuilt passage is verified against its chunk
-  hash.
+  Plain text today; document formats can be added now that a rebuilt passage is verified against
+  its chunk hash.
 - **Telemetry** — a structured log line per embed call, and retrieval metrics at `GET /metrics`.
 
 **Built and tested, not yet reachable at runtime**
@@ -61,6 +61,10 @@ colour-coded.
 - Retrieval — cosine ranking within one embedding space, in managed code or through `sqlite-vec` —
   and the context reducer that reranks, diversifies and fits passages under a token budget. Nothing
   on the request path calls them yet, so the vectors are written and read only by the test suite.
+- The **passage builder** that turns a hit back into text: the file is re-read and the chunk's
+  window rebuilt exactly as it was chunked, then hashed and compared with the hash the index
+  recorded. A window that no longer matches — the file changed after it was indexed — yields no
+  text at all, so a passage is either the text that was embedded or nothing.
 - The **workspace path guard** every file tool resolves paths through: it refuses anything outside
   the folder, including escapes through symbolic links and junctions, hard links, and `subst` drives,
   and refuses the index's own metadata folder for every operation.
@@ -159,7 +163,7 @@ flowchart TB
         floor["RelevanceFloor<br/>low-confidence screen"]
         reducer["TokenBudgetContextReducer<br/>hybrid rerank, MMR, score gap"]
         rtel["RetrievalTelemetryQuery<br/>log line + meter"]
-        snippet["Snippet verification<br/>against chunk_hash"]
+        snippet["PassageBuilder<br/>verified against chunk_hash before anything sees it; stale yields no text"]
     end
 
     subgraph tools["Tools — Phase A, SPEC-101"]
@@ -169,7 +173,7 @@ flowchart TB
         textsearch["SearchText<br/>index-independent, bounded four ways"]
         about["FindFilesAbout<br/>file-level semantic, same seams"]
         mutate["Mutation tools<br/>Create · Update · ReplaceLines · Delete"]
-        extract["Text extraction registry<br/>one source of the extension list; plain text; docx/pdf after snippet verification"]
+        extract["Text extraction registry<br/>one source of the extension list; plain text; docx/pdf now registrable"]
     end
 
     subgraph agent["Agent and orchestration — Phase B, SPEC-100/140"]
@@ -226,8 +230,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,guard,readt,textsearch,about,mutate,provider,facade,roster,runner built
-    class convdb,snippet,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,mutate,provider,facade,roster,runner built
+    class convdb,searchidx,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

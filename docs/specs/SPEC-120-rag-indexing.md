@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.18.0 |
+| Version | 0.19.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-16 |
+| Last updated | 2026-09-23 |
 
 ## Purpose
 
@@ -69,11 +69,11 @@ indexed by one path and ignored by another looks exactly like a file that was ne
   could tell from the outside.
 - **One extractor exists: plain text**, decoding as `File.ReadAllText` decodes — UTF-8 unless a
   byte-order mark says otherwise, the mark left out — over the extensions the scanner used to list
-  for itself. It scans as raw lines. Extractors for documents in containers (`.docx`, `.pdf`) are in
-  scope only once a rebuilt snippet is verified against its chunk hash
-  ([SPEC-110](SPEC-110-rag-retrieval.md)): without that check, a passage rebuilt from the file's
-  bytes at a token window taken over extracted text is a wrong passage under a real path and a real
-  score.
+  for itself. It scans as raw lines. Extractors for documents in containers (`.docx`, `.pdf`) are
+  **registrable now that a rebuilt passage is verified against its chunk hash** before anything sees
+  it ([SPEC-110](SPEC-110-rag-retrieval.md)): the passage is rebuilt from the extractor's text, the
+  same text the hash was taken over, and a window that does not verify yields nothing rather than a
+  slice of the container's bytes. None is registered yet; each is its own change.
 - **Raw-line scanning is a property of the format, asked separately from "read at all".** The text
   search reads only formats that scan as raw lines; a container format the index reads would
   otherwise be scanned through its packaging. An extension nothing reads answers false to both

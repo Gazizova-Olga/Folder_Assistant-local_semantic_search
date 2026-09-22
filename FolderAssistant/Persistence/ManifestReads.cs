@@ -45,7 +45,7 @@ internal static class ManifestReads
 		}
 
 		command.CommandText = $"""
-			SELECT cm.chunk_id, fm.file_path, cm.chunk_index, cm.token_start, cm.token_end
+			SELECT cm.chunk_id, fm.file_path, cm.chunk_index, cm.token_start, cm.token_end, cm.chunk_hash
 			FROM chunk_manifest cm
 			JOIN file_manifest fm ON fm.file_id = cm.file_id
 			WHERE cm.chunk_id IN ({String.Join(", ", parameters)});
@@ -62,7 +62,8 @@ internal static class ManifestReads
 				FilePath: reader.GetString(1),
 				ChunkIndex: reader.GetInt32(2),
 				TokenStart: reader.GetInt32(3),
-				TokenEnd: reader.GetInt32(4));
+				TokenEnd: reader.GetInt32(4),
+				ChunkHash: reader.GetString(5));
 		}
 
 		return locations;

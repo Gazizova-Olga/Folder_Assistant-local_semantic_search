@@ -126,7 +126,8 @@ internal sealed class CosineRetrievalQuery : IRetrievalQuery
 				location.ChunkIndex,
 				location.TokenStart,
 				location.TokenEnd,
-				score));
+				score,
+				location.ChunkHash));
 		}
 
 		return hits;

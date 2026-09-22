@@ -16,7 +16,7 @@ public sealed class RetrievalTelemetryQueryTests
 	public void A_Successful_Search_Records_One_Event_And_Returns_Its_Hits_Untouched()
 	{
 		RecordingTelemetry telemetry = new();
-		IReadOnlyList<RetrievalHit> hits = [new RetrievalHit("chunk-1", "notes.md", 0, 0, 12, 0.82)];
+		IReadOnlyList<RetrievalHit> hits = [new RetrievalHit("chunk-1", "notes.md", 0, 0, 12, 0.82, "hash-1")];
 		IRetrievalQuery query = RetrievalTelemetryQuery.Wrap(new StubRetrievalQuery { Hits = hits }, telemetry);
 
 		IReadOnlyList<RetrievalHit> returned = query.Search("manifest.db", "how does indexing work", Options);

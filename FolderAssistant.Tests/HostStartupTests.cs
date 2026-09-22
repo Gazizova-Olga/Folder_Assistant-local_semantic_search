@@ -325,6 +325,42 @@ public sealed class HostStartupTests
 	}
 
 	/// <summary>
+	/// Snippet verification end to end, which no unit test can reach: the hash the real pipeline recorded
+	/// for a chunk — over the extractor's decode and the chunker's join — is the hash the composed builder
+	/// recomputes from the file, so an unchanged file rebuilds verified; and a hit from before an edit
+	/// yields no text afterwards. The second half holds whether or not the front end has re-indexed the
+	/// edit by then: the old hit's hash is the old text's, and the window now holds different text.
+	/// </summary>
+	[Fact]
+	public async Task A_Passage_Rebuilt_Through_The_Composed_Builder_Verifies_Against_The_Indexs_Own_Hash()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma delta epsilon zeta");
+
+		using HostFixture host = new(folder, InProcessProfile);
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+
+		IIndexState state = host.Services.GetRequiredService<IIndexState>();
+		await WaitFor(() => state.Status == IndexStatus.Ready, "the initial index");
+
+		IReadOnlyList<RetrievalHit> hits = host.Services.GetRequiredService<IRetrievalQuery>()
+			.Search(folder.Combine(".folderassistant", "manifest.db"), "alpha beta", new RetrievalOptions(TopK: 3));
+		PassageBuilder builder = host.Services.GetRequiredService<PassageBuilder>();
+
+		IReadOnlyList<RebuiltPassage> before = builder.Rebuild(hits);
+		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma delta EPSILON zeta");
+		IReadOnlyList<RebuiltPassage> after = builder.Rebuild(hits);
+
+		hits.Should().NotBeEmpty();
+		hits.Should().OnlyContain(hit => hit.ChunkHash.Length == 64);
+		before.Should().OnlyContain(passage => passage.State == PassageState.Verified);
+		before[0].Text.Should().Be("alpha beta gamma delta epsilon zeta");
+		after.Should().OnlyContain(passage => passage.State == PassageState.Stale && passage.Text == null);
+	}
+
+	/// <summary>
 	/// The mutation holder's wiring: it has to be built over the analyzed folder — a guard over any other
 	/// root would write somewhere the index never looks — and refuse the index's own folder, and it has to
 	/// be a holder of its own, resolvable apart from the read tools, or a roster could not grant one

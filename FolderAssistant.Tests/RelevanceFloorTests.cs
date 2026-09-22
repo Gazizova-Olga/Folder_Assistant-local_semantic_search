@@ -103,5 +103,5 @@ public sealed class RelevanceFloorTests
 	}
 
 	private static RetrievalCandidate Candidate(String chunkId, Double score)
-		=> new(new RetrievalHit(chunkId, $"{chunkId}.md", 0, 0, 10, score), $"passage {chunkId}", TokenCount: 10);
+		=> new(new RetrievalHit(chunkId, $"{chunkId}.md", 0, 0, 10, score, "hash"), $"passage {chunkId}", TokenCount: 10);
 }

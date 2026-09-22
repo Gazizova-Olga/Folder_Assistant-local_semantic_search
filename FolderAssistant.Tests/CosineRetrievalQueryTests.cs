@@ -232,7 +232,10 @@ public sealed class CosineRetrievalQueryTests
 		Int32 ChunkIndex,
 		Int32 TokenStart,
 		Int32 TokenEnd,
-		IReadOnlyList<Single> Vector);
+		IReadOnlyList<Single> Vector)
+	{
+		public String ChunkHash => $"hash-{this.ChunkId}";
+	}
 
 	private sealed class StubVectorizer(Single[] vector, String modelVersionId = "m1") : IVectorizer
 	{
@@ -279,7 +282,7 @@ public sealed class CosineRetrievalQueryTests
 				.Where(v => chunkIds.Contains(v.ChunkId, StringComparer.Ordinal))
 				.ToDictionary(
 					v => v.ChunkId,
-					v => new ChunkLocation(v.ChunkId, v.FilePath, v.ChunkIndex, v.TokenStart, v.TokenEnd),
+					v => new ChunkLocation(v.ChunkId, v.FilePath, v.ChunkIndex, v.TokenStart, v.TokenEnd, v.ChunkHash),
 					StringComparer.Ordinal);
 
 		public String? ReadFitArtifact(String databasePath, String modelVersionId) => null;

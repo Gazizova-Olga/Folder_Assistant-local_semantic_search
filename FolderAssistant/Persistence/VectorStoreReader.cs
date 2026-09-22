@@ -13,7 +13,8 @@ internal sealed record ChunkLocation(
 	String FilePath,
 	Int32 ChunkIndex,
 	Int32 TokenStart,
-	Int32 TokenEnd);
+	Int32 TokenEnd,
+	String ChunkHash);
 
 /// <summary>
 /// The read half of the vector store, and the counterpart to <see cref="IVectorStoreWriter"/>.

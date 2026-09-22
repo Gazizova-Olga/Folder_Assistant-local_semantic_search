@@ -129,7 +129,7 @@ public sealed class SearchToolsTests
 	}
 
 	private static RetrievalHit Hit(String chunkId, String path, Double score)
-		=> new(chunkId, path, 0, 0, 10, score);
+		=> new(chunkId, path, 0, 0, 10, score, "hash");
 
 	private sealed record Call(String DatabasePath, String QueryText, RetrievalOptions Options);
 
