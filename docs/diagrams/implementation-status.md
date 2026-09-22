@@ -1,7 +1,7 @@
 # Implementation status
 
 The whole structure the plan converges on, every block coloured by what is true of it now — as of
-2026-09-18. Updated with every commit that moves a block; at the end, every block is green.
+2026-09-23. Updated with every commit that moves a block; at the end, every block is green.
 
 **Five states, not two.** *Built but unreachable* is the category a diagram with only *done* and
 *not done* hides: retrieval is implemented twice over, tested, composed — and it still never runs.
@@ -68,7 +68,7 @@ flowchart TB
 
     subgraph agent["Agent and orchestration — Phase B, SPEC-100/140"]
         direction LR
-        provider["Provider + agent factory<br/>OpenAI-compatible, Azure; NetworkTimeout set"]
+        provider["Provider + agent factory<br/>OpenAI-compatible, Azure; NetworkTimeout set; failures as one sentence"]
         facade["Tool facades<br/>file tools non-fatal · search tools fatal"]
         roster["Roster · catalog · registry · routing<br/>default roster in code; cycles refused at startup"]
         runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]
@@ -171,7 +171,7 @@ composition without a caller.
 | **B2** — tool reflection and the facades: every described public method of the three holders reflected into a function named after it; each wrapped in one facade that times the call, logs one structured line and applies its group's contract — a file tool's failure a `TOOL_FAILED:` string the prompt tells the model to report, a search tool's failure the exception itself, ending the turn through a loop built to tolerate none; the group decided by the holder's type in one place; the agent built with all ten and a duplicate name refused; SPEC-100 0.4.0, SPEC-101 0.7.0 | `facade` | **Landed** 2026-09-16 |
 | **B3** — roster, catalog, registry, routing: three rosters by precedence (the operator's whole, the default from code behind `Workflow:UseDefaultRoster`, one agent from the root holding every tool), validated whole at startup through the startup filter — repeated name, unknown tool or delegate, self-delegation, cycle, missing or unnamed coordinator all refused before the host listens; the catalog narrowing every tool by name; one handle per entry over its own client with one delegation tool per target under the fatal contract; the static route to the coordinator; provider inherited per field, the role never; the default roster off until measured; SPEC-100 0.5.0 | `roster` | **Landed** 2026-09-18 |
 | **B4** — the turn: `IAgentExecution` loads the coordinator's session for the conversation, runs the agent and saves the session only when the turn succeeded, keyed by agent and conversation, held in memory until the conversation database exists; a session that cannot be read starts a fresh one; the turn's telemetry recorded inside the execution — a failed streamed turn drains as text, so a wrapper would record success — classified by the caller's token first, an abandoned stream cancelled, latency stopped before the save, a second meter at `GET /metrics`; `WorkflowRunner` as the `IChatClient` a front end talks to, naming the conversation on every response; registered in the root, resolved by nothing; SPEC-100 0.6.0 | `runner` | **Landed** 2026-09-21 |
-| **B5** — readable provider errors | `provider` | Queued |
+| **B5** — readable provider errors: one describer turning a provider's failure into a sentence naming the key to look at or the time to try again — the credentials, the deployment, the endpoint, the timeout; `Retry-After` as an HTTP date whichever form it came in; the inner chain walked; null for what is not the provider's; the turn's streamed failure note uses it; SPEC-140 0.3.0, SPEC-100 0.6.1 | `provider` | **Landed** 2026-09-23 |
 | **B6** — `SearchIndex` | `searchidx` | Queued |
 | **B7** — index batching across a turn | `batching` | Queued |
 | **B8** — console loop and host | `console` | Queued |

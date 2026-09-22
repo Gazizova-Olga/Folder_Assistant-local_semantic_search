@@ -400,7 +400,12 @@ variable, because a client that would fail every call with a transport error is 
 a page later. The SDK's own network timeout defaults to 100 seconds whatever the host configures, so
 both option shapes set it to the configured connection timeout. This factory is the one place
 document text can leave the machine, and `SPEC-000` names it as the deliberate exception to the
-offline rule.
+offline rule. A provider's failure surfaces as the SDK's exception, and `ProviderErrorDescriber` turns
+it into **one sentence naming the key to look at or the time to try again** — credentials, deployment,
+endpoint, timeout; `Retry-After` as an HTTP date whichever form it came in — walking the inner chain,
+and answering **null for anything that is not the provider's**, so a search refusal or a tool's own
+fault keeps its message rather than being misfiled as a provider error. The turn's streamed failure
+note uses it; a front end showing a thrown turn's failure should too.
 
 `AgentFactory` makes the framework's chat-client agent from the configuration: the configured
 system prompt **verbatim**, or one built from the name and description; the tool list as what it may

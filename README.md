@@ -81,7 +81,8 @@ colour-coded.
 - The **provider client and the agent**: one client family in two shapes, OpenAI-compatible (a local
   Ollama chat model included, with no key) and Azure OpenAI, built but never connected at startup,
   with the SDK's network timeout set to the configured one; and one agent over it, with the
-  configured prompt verbatim.
+  configured prompt verbatim. A provider's failure becomes one sentence naming the setting to check
+  or the time to try again, never the SDK's stack.
 - The **tool reflection and the facades**: every method the three holders describe is a tool named
   after it, each wrapped in a facade that times it, logs it and applies its group's failure contract.
   A file tool's failure comes back to the model as a `TOOL_FAILED:` string it is told to report; a
@@ -173,7 +174,7 @@ flowchart TB
 
     subgraph agent["Agent and orchestration — Phase B, SPEC-100/140"]
         direction LR
-        provider["Provider + agent factory<br/>OpenAI-compatible, Azure; NetworkTimeout set"]
+        provider["Provider + agent factory<br/>OpenAI-compatible, Azure; NetworkTimeout set; failures as one sentence"]
         facade["Tool facades<br/>file tools non-fatal · search tools fatal"]
         roster["Roster · catalog · registry · routing<br/>default roster in code; cycles refused at startup"]
         runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]

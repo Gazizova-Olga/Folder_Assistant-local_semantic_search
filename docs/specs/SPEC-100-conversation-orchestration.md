@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution and the runner written and implemented; durable session persistence and every front end not |
-| Version | 0.6.0 |
+| Version | 0.6.1 |
 | Owner | Agents |
-| Last updated | 2026-09-21 |
+| Last updated | 2026-09-23 |
 
 ## Purpose
 
@@ -245,8 +245,9 @@ stream, it yields what the turn produced, then **the failure as a last text upda
 (`The turn failed: <message>`), and the stream ends normally: a streamed response is already under way
 when it fails, and text is the only thing left to say so with. A streamed answer whose session then
 cannot be saved is followed by a text update saying the conversation will not remember it. Only a
-cancellation of the caller's token throws from a stream. The message is the exception's own until
-readable provider errors exist.
+cancellation of the caller's token throws from a stream. The message is the provider's failure as
+[SPEC-140](SPEC-140-provider-adapters.md)'s describer says it — the key to look at, or when to try
+again — and any other failure's own message.
 
 **The turn's telemetry is recorded inside the execution, never in a decorator over it.** A failed
 streamed turn drains cleanly, so anything watching from outside would record a success. One record per
@@ -345,7 +346,7 @@ internal sealed class MicrosoftAgentExecution : IAgentExecution
 {
 	const String FailurePrefix = "The turn failed: ";
 	const String SaveFailurePrefix = "This turn could not be saved, so the conversation will not remember it: ";
-	MicrosoftAgentExecution(StaticWorkflowRoute route, IAgentSessionStore sessions, ITurnTelemetry telemetry, ILogger<MicrosoftAgentExecution>? logger = null);
+	MicrosoftAgentExecution(StaticWorkflowRoute route, IAgentSessionStore sessions, ITurnTelemetry telemetry, ProviderErrorDescriber errors, ILogger<MicrosoftAgentExecution>? logger = null);
 	static TurnStatus Classify(Exception exception, CancellationToken cancellationToken);
 }
 
@@ -501,6 +502,8 @@ Not covered: a front end, durable session persistence, and two concurrent turns 
 
 ## Changelog
 
+- **0.6.1** (2026-09-23) — the streamed failure note carries SPEC-140's described sentence for a
+  provider failure; the execution takes the describer.
 - **0.6.0** (2026-09-21) — the turn: the execution over the coordinator with the session loaded and
   saved per agent and conversation, in memory; a failed turn saving nothing; an unreadable session
   starting fresh; a streamed failure as text; the turn's telemetry inside the execution with its

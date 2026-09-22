@@ -51,16 +51,19 @@ internal sealed class MicrosoftAgentExecution : IAgentExecution
 	private readonly StaticWorkflowRoute _route;
 	private readonly IAgentSessionStore _sessions;
 	private readonly ITurnTelemetry _telemetry;
+	private readonly ProviderErrorDescriber _errors;
 	private readonly ILogger _logger;
 
-	public MicrosoftAgentExecution(StaticWorkflowRoute route, IAgentSessionStore sessions, ITurnTelemetry telemetry, ILogger<MicrosoftAgentExecution>? logger = null)
+	public MicrosoftAgentExecution(StaticWorkflowRoute route, IAgentSessionStore sessions, ITurnTelemetry telemetry, ProviderErrorDescriber errors, ILogger<MicrosoftAgentExecution>? logger = null)
 	{
 		ArgumentNullException.ThrowIfNull(route);
 		ArgumentNullException.ThrowIfNull(sessions);
 		ArgumentNullException.ThrowIfNull(telemetry);
+		ArgumentNullException.ThrowIfNull(errors);
 		this._route = route;
 		this._sessions = sessions;
 		this._telemetry = telemetry;
+		this._errors = errors;
 		this._logger = logger ?? (ILogger)NullLogger.Instance;
 	}
 
@@ -162,7 +165,9 @@ internal sealed class MicrosoftAgentExecution : IAgentExecution
 			}
 
 			Double answeredMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-			String? note = failure is null ? null : FailurePrefix + failure.Message;
+			// The provider's failure as a sentence a person can act on; any other failure — a search refusal,
+			// a tool's — already carries its own.
+			String? note = failure is null ? null : FailurePrefix + this._errors.DescribeOrMessage(failure);
 			if (failure is null)
 			{
 				try

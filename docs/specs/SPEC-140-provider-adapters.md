@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Status | Draft — client construction written and implemented; the readable failure contract is not |
-| Version | 0.2.0 |
+| Status | Draft — client construction and the readable failure contract written and implemented |
+| Version | 0.3.0 |
 | Owner | Agents |
-| Last updated | 2026-09-16 |
+| Last updated | 2026-09-23 |
 
 ## Purpose
 
@@ -18,8 +18,8 @@ configured against.
 
 - Provider selection and client construction.
 - Timeout and option mapping.
-- A uniform failure contract (not yet written: a provider failure surfaces as the SDK's exception
-  until the describer that turns one into a sentence exists).
+- A uniform failure contract: a provider failure surfaces as the SDK's exception, and one describer
+  turns it into a sentence for whoever has to show it.
 
 **Out of scope**
 
@@ -76,9 +76,47 @@ SDK's retry policy is left as it is; the timeout bounds each attempt.
 `ChatClientBuilder` as defaults that fill an unset option on every call, whichever agent makes it. A
 call that sets its own keeps its own.
 
+### A failure is one sentence that says what to do
+
+**A provider's failure reaches the model's caller as the SDK's exception, and `ProviderErrorDescriber`
+turns it into one sentence.** The SDK's own message is a status line, a wire-format error body and a
+chain of inner exceptions; what a person at a console or a browser needs is which configuration key
+to look at, or when to try again. The describer answers for what it recognises, walking the inner
+chain for the first thing it does — the SDK wraps a refused connection two exceptions deep — and
+**answers null for anything else**, so a failure that is not the provider's (the index's refusal, a
+tool's own fault) keeps its own message rather than being misfiled as one.
+
+| Failure | The sentence names |
+|---|---|
+| HTTP 401, 403 | `Provider:ApiKey` and `FolderAssistant__Provider__ApiKey` |
+| HTTP 404 | `Provider:DeploymentName`, and `Provider:Endpoint` for a local server |
+| HTTP 429 | the rate limit, and `Retry-After` when the server sent one |
+| HTTP 5xx | the server's own failure, the reason phrase, `Retry-After` when sent, and that nothing here is misconfigured |
+| other 4xx | the request was rejected: `Provider:DeploymentName` and the sampling options |
+| a transport that could not connect | the transport's message, `Provider:Endpoint`, and that the server must be running |
+| a socket error | the socket error's name, and the same |
+| a timeout, or a cancellation that reached the describer | `ConnectionTimeoutSeconds` — the describer is not told about the caller's token, so a cancellation the caller asked for is never handed to it (SPEC-100 classifies first) |
+
+**`Retry-After` is said as an HTTP date whichever form the server sent it in.** A delta in seconds is
+added to the describer's clock — a `TimeProvider`, so a test can pin the date — and formatted as
+RFC 1123; an HTTP date is passed through in that form; anything else is passed through as it came. A
+person reading "try again after Wed, 23 Sep 2026 21:14:05 GMT" can act on it; "after 120" can only be
+counted from a moment they did not see.
+
+**Who uses it:** the turn (SPEC-100) describes the failure of a streamed turn in its last text update,
+falling back to the exception's own message; the front ends that show a thrown turn's failure use it the
+same way when they exist. The log line keeps the exception.
+
 ## Contracts
 
 ```csharp
+internal sealed class ProviderErrorDescriber
+{
+	ProviderErrorDescriber(TimeProvider? clock = null);
+	String? Describe(Exception exception);          // null when nothing in the chain is the provider's
+	String DescribeOrMessage(Exception exception);
+}
+
 internal static class ProviderClientFactory
 {
 	static IChatClient Create(ProviderConfig provider, TimeSpan connectionTimeout);   // throws InvalidOperationException
@@ -123,11 +161,23 @@ server.
 - A host test resolves the agent handle from the real root over a configured local endpoint with no
   network, and asserts that a keyless hosted configuration fails when the handle is asked for, not
   at boot.
+- **The describer** — each status row above names its key; the reason phrase is carried; `Retry-After`
+  in seconds, as an HTTP date, and as neither each come out as the table says, and a 5xx carries it
+  too; a transport with no status points at the endpoint and one with a status reports it; a timeout
+  and a cancellation give the same sentence; a result exception with no status over a request exception
+  over a socket error is described from the request exception, and a socket error under a foreign
+  exception from the socket; the index's refusal and a plain fault are null, and `DescribeOrMessage`
+  gives their own message. In SPEC-100's suite, a streamed turn ending on a cancellation nobody asked
+  for carries the describer's sentence and not the SDK's message.
+- Mutation kills, each restored byte-for-byte: the delta counted from the wrong moment fails the
+  seconds row and the 5xx test; the inner chain not walked fails the chain test; the unrecognised
+  described as its own message fails the null test and the chain test; the execution handing the
+  describer an exception it never recognises fails SPEC-100's streamed cancellation test. Two
+  first attempts (the delta branch disabled, the describer field unread) only failed the analyzer and
+  were discarded as non-evidence.
 
 ## Open questions
 
-- The readable failure contract: a `ProviderErrorDescriber` turning transport and status failures
-  into one actionable sentence, `Retry-After` included. Not built.
 - Whether a local endpoint should be required to be loopback unless an explicit opt-out is set, the
   same question [SPEC-162](SPEC-162-embedding-ollama-local.md) leaves open for the embedder.
 
@@ -138,6 +188,9 @@ server.
 
 ## Changelog
 
+- **0.3.0** (2026-09-23) — the readable failure contract: one describer, one sentence per kind of
+  provider failure naming the key or the time, `Retry-After` as an HTTP date, null for what is not
+  the provider's; used by the turn's streamed failure note. Written with its implementation.
 - **0.2.0** (2026-09-16) — client construction written with its implementation: the two shapes,
   what is refused at construction, the network timeout, the sampling defaults, the trust boundary.
 - **0.1.0** (2026-09-08) — placeholder.

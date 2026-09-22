@@ -234,6 +234,7 @@ internal sealed class Program
 		// conversation database is what replaces this store. The runner is what a front end talks to, and
 		// no front end exists, so it is resolved by nothing.
 		builder.Services.AddSingleton<ITurnTelemetry, LoggerTurnTelemetry>();
+		builder.Services.AddSingleton(new ProviderErrorDescriber(TimeProvider.System));
 		builder.Services.AddSingleton<IAgentSessionStore, InMemoryAgentSessionStore>();
 		builder.Services.AddSingleton<IAgentExecution, MicrosoftAgentExecution>();
 		builder.Services.AddSingleton<WorkflowRunner>();

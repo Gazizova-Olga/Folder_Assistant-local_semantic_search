@@ -122,7 +122,8 @@ public sealed class MicrosoftAgentExecutionTests
 
 		List<AgentResponseUpdate> updates = await fixture.Execution.RunStreamingAsync("c1", Question, CancellationToken.None).ToListAsync();
 
-		updates.Should().ContainSingle().Which.Text.Should().Be(MicrosoftAgentExecution.FailurePrefix + "the transport gave up");
+		// The note is the describer's sentence, not the SDK's message: a deadline is the provider's failure.
+		updates.Should().ContainSingle().Which.Text.Should().StartWith(MicrosoftAgentExecution.FailurePrefix + "The provider did not answer within").And.NotContain("the transport gave up");
 		fixture.Telemetry.Turns.Should().ContainSingle().Which.Status.Should().Be(TurnStatus.TimedOut);
 	}
 
@@ -203,7 +204,7 @@ public sealed class MicrosoftAgentExecutionTests
 			Roster roster = Roster.Build(new AgentConfig { AgentName = "solo" }, []);
 			this._registry = new AgentRegistry(roster, new AgentToolCatalog([]), _ => client);
 			this.Sessions = sessions ?? new InMemoryAgentSessionStore();
-			this.Execution = new MicrosoftAgentExecution(new StaticWorkflowRoute(roster, this._registry), this.Sessions, this.Telemetry, new TypedLogger(this.Logger));
+			this.Execution = new MicrosoftAgentExecution(new StaticWorkflowRoute(roster, this._registry), this.Sessions, this.Telemetry, new ProviderErrorDescriber(), new TypedLogger(this.Logger));
 		}
 
 		public MicrosoftAgentExecution Execution { get; }
