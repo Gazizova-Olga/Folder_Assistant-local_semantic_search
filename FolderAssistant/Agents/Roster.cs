@@ -29,7 +29,7 @@ internal sealed class Roster
 	internal const String ReaderName = "reader";
 	internal const String MutatorName = "mutator";
 
-	private static readonly String[] ReaderTools = ["InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "FindFilesAbout"];
+	private static readonly String[] ReaderTools = ["InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "SearchIndex", "FindFilesAbout"];
 	private static readonly String[] MutatorTools = ["ReadFile", "Retrieve", "Create", "Update", "ReplaceLines", "Delete"];
 
 	private readonly Dictionary<String, AgentDefinition> _byName;

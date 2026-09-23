@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using FolderAssistant.Retrieval;
+using FolderAssistant.Tools;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -74,6 +75,11 @@ internal sealed class MicrosoftAgentExecution : IAgentExecution
 
 		Int64 started = Stopwatch.GetTimestamp();
 		Double? answeredMs = null;
+
+		// The search memo is opened for every turn, unconditionally: it bounds a query cache to the turn and
+		// nothing else, and a scope opened only when a search tool is held would make its absence a second
+		// thing to reason about.
+		using IDisposable memo = SearchMemo.BeginScope();
 		try
 		{
 			AgentHandle handle = this._route.Coordinator;
@@ -130,6 +136,7 @@ internal sealed class MicrosoftAgentExecution : IAgentExecution
 		Int64 started = Stopwatch.GetTimestamp();
 		Boolean recorded = false;
 		IAsyncEnumerator<AgentResponseUpdate>? updates = null;
+		using IDisposable memo = SearchMemo.BeginScope();
 		try
 		{
 			AgentHandle? handle = null;

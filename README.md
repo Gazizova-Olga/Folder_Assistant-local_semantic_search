@@ -15,7 +15,7 @@ machine unless you deliberately point the chat side at a hosted provider.
 | AI stack | `Microsoft.Extensions.AI`, built towards the Microsoft Agent Framework; Ollama for local embeddings |
 | Storage | SQLite via `Microsoft.Data.Sqlite`, WAL mode; `sqlite-vec` native k-NN by default, brute-force cosine where it has no binary |
 | Observability | OpenTelemetry metrics exported for Prometheus at `GET /metrics`; structured logging |
-| Quality gates | Zero-warning build enforced with SonarAnalyzer; ~750 xUnit tests; CI on Ubuntu and Windows for every push |
+| Quality gates | Zero-warning build enforced with SonarAnalyzer; ~800 xUnit tests; CI on Ubuntu and Windows for every push |
 | Method | Spec-first: every behavioural change starts from a versioned spec in `docs/specs/` and ships with it |
 
 ## Why it exists
@@ -59,8 +59,9 @@ colour-coded.
 **Built and tested, not yet reachable at runtime**
 
 - Retrieval — cosine ranking within one embedding space, in managed code or through `sqlite-vec` —
-  and the context reducer that reranks, diversifies and fits passages under a token budget. Nothing
-  on the request path calls them yet, so the vectors are written and read only by the test suite.
+  and the context reducer that reranks, diversifies and fits passages under a token budget. Both are
+  called by the passage search tool below; no front end runs a turn yet, so the vectors are written
+  and read only by the test suite.
 - The **passage builder** that turns a hit back into text: the file is re-read and the chunk's
   window rebuilt exactly as it was chunked, then hashed and compared with the hash the index
   recorded. A window that no longer matches — the file changed after it was indexed — yields no
@@ -74,10 +75,14 @@ colour-coded.
   line by line, returning each matching line with its file and line number. It reads the files, not
   the index, so it answers exact lookups and works before the first index is ready. Bounded by
   matching lines, matched characters, a deadline and the caller's cancellation, and every cut is said.
-- The **file-level semantic search**, in its own holder: which files are about a topic, by meaning,
-  each with its best passage's score. It asks the same wrapped retrieval query the passage search
-  will, so it is timed by the same instrument and refused by the same readiness check, and adds no
-  ranking of its own.
+- The **passage search**, in its own holder: the passages that best answer a question, by meaning,
+  each with its file and its text — verified to be what was indexed, or withheld and said. Weak sets
+  are refused whole, candidates far below the best are cut, and what remains is fitted to a budget;
+  every stage says in the note what it dropped. An identical search asked twice in one turn is
+  answered once.
+- The **file-level semantic search** beside it: which files are about a topic, each with its best
+  passage's score. It asks the same wrapped retrieval query, so it is timed by the same instrument
+  and refused by the same readiness check, and adds no ranking of its own.
 - The **mutation tools**, in their own holder over a second guard: create a file, replace text in
   one, replace a line range, delete a file or a directory. Every write is a temporary file and a
   rename, retried while the indexer holds the file open; every completed change is reported to the
@@ -106,7 +111,7 @@ colour-coded.
 
 **Not built**
 
-- The semantic passage search tool, the chat surface (console, HTTP), the conversation database.
+- The chat surface (console, HTTP), the conversation database.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits and
 read the telemetry**. You cannot yet ask it a question.
@@ -182,7 +187,7 @@ flowchart TB
         facade["Tool facades<br/>file tools non-fatal · search tools fatal"]
         roster["Roster · catalog · registry · routing<br/>default roster in code; cycles refused at startup"]
         runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]
-        searchidx["SearchIndex tool<br/>embed, over-fetch, screen, reduce, memoize per turn"]
+        searchidx["SearchIndex tool<br/>over-fetch, verify, screen, cut, reduce; memoized per turn"]
         batching["Index batching across a turn<br/>BeginBatch at the agent-run boundary"]
         console["Console loop<br/>beside the host; stdin EOF does not stop it"]
     end
@@ -212,8 +217,8 @@ flowchart TB
     bridge --> blob & vec
     blob & vec -.->|"vectors nothing reads"| cosine & vecq
     cosine & vecq --> floor --> reducer --> rtel -.-> metrics
-    rtel -.-> searchidx
-    snippet -.-> searchidx
+    rtel --> searchidx
+    snippet --> searchidx
     guard --> readt & textsearch & mutate & about
     readt & textsearch & about & searchidx & mutate --> facade --> roster --> runner
     provider --> roster
@@ -230,8 +235,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,mutate,provider,facade,roster,runner built
-    class convdb,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner built
+    class convdb,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

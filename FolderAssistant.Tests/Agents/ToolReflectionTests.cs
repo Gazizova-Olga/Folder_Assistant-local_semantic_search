@@ -26,11 +26,11 @@ public sealed class ToolReflectionTests
 		using TempFolder root = new();
 		ReadTools read = new(new WorkspacePathGuard(root.Path, Metadata), TextExtractorRegistry.Default, 1024);
 		MutationTools mutate = new(new WorkspacePathGuard(root.Path, Metadata), new RecordingNotifier());
-		SearchTools search = new(Mock.Of<IRetrievalQuery>(), "db");
+		SearchTools search = new(Mock.Of<IRetrievalQuery>(), "db", new PassageBuilder(root.Path, TextExtractorRegistry.Default), new TokenBudgetContextReducer());
 
 		ToolReflection.Reflect(read).Select(tool => tool.Name).Should().Equal("InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText");
 		ToolReflection.Reflect(mutate).Select(tool => tool.Name).Should().Equal("Create", "Update", "ReplaceLines", "Delete");
-		ToolReflection.Reflect(search).Select(tool => tool.Name).Should().Equal("FindFilesAbout");
+		ToolReflection.Reflect(search).Select(tool => tool.Name).Should().Equal("SearchIndex", "FindFilesAbout");
 	}
 
 	[Fact]

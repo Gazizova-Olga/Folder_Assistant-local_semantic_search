@@ -13,6 +13,11 @@ public sealed class SearchToolsTests
 {
 	private const String Database = "db";
 
+	/// <summary>A builder over a folder no hit names, and the real reducer: the file-level search reads neither.</summary>
+	private static readonly PassageBuilder Passages = new(Path.GetTempPath(), FolderAssistant.Extraction.TextExtractorRegistry.Default);
+
+	private static readonly IContextReduction Reducer = new TokenBudgetContextReducer();
+
 	[Fact]
 	public void Passages_Fold_Into_Files_Ranked_By_Their_Best_Passage()
 	{
@@ -25,7 +30,7 @@ public sealed class SearchToolsTests
 			Hit("c4", "docs/a.md", 0.10),
 			Hit("c5", "notes.txt", 0.50));
 
-		FilesAbout result = new SearchTools(query, Database).FindFilesAbout("anything");
+		FilesAbout result = new SearchTools(query, Database, Passages, Reducer).FindFilesAbout("anything");
 
 		result.Query.Should().Be("anything");
 		result.Files.Select(file => (file.Path, file.Score, file.MatchingChunks)).Should().Equal(
@@ -41,7 +46,7 @@ public sealed class SearchToolsTests
 	{
 		FixedQuery query = new(Hit("c1", "z.md", 0.5), Hit("c2", "a.md", 0.5), Hit("c3", "m.md", 0.5));
 
-		FilesAbout result = new SearchTools(query, Database).FindFilesAbout("tie");
+		FilesAbout result = new SearchTools(query, Database, Passages, Reducer).FindFilesAbout("tie");
 
 		result.Files.Select(file => file.Path).Should().Equal("a.md", "m.md", "z.md");
 	}
@@ -51,7 +56,7 @@ public sealed class SearchToolsTests
 	{
 		FixedQuery query = new();
 
-		new SearchTools(query, Database).FindFilesAbout("topic", maxFiles: 4);
+		new SearchTools(query, Database, Passages, Reducer).FindFilesAbout("topic", maxFiles: 4);
 
 		query.Calls.Should().ContainSingle();
 		query.Calls[0].DatabasePath.Should().Be(Database);
@@ -64,7 +69,7 @@ public sealed class SearchToolsTests
 	{
 		FixedQuery query = new();
 
-		FilesAbout result = new SearchTools(query, Database).FindFilesAbout("topic", maxFiles: SearchTools.MaxFiles + 30);
+		FilesAbout result = new SearchTools(query, Database, Passages, Reducer).FindFilesAbout("topic", maxFiles: SearchTools.MaxFiles + 30);
 
 		query.Calls[0].Options.TopK.Should().Be(SearchTools.MaxCandidates);
 		result.Note.Should().Contain($"maxFiles cut to {SearchTools.MaxFiles}");
@@ -75,7 +80,7 @@ public sealed class SearchToolsTests
 	{
 		FixedQuery query = new(Enumerable.Range(0, 7).Select(i => Hit($"c{i}", $"f{i}.md", 1.0 - i * 0.1)).ToArray());
 
-		FilesAbout result = new SearchTools(query, Database).FindFilesAbout("topic", maxFiles: 3);
+		FilesAbout result = new SearchTools(query, Database, Passages, Reducer).FindFilesAbout("topic", maxFiles: 3);
 
 		result.Files.Select(file => file.Path).Should().Equal("f0.md", "f1.md", "f2.md");
 		result.Truncated.Should().BeTrue();
@@ -89,7 +94,7 @@ public sealed class SearchToolsTests
 		// whose passages all rank eleventh or lower would not appear, and the note says so.
 		FixedQuery query = new(Enumerable.Range(0, 2 * SearchTools.CandidatesPerFile).Select(i => Hit($"c{i}", "one.md", 0.9)).ToArray());
 
-		FilesAbout result = new SearchTools(query, Database).FindFilesAbout("topic", maxFiles: 2);
+		FilesAbout result = new SearchTools(query, Database, Passages, Reducer).FindFilesAbout("topic", maxFiles: 2);
 
 		result.Files.Should().ContainSingle();
 		result.Truncated.Should().BeFalse();
@@ -99,7 +104,7 @@ public sealed class SearchToolsTests
 	[Fact]
 	public void No_Hits_Is_An_Empty_Result_With_A_Note_Not_An_Error()
 	{
-		FilesAbout result = new SearchTools(new FixedQuery(), Database).FindFilesAbout("nothing here");
+		FilesAbout result = new SearchTools(new FixedQuery(), Database, Passages, Reducer).FindFilesAbout("nothing here");
 
 		result.Files.Should().BeEmpty();
 		result.Truncated.Should().BeFalse();
@@ -111,7 +116,7 @@ public sealed class SearchToolsTests
 	{
 		ThrowingQuery query = new(new IndexNotReadyException("still building"));
 
-		Action act = () => new SearchTools(query, Database).FindFilesAbout("topic");
+		Action act = () => new SearchTools(query, Database, Passages, Reducer).FindFilesAbout("topic");
 
 		act.Should().Throw<IndexNotReadyException>().WithMessage("still building");
 	}
@@ -119,7 +124,7 @@ public sealed class SearchToolsTests
 	[Fact]
 	public void An_Empty_Query_And_A_Zero_Count_Throw()
 	{
-		SearchTools tools = new(new FixedQuery(), Database);
+		SearchTools tools = new(new FixedQuery(), Database, Passages, Reducer);
 
 		Action empty = () => tools.FindFilesAbout("   ");
 		Action zero = () => tools.FindFilesAbout("topic", maxFiles: 0);

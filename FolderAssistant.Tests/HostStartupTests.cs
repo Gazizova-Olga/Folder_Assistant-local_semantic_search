@@ -361,6 +361,57 @@ public sealed class HostStartupTests
 	}
 
 	/// <summary>
+	/// The passage search through the real root and a real turn: the coordinator calls <c>SearchIndex</c>
+	/// over the indexed folder and is handed verified text; and the turn's memo holds — two identical calls
+	/// in one turn cost one retrieval, the same call in the next turn costs another — which only the
+	/// execution opening the scope around the framework's loop can make true.
+	/// </summary>
+	[Fact]
+	public async Task A_Turn_Searches_The_Index_Through_The_Composed_Tool_And_The_Memo_Holds_For_The_Turn()
+	{
+		using TempFolder folder = new();
+		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma delta epsilon zeta");
+		RecordingRetrievalTelemetry retrievals = new();
+		ScriptedChatClient model = new(
+			ScriptedChatClient.Call("SearchIndex", new() { ["query"] = "alpha beta", ["maxResults"] = 3 }),
+			ScriptedChatClient.Call("SearchIndex", new() { ["query"] = "alpha beta", ["maxResults"] = 3 }),
+			ScriptedChatClient.Text("Found it."),
+			ScriptedChatClient.Call("SearchIndex", new() { ["query"] = "alpha beta", ["maxResults"] = 3 }),
+			ScriptedChatClient.Text("Found it again."));
+		using HostFixture host = new(folder, InProcessProfile)
+		{
+			TestServices = services =>
+			{
+				services.AddSingleton<Func<ProviderConfig, IChatClient>>(_ => _ => model);
+				services.AddSingleton<IRetrievalTelemetry>(retrievals);
+			},
+		};
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+		IIndexState state = host.Services.GetRequiredService<IIndexState>();
+		await WaitFor(() => state.Status == IndexStatus.Ready, "the initial index");
+		WorkflowRunner runner = host.Services.GetRequiredService<WorkflowRunner>();
+
+		ChatResponse first = await runner.GetResponseAsync([new ChatMessage(ChatRole.User, "what is in the notes?")]);
+		Int32 afterFirstTurn = retrievals.Calls.Count;
+		await runner.GetResponseAsync([new ChatMessage(ChatRole.User, "again?")], new ChatOptions { ConversationId = first.ConversationId });
+
+		first.Text.Should().Be("Found it.");
+		String toolResult = model.Calls[1].Messages.SelectMany(message => message.Contents).OfType<FunctionResultContent>().Single().Result!.ToString()!;
+		toolResult.Should().Contain("alpha beta gamma delta epsilon zeta").And.Contain("notes.md");
+		afterFirstTurn.Should().Be(1);
+		retrievals.Calls.Should().HaveCount(2);
+	}
+
+	private sealed class RecordingRetrievalTelemetry : IRetrievalTelemetry
+	{
+		public List<RetrievalCallTelemetry> Calls { get; } = [];
+
+		public void Record(RetrievalCallTelemetry call) => this.Calls.Add(call);
+	}
+
+	/// <summary>
 	/// The mutation holder's wiring: it has to be built over the analyzed folder — a guard over any other
 	/// root would write somewhere the index never looks — and refuse the index's own folder, and it has to
 	/// be a holder of its own, resolvable apart from the read tools, or a roster could not grant one
@@ -421,8 +472,8 @@ public sealed class HostStartupTests
 		handle.Agent.Name.Should().Be("Archivist");
 		IReadOnlyList<AITool> tools = handle.Tools;
 		tools.Select(tool => tool.Name).Should().BeEquivalentTo(
-			"InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "Create", "Update", "ReplaceLines", "Delete", "FindFilesAbout");
-		tools.OfType<ToolFacade>().Where(tool => tool.Group == ToolGroup.Search).Select(tool => tool.Name).Should().Equal("FindFilesAbout");
+			"InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "Create", "Update", "ReplaceLines", "Delete", "SearchIndex", "FindFilesAbout");
+		tools.OfType<ToolFacade>().Where(tool => tool.Group == ToolGroup.Search).Select(tool => tool.Name).Should().Equal("SearchIndex", "FindFilesAbout");
 		tools.OfType<ToolFacade>().Should().HaveCount(tools.Count);
 		keylessResolve.Should().Throw<InvalidOperationException>().WithMessage("*Provider:ApiKey*");
 	}

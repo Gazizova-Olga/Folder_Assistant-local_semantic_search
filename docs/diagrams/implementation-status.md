@@ -72,7 +72,7 @@ flowchart TB
         facade["Tool facades<br/>file tools non-fatal · search tools fatal"]
         roster["Roster · catalog · registry · routing<br/>default roster in code; cycles refused at startup"]
         runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]
-        searchidx["SearchIndex tool<br/>embed, over-fetch, screen, reduce, memoize per turn"]
+        searchidx["SearchIndex tool<br/>over-fetch, verify, screen, cut, reduce; memoized per turn"]
         batching["Index batching across a turn<br/>BeginBatch at the agent-run boundary"]
         console["Console loop<br/>beside the host; stdin EOF does not stop it"]
     end
@@ -102,8 +102,8 @@ flowchart TB
     bridge --> blob & vec
     blob & vec -.->|"vectors nothing reads"| cosine & vecq
     cosine & vecq --> floor --> reducer --> rtel -.-> metrics
-    rtel -.-> searchidx
-    snippet -.-> searchidx
+    rtel --> searchidx
+    snippet --> searchidx
     guard --> readt & textsearch & mutate & about
     readt & textsearch & about & searchidx & mutate --> facade --> roster --> runner
     provider --> roster
@@ -120,8 +120,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,mutate,provider,facade,roster,runner built
-    class convdb,searchidx,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner built
+    class convdb,batching,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -173,7 +173,7 @@ composition without a caller.
 | **B3** — roster, catalog, registry, routing: three rosters by precedence (the operator's whole, the default from code behind `Workflow:UseDefaultRoster`, one agent from the root holding every tool), validated whole at startup through the startup filter — repeated name, unknown tool or delegate, self-delegation, cycle, missing or unnamed coordinator all refused before the host listens; the catalog narrowing every tool by name; one handle per entry over its own client with one delegation tool per target under the fatal contract; the static route to the coordinator; provider inherited per field, the role never; the default roster off until measured; SPEC-100 0.5.0 | `roster` | **Landed** 2026-09-18 |
 | **B4** — the turn: `IAgentExecution` loads the coordinator's session for the conversation, runs the agent and saves the session only when the turn succeeded, keyed by agent and conversation, held in memory until the conversation database exists; a session that cannot be read starts a fresh one; the turn's telemetry recorded inside the execution — a failed streamed turn drains as text, so a wrapper would record success — classified by the caller's token first, an abandoned stream cancelled, latency stopped before the save, a second meter at `GET /metrics`; `WorkflowRunner` as the `IChatClient` a front end talks to, naming the conversation on every response; registered in the root, resolved by nothing; SPEC-100 0.6.0 | `runner` | **Landed** 2026-09-21 |
 | **B5** — readable provider errors: one describer turning a provider's failure into a sentence naming the key to look at or the time to try again — the credentials, the deployment, the endpoint, the timeout; `Retry-After` as an HTTP date whichever form it came in; the inner chain walked; null for what is not the provider's; the turn's streamed failure note uses it; SPEC-140 0.3.0, SPEC-100 0.6.1 | `provider` | **Landed** 2026-09-23 |
-| **B6** — `SearchIndex` | `searchidx` | Queued |
+| **B6** — `SearchIndex`, the passage search: over-fetch by a multiplier to a cap, every hit rebuilt and verified through the passage builder with stale and unavailable passages withheld and said, the low-confidence screen on the best verified match (off by default), the relative score-gap cutoff against the query's own best, the reducer under a constant budget, every stage's count in the note; memoized per `(query, maxResults)` for one turn through an `AsyncLocal` scope the execution opens unconditionally; the default reader holds it; SPEC-101 0.8.0, SPEC-100 0.6.2, SPEC-110 status | `searchidx` | **Landed** 2026-09-23 |
 | **B7** — index batching across a turn | `batching` | Queued |
 | **B8** — console loop and host | `console` | Queued |
 

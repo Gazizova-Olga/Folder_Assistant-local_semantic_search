@@ -30,12 +30,12 @@ The tree is in three states, and the middle one is the one to watch
 - **Live** — the whole-folder indexing pass at start; the file-indexing front end
   (`src/FolderAssistant.Indexing`) keeping the index in step with the folder afterwards; the index
   database; embedding and retrieval telemetry served at `GET /metrics`.
-- **Built but unreachable** — retrieval (`IRetrievalQuery`, two backends) and the context reducer
-  are composed in `Program.cs` and called by nothing on the request path. Every vector written is
-  one the running application never reads. The containment guard (`WorkspacePathGuard`), the read
-  tools and text search over it (`ReadTools`), the mutation tools over a second guard
-  (`MutationTools`) and the file-level semantic search over the wrapped query (`SearchTools`, all
-  `SPEC-101`) are built, tested and registered, and nothing resolves them. The provider client
+- **Built but unreachable** — retrieval (`IRetrievalQuery`, two backends), the passage builder and
+  the context reducer are composed in `Program.cs` and called by the passage search tool, which no
+  front end reaches. Every vector written is one the running application never reads. The
+  containment guard (`WorkspacePathGuard`), the read tools and text search over it (`ReadTools`), the
+  mutation tools over a second guard (`MutationTools`) and the two searches over the wrapped query
+  (`SearchTools`, all `SPEC-101`) are built, tested and registered. The provider client
   and the agent over it (`ProviderClientFactory`, `AgentFactory`, `AgentHandle`; `SPEC-140`,
   `SPEC-100`) are built the same way, and so are the tool reflection and the facade (`ToolReflection`,
   `ToolFacade`, `ToolSet`), and the roster over them (`Roster`, `AgentToolCatalog`, `AgentRegistry`,
@@ -43,8 +43,8 @@ The tree is in three states, and the middle one is the one to watch
   tool per target, the roster validated at startup. The turn is built too (`MicrosoftAgentExecution`,
   `WorkflowRunner`, sessions in memory), and **no front end exists, so the running application never
   runs one.**
-- **Not built** — the `SearchIndex` passage tool, the chat surface (console, HTTP), the conversation
-  database. The parts of the architecture below that describe them are intent.
+- **Not built** — the chat surface (console, HTTP), the conversation database. The parts of the
+  architecture below that describe them are intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -287,11 +287,11 @@ Properties worth stating because they are easy to "simplify" away:
 - Indexing runs **off** the startup path; the web host does not wait for it. A first index that
   fails is reported as failed, not as still building, and is retried on an interval.
 
-### Retrieval — built, no runtime caller
+### Retrieval — built, called by the search tools, no front end runs a turn
 
 Retrieval is **lazy** — it happens only when the model chooses to call a search tool, not
-as an unconditional pipeline stage. The query and the reducer exist and are composed; the tools
-that would call them do not.
+as an unconditional pipeline stage. The query, the builder, the screen and the reducer are composed
+and called by `SearchIndex` in that order; nothing runs a turn in the running application yet.
 
 - **Semantic search** embeds the query, ranks chunks by cosine similarity within a single
   embedding space, and rebuilds passage text from disk (chunks store no text). Candidates
@@ -324,8 +324,16 @@ across embedding spaces is meaningless.
 
 ### Tools — guard, both file holders and the search holder built, reached by nothing
 
-The search holder (`SearchTools`) exists beside the read holder and holds `FindFilesAbout`: which files
-are about a topic, each scored by its best passage. It is built over the **wrapped** `IRetrievalQuery`
+The search holder (`SearchTools`) exists beside the read holder and holds two tools. **`SearchIndex`**
+(`SPEC-101`) is the passage search retrieval was built for, and it runs the stages in a fixed order,
+each saying in the note what it dropped: over-fetch by a multiplier to a cap; rebuild and verify every
+hit through `PassageBuilder`, a stale or unavailable passage **withheld** rather than shown; screen the
+verified set on its best match (`RelevanceFloor.Off` by default — the floor is the embedder's); the
+**relative score-gap cutoff** against this query's own best (`ScoreGapFraction = 0.5`, a constant and
+unmeasured — tune it from `SemanticSearchBenchmark`, never by feel); reduce under a constant budget.
+An identical `(query, maxResults)` within one turn is answered once through `SearchMemo`, an
+`AsyncLocal` scope the execution opens around every turn unconditionally, and nothing is cached across
+turns. **`FindFilesAbout`** answers which files are about a topic, each scored by its best passage. It is built over the **wrapped** `IRetrievalQuery`
 the root composed, never over a reader of its own, so a file-level search is timed by the same
 decorator, served by the same backend and refused by the same readiness guard as a passage search;
 it over-fetches passages and folds them into files, and adds no ranking of its own. It is its own

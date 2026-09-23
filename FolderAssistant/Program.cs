@@ -80,12 +80,11 @@ internal sealed class Program
 			sp.GetRequiredService<ModuleSet>().CreateVectorizer(sp.GetRequiredService<AgentConfig>().Indexing),
 			sp.GetRequiredService<IEmbeddingTelemetry>()));
 
-		// The context-assembly stage. Composed but not yet called: the consumer that would run it over
-		// retrieval output is a search tool, which belongs to the agent work.
+		// The context-assembly stage, run by the passage search tool over what the builder below verified.
 		builder.Services.AddSingleton<IContextReduction, TokenBudgetContextReducer>();
 
 		// Turns a hit back into its passage, verified against the chunk's hash before anything else sees
-		// it, over the same extraction registry the index reads through. Composed for the same consumer.
+		// it, over the same extraction registry the index reads through.
 		builder.Services.AddSingleton(sp =>
 		{
 			AgentConfig config = sp.GetRequiredService<AgentConfig>();
@@ -99,11 +98,7 @@ internal sealed class Program
 		// Per-call retrieval telemetry, the same seam shape the embedding sink above uses.
 		builder.Services.AddSingleton<IRetrievalTelemetry, LoggerRetrievalTelemetry>();
 
-		// Retrieval was implemented and tested but composed nowhere, which SPEC-000 called the
-		// central open item. This registers it, so it is resolvable from the container. The gap that
-		// remains is that nothing on the request path asks it anything yet.
-		//
-		// Wrapped, so whichever backend the profile chose is timed by the same instrument. Measuring
+		// The retrieval query both search tools ask. Wrapped, so whichever backend the profile chose is timed by the same instrument. Measuring
 		// inside each backend instead would make the two sets of numbers incomparable, which is the
 		// one thing they exist to be.
 		builder.Services.AddSingleton(sp => RetrievalTelemetryQuery.Wrap(
@@ -161,9 +156,8 @@ internal sealed class Program
 				config.Persistence.MetadataFolderName);
 		});
 
-		// The read tools over their own containment guard. Composed and resolved by nothing: the agent
-		// that would reflect the holder's methods into tools does not exist yet. The text search takes
-		// the scanner's size bound so it reads exactly the files the index does.
+		// The read tools over their own containment guard, reflected into the catalog below. The text search
+		// takes the scanner's size bound so it reads exactly the files the index does.
 		builder.Services.AddSingleton(sp =>
 		{
 			AgentConfig config = sp.GetRequiredService<AgentConfig>();
@@ -187,13 +181,17 @@ internal sealed class Program
 				sp.GetRequiredService<IIndexChangeNotifier>());
 		});
 
-		// The search tools, over the composed retrieval query — the wrapped one, so a file-level search is
-		// timed and refused by the same instrument and the same readiness check as a passage search. A
-		// separate holder from the read tools because a search failure is fatal where a file failure is a
-		// string, and the holder is what tells the two apart. Resolved by nothing yet, like the read tools.
+		// The search tools, over the composed retrieval query — the wrapped one, so every search is timed and
+		// refused by the same instrument and the same readiness check — with the passage builder that
+		// verifies every passage and the reducer that fits them to the budget. A separate holder from the
+		// read tools because a search failure is fatal where a file failure is a string, and the holder is
+		// what tells the two apart. The floor is off: it is a property of the embedder, and no profile's
+		// scores have been measured to support one here (SPEC-110).
 		builder.Services.AddSingleton(sp => new SearchTools(
 			sp.GetRequiredService<IRetrievalQuery>(),
-			sp.GetRequiredService<DatabaseBootstrapResult>().DatabasePath));
+			sp.GetRequiredService<DatabaseBootstrapResult>().DatabasePath,
+			sp.GetRequiredService<PassageBuilder>(),
+			sp.GetRequiredService<IContextReduction>()));
 
 		// Every tool the application can grant, each through the facade of its group — the file tools under
 		// the string contract, the search tools under the fatal one — held by name so a roster entry's

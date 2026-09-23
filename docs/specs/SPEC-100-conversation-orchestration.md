@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution and the runner written and implemented; durable session persistence and every front end not |
-| Version | 0.6.1 |
+| Version | 0.6.2 |
 | Owner | Agents |
 | Last updated | 2026-09-23 |
 
@@ -126,7 +126,7 @@ are possible, and they take precedence in this order:
    none), `Delegates` (agent names; one delegation tool per target) and an optional `Provider`.
 2. **The default roster, from code**, when `Workflow:UseDefaultRoster` is on and no entries are
    configured: `orchestrator` with no tools, delegating to `reader` and `mutator`; `reader` holding
-   `InspectDirectory`, `ReadFile`, `Retrieve`, `FindFiles`, `SearchText` and `FindFilesAbout`;
+   `InspectDirectory`, `ReadFile`, `Retrieve`, `FindFiles`, `SearchText`, `SearchIndex` and `FindFilesAbout`;
    `mutator` holding `ReadFile`, `Retrieve`, `Create`, `Update`, `ReplaceLines` and `Delete`. The split
    is the point: which agent can change the folder is one line here.
 3. **One agent from the root configuration** otherwise — `AgentName`, `AgentDescription` and
@@ -221,7 +221,12 @@ first asked for — never at boot.
 
 **A turn is one call of one conversation, and it enters the coordinator.** `IAgentExecution` takes a
 conversation id and the turn's new messages; `MicrosoftAgentExecution` loads the coordinator's session
-for that conversation, runs the framework's agent over it, and saves the session.
+for that conversation, runs the framework's agent over it, and saves the session. Around the whole of
+that it opens the passage search's memo scope (`SearchMemo`, [SPEC-101](SPEC-101-file-tools.md)) — an
+`AsyncLocal` the framework's tool-calling loop runs inside, so an identical search asked twice in one
+turn is answered once, and nothing is cached across turns. It is opened **unconditionally**, whether or
+not the coordinator holds a search tool: it bounds a query cache and nothing else, and a scope opened
+only sometimes would be a second thing to reason about.
 
 - **The session is stored serialized, keyed by agent *and* conversation** (`IAgentSessionStore`). Two
   agents serving one conversation hold two sessions, and a key of the conversation alone would have
@@ -446,7 +451,7 @@ internal sealed class AgentHandle : IDisposable
 - **Host** — asked for, the default roster resolves from the real root as three handles with the
   orchestrator holding nothing but its two delegations and the route entering it; a configured roster
   whose delegation forms a cycle stops the host before it listens; the single agent still resolves
-  through the route with all ten tools, and a keyless configuration fails when the registry is asked
+  through the route with all eleven tools, and a keyless configuration fails when the registry is asked
   for, not at boot.
 - Mutation kills, each restored byte-for-byte: the loop left at its default fails exactly the
   turn-ending test; the facade handling both groups as strings fails the search contract and the
@@ -502,6 +507,8 @@ Not covered: a front end, durable session persistence, and two concurrent turns 
 
 ## Changelog
 
+- **0.6.2** (2026-09-23) — the execution opens the passage search's memo scope around every turn; the
+  default reader holds `SearchIndex`.
 - **0.6.1** (2026-09-23) — the streamed failure note carries SPEC-140's described sentence for a
   provider failure; the execution takes the describer.
 - **0.6.0** (2026-09-21) — the turn: the execution over the coordinator with the session loaded and

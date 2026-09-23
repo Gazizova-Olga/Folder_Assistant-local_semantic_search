@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Status | Draft — containment, the read tools, the text search, the file-level semantic search and the mutation tools written and implemented; the facade over them is SPEC-100's and is built |
-| Version | 0.7.0 |
+| Status | Draft — containment, the read tools, the text search, the passage search, the file-level semantic search and the mutation tools written and implemented; the facade over them is SPEC-100's and is built |
+| Version | 0.8.0 |
 | Owner | Tools |
-| Last updated | 2026-09-16 |
+| Last updated | 2026-09-23 |
 
 ## Purpose
 
@@ -256,6 +256,52 @@ answer from prior knowledge. The holder is what the facade that enforces that di
 groups apart by ([SPEC-100](SPEC-100-conversation-orchestration.md)). It holds no guard: it names no path a caller supplied, and the paths it returns
 come from the index.
 
+### `SearchIndex(query, maxResults)`
+
+The passages that answer a question, by meaning: each with its file, its chunk index, a relevance score
+and **its text** — the file's current text, verified to be the text that was embedded — best first. This
+is the tool retrieval was built for: everything in [SPEC-110](SPEC-110-rag-retrieval.md) that was
+composed and called by nothing is called by this method, in this order, and each stage says in the
+note what it did.
+
+1. **Over-fetch.** `maxResults` defaults to 5 and is cut to **20**, said in the note; below 1 throws. The
+   composed query is asked for `maxResults × 4` passages, at most **100**, because every stage below
+   drops candidates and the caller asked for a count of what survives.
+2. **Verify.** Every hit is rebuilt through `PassageBuilder` (SPEC-110) before anything else sees it.
+   Only a `Verified` passage becomes a candidate. A `Stale` one — the file changed since it was
+   indexed — and an `Unavailable` one — gone or unreadable — are **withheld**, and the note says how
+   many of each and why; the text never leaves the builder. If nothing survives, the result is empty
+   with a note that says so and points at `SearchText`.
+3. **Screen.** `RelevanceFloor.Screen` over the verified candidates: when even the best is below the
+   floor, the set is refused whole, empty, with the best score and the floor in the note — refused
+   reads differently from empty. The floor is the holder's constructor argument and the root passes
+   **`RelevanceFloor.Off`**: it is a property of the embedder and no profile's scores have been
+   measured to support one here (SPEC-110).
+4. **Cut.** The relative score-gap cutoff: a candidate scoring below **half** of this query's best
+   verified score is dropped, and the count is said. The model chooses `maxResults` and does not
+   reliably ask for few, so the count cannot bound relevance; an absolute floor cannot either, because
+   scores are the embedder's; the query's own best hit is the one scale in common. The fraction,
+   `ScoreGapFraction`, is a code constant and **unmeasured** — the constant to tune from
+   `SemanticSearchBenchmark`.
+5. **Reduce.** `IContextReduction` fits what is left under a budget of `maxResults` passages and
+   **2,000** chunk tokens (`MaxContextTokens`, a constant, as SPEC-110 defers per-call budgets): the
+   blended relevance, the MMR diversity, the best passage always kept. More candidates than fit is
+   `Truncated`, and the note says how many of how many. The score on a passage is the reducer's
+   blended relevance, not the raw cosine, for the reason SPEC-110 gives.
+
+**One answer per identical call within a turn.** `SearchMemo` is an `AsyncLocal` scope the turn's
+execution opens around every turn, unconditionally (SPEC-100); inside it an identical `(query,
+maxResults)` is answered from the first call's result — refusals and notes included — and outside it
+every call runs. A model retrying the same search after misreading the note, or asking it twice on two
+branches, otherwise costs a second embed, a second scan and a second read of every file, and could get
+a different answer if a file moved between. Nothing is cached across turns.
+
+- **Refusal passes through**, as for `FindFilesAbout`: `IndexNotReadyException` is not caught, and the
+  facade ends the turn on it.
+- **No hits is an empty result with a note** — an index holding no vectors for the active model.
+- Paths are shown as the read tools show them; the text is the passage's, single-space-joined as the
+  chunker joined it, not a verbatim slice of the file.
+
 ### `FindFilesAbout(query, maxFiles)`
 
 Which files are about a topic, by meaning: each file with the score of its best passage and how many
@@ -285,8 +331,8 @@ passages into files.
   and observing it is not a licence to answer. An empty query throws.
 - Paths are shown as the read tools show them: relative to the root, platform separator.
 
-Not applied here, deliberately: the low-confidence screen and the token-budget reducer. Both belong to
-the passage-level search tool, which returns text and has a budget to spend; this tool returns names and
+Not applied here, deliberately: the verification, the low-confidence screen, the cutoff and the reducer.
+All belong to `SearchIndex`, which returns text and has a budget to spend; this tool returns names and
 scores, and the score is there so a caller can see a weak best match for what it is.
 
 ## The mutation tools
@@ -423,8 +469,17 @@ internal static class WordBoundary
 
 internal sealed class SearchTools
 {
-	SearchTools(IRetrievalQuery query, String databasePath);
-	FilesAbout FindFilesAbout(String query, Int32 maxFiles = 10);   // IndexNotReadyException passes through
+	SearchTools(IRetrievalQuery query, String databasePath, PassageBuilder passages, IContextReduction reducer, Double relevanceFloor = RelevanceFloor.Off);
+	SemanticSearchResult SearchIndex(String query, Int32 maxResults = 5);   // IndexNotReadyException passes through
+	FilesAbout FindFilesAbout(String query, Int32 maxFiles = 10);           // likewise
+}
+
+internal sealed record SemanticPassage(String Path, Int32 ChunkIndex, Double Score, String Text);
+internal sealed record SemanticSearchResult(String Query, IReadOnlyList<SemanticPassage> Passages, Boolean Truncated, String? Note);
+
+internal static class SearchMemo
+{
+	static IDisposable BeginScope();   // opened by the turn; outside a scope every search runs
 }
 
 internal sealed record FileRelevance(String Path, Double Score, Int32 MatchingChunks);
@@ -575,6 +630,26 @@ The text search, its matcher first and the tool over it:
   scanner-extensions test; the per-line deadline check removed fails exactly the deadline test; the
   link skip removed from the walk fails exactly the two walk tests, `FindFiles`'s and the search's.
 
+The passage search, over a query answering with fixed hits and real files the hits were chunked from, so
+every verification is real:
+
+- Verified passages come back best first with file, chunk index and text; the query is over-fetched by
+  the multiplier and bounded by the cap; a passage from a file that changed is withheld and said, a
+  missing file under its own note, and every passage withheld is said; no hits is empty with a note; a
+  set whose best is below the floor is refused whole with the score and the floor, and the floor screens
+  the best *verified* match, not a withheld one; candidates under half the best are dropped and said;
+  more candidates than asked for are reduced with the flag and the count; `maxResults` past the bound is
+  cut and said; the refusal passes through; an identical call inside a scope is answered once and
+  outside it every time, and a scope does not leak into the next.
+- A host test runs a real turn through the composed runner: the coordinator calls `SearchIndex` over the
+  indexed folder and is handed verified text, two identical calls in one turn cost one retrieval and
+  the same call in the next turn another — which only the execution opening the scope around the
+  framework's loop can make true.
+- Mutation kills, each restored byte-for-byte: stale passages admitted as candidates fails the withheld
+  test and the floor-on-verified test; the floor screening the raw hits fails exactly the
+  floor-on-verified test; the cutoff made absolute fails exactly the cutoff test; the memo never storing
+  fails the memo test and the host test; the execution opening no scope fails exactly the host test.
+
 The file-level semantic search, over a query that answers with fixed hits:
 
 - Passages fold into files scored by their best passage — placed deliberately not first among the
@@ -643,6 +718,11 @@ and the reports made — never through an index that would still look right afte
 - [SPEC-130 — Persistence](SPEC-130-persistence.md)
 
 ## Changelog
+
+- **0.8.0** (2026-09-23) — the passage search, `SearchIndex`: over-fetch, verification through the passage
+  builder with stale and unavailable passages withheld and said, the low-confidence screen, the relative
+  score-gap cutoff, the reduction under a constant budget, and the per-turn memo the execution opens;
+  the holder takes the builder, the reducer and the floor. Written with its implementation.
 
 - **0.7.0** (2026-09-16) — the facade over these holders exists (SPEC-100 0.4.0): the three passages
   that said it was not built now point at it. No behaviour here changed.

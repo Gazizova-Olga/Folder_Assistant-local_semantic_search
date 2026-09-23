@@ -31,21 +31,19 @@ Embeds a query, ranks stored vectors against it, and returns the chunks that mat
 Both retrieval backends are implemented, and context assembly now exists as a separate stage
 (`IContextReduction`, default `TokenBudgetContextReducer`).
 
-**Nothing calls the reducer yet.** It is composed and resolvable, in the same position retrieval
-itself occupied before the composition root registered it: the stage a consumer will run, with no
-consumer built. A semantic-search tool is what will use it, and that belongs to the agent work. The
-passage builder that turns a hit into verified text (below) is composed the same way, for the same
-consumer.
+**Every stage has its caller: the passage search tool** (`SearchIndex`,
+[SPEC-101](SPEC-101-file-tools.md)) asks the composed query, rebuilds and verifies every hit through
+the passage builder, screens the set, applies a relative score-gap cutoff and runs the reducer, in
+that order, with the counts each stage dropped said in its note. The file-level search
+(`FindFilesAbout`) asks the query alone. Both are reached from a turn through the tool facade; no
+front end runs a turn in the running application yet, so retrieval traffic comes from the test suite.
 
 Per-call telemetry wraps the composed query and is exported at `GET /metrics` (see Observability).
-It records what searches do, so until something searches it has nothing to record — the instrument
-is in place ahead of the traffic, not measuring traffic that exists.
 
-The low-confidence screen (`RelevanceFloor`) is likewise built and uncalled, and **off by default**
-for a measured reason given below. Only the screen itself is here: the requirement it comes from
-also asked that the caller size its own result count and that the model be told to judge question
-scope before searching, and both of those live in a tool description and a system prompt — surfaces
-this repository does not have until the agent lands.
+The low-confidence screen (`RelevanceFloor`) is applied by the passage search and is **off by
+default** for a measured reason given below. The requirement it comes from also asked that the caller
+size its own result count and that the model be told to judge question scope before searching: the
+first is the tool's `maxResults`, the second belongs to a system prompt and is not written.
 
 ## Contracts
 
@@ -191,7 +189,7 @@ window rebuilt from an extractor's text verifies against a hash taken over that 
 that cannot be rebuilt yields nothing rather than a slice of a ZIP.
 
 The builder is composed in the root over the analyzed folder and the same registry the index reads
-through, and — like the reducer — called by nothing until the semantic-search tool exists.
+through, and is called by the passage search tool.
 
 ### Dimension mismatch
 

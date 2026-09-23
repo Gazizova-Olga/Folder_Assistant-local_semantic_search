@@ -10,7 +10,7 @@ namespace FolderAssistant.Tests.Agents;
 /// </summary>
 public sealed class RosterTests
 {
-	private static readonly String[] Tools = ["InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "Create", "Update", "ReplaceLines", "Delete", "FindFilesAbout"];
+	private static readonly String[] Tools = ["InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "Create", "Update", "ReplaceLines", "Delete", "SearchIndex", "FindFilesAbout"];
 
 	private static AgentEntryConfig Entry(String name, String[]? tools = null, String[]? delegates = null, ProviderOverrideConfig? provider = null)
 		=> new() { Name = name, Description = $"the {name}", Tools = [.. tools ?? []], Delegates = [.. delegates ?? []], Provider = provider };
@@ -46,7 +46,7 @@ public sealed class RosterTests
 		roster[Roster.OrchestratorName].Tools.Should().BeEmpty();
 		roster[Roster.OrchestratorName].Delegates.Should().Equal(Roster.ReaderName, Roster.MutatorName);
 		roster[Roster.OrchestratorName].SystemPrompt.Should().Contain(Roster.ReaderName).And.Contain(Roster.MutatorName).And.Contain("TOOL_FAILED:");
-		roster[Roster.ReaderName].Tools.Should().Equal("InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "FindFilesAbout");
+		roster[Roster.ReaderName].Tools.Should().Equal("InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "SearchIndex", "FindFilesAbout");
 		roster[Roster.MutatorName].Tools.Should().Equal("ReadFile", "Retrieve", "Create", "Update", "ReplaceLines", "Delete");
 		roster[Roster.ReaderName].Tools.Should().NotContain(roster[Roster.MutatorName].Tools.Except(roster[Roster.ReaderName].Tools));
 	}
