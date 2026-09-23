@@ -600,6 +600,13 @@ public sealed class HostStartupTests
 	/// The promise the default makes: an Ollama that is not there is a failed index with a message that
 	/// says what to do, never a quietly different embedder and never an index that reports building for
 	/// ever. Pinned against a port nothing listens on, so it holds on a machine that does run Ollama.
+	///
+	/// <para>
+	/// The timeout is one second, and that is the wait's margin: a refused port costs the probe its whole
+	/// timeout per attempt, because the SDK retries with backoff underneath the call, and the probe makes
+	/// three attempts a second apart. At five seconds the test took 17 s against a 20 s wait and lost on a
+	/// slow CI runner (2026-09-23); at one it is bounded at 6 s.
+	/// </para>
 	/// </summary>
 	[Fact]
 	public async Task An_Unreachable_Ollama_Fails_The_Index_Loudly_Rather_Than_Substituting_An_Embedder()
@@ -611,7 +618,7 @@ public sealed class HostStartupTests
 			folder,
 			($"{AgentConfig.SectionName}:Profile", "ollama-blob"),
 			($"{AgentConfig.SectionName}:Indexing:OllamaEndpoint", "http://127.0.0.1:9/v1"),
-			($"{AgentConfig.SectionName}:Indexing:OllamaTimeoutSeconds", "5"));
+			($"{AgentConfig.SectionName}:Indexing:OllamaTimeoutSeconds", "1"));
 
 		using HttpClient client = host.CreateClient();
 		FolderResponse? response = await client.GetFromJsonAsync<FolderResponse>("/");
