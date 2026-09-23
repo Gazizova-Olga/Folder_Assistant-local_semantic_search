@@ -1,7 +1,10 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using FluentAssertions;
 using FolderAssistant.Embedding;
 using Microsoft.Extensions.AI;
+using OpenAI;
 
 namespace FolderAssistant.Tests;
 
@@ -12,7 +15,8 @@ namespace FolderAssistant.Tests;
 /// What is worth testing here is not the transport — that is somebody else's client — but the two
 /// decisions this class makes on top of it: which side of a query/document pair gets the model's
 /// instruction prefix, and what happens when the model returns a width the composed model version does
-/// not expect.
+/// not expect. The last section is the exception: the two SDK defaults the client is built without,
+/// one held on the options and one observed through the real client against a loopback listener.
 /// </para>
 /// </summary>
 public sealed class OllamaEmbeddingVectorizerTests
@@ -228,6 +232,64 @@ public sealed class OllamaEmbeddingVectorizerTests
 
 		FluentActions.Invoking(() => new OllamaEmbeddingVectorizer(generator, Model, ModelVersionId, Dimension, TimeSpan.Zero))
 			.Should().Throw<ArgumentOutOfRangeException>("a call that may run forever is the defect the deadline exists to close");
+	}
+
+	// ── the client underneath ─────────────────────────────────────────────────
+
+	/// <summary>
+	/// The client's network timeout is the configured deadline, not the SDK's 100 s: with nothing retrying
+	/// underneath the call, the SDK's own would otherwise be the effective deadline for any configured
+	/// value above it. Held on the options, because a deadline above 100 s is not a thing to observe in a
+	/// test. The retry policy says nothing about how many retries it holds, so it is asserted by what it
+	/// does, in the next test.
+	/// </summary>
+	[Fact]
+	public void The_Clients_Network_Timeout_Is_The_Configured_Deadline()
+	{
+		OpenAIClientOptions options = OllamaEmbeddingVectorizer.ClientOptions("http://127.0.0.1:11434/v1", Deadline);
+
+		options.NetworkTimeout.Should().Be(Deadline);
+		options.Endpoint.Should().Be(new Uri("http://127.0.0.1:11434/v1"));
+	}
+
+	/// <summary>
+	/// The SDK retries a failed connection three times underneath the call, and the probe and the
+	/// dispatcher each retry above it; the three layers stacked cost a server that was not there four
+	/// connections per attempt, reported as "Retry failed after 4 tries" rather than as the refusal.
+	/// Observed through the real client against a loopback listener that accepts and drops every
+	/// connection: the call fails after exactly one.
+	/// </summary>
+	[Fact]
+	public async Task A_Failed_Connection_Is_Not_Retried_Underneath_The_Call()
+	{
+		using TcpListener listener = new(IPAddress.Loopback, 0);
+		listener.Start();
+		Int32 port = ((IPEndPoint)listener.LocalEndpoint).Port;
+		Int32 accepted = 0;
+		Task accepting = Task.Run(async () =>
+		{
+			try
+			{
+				while (true)
+				{
+					using TcpClient dropped = await listener.AcceptTcpClientAsync();
+					Interlocked.Increment(ref accepted);
+				}
+			}
+			catch (Exception ex) when (ex is ObjectDisposedException or SocketException)
+			{
+				// The listener was stopped; the test is over.
+			}
+		});
+
+		using OllamaEmbeddingVectorizer vectorizer = new($"http://127.0.0.1:{port}/v1", Model, ModelVersionId, Dimension, Deadline);
+		Func<Task> embed = async () => await vectorizer.VectorizeAsync(["text"], EmbeddingKind.Document);
+
+		(await embed.Should().ThrowAsync<Exception>()).Which.Should().NotBeOfType<TimeoutException>("a dropped connection is a failure, not a deadline");
+		listener.Stop();
+		await accepting;
+
+		accepted.Should().Be(1, "the probe and the dispatcher are the retry layers; the SDK's would stack a third underneath them");
 	}
 
 	/// <summary>Records what it was asked, and returns vectors of a width the test chooses.</summary>

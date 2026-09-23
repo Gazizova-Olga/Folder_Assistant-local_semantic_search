@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
@@ -602,10 +603,13 @@ public sealed class HostStartupTests
 	/// ever. Pinned against a port nothing listens on, so it holds on a machine that does run Ollama.
 	///
 	/// <para>
-	/// The timeout is one second, and that is the wait's margin: a refused port costs the probe its whole
-	/// timeout per attempt, because the SDK retries with backoff underneath the call, and the probe makes
-	/// three attempts a second apart. At five seconds the test took 17 s against a 20 s wait and lost on a
-	/// slow CI runner (2026-09-23); at one it is bounded at 6 s.
+	/// The deadline is left at its default of 120 s, and that is the second property: a refused port costs
+	/// the probe one connection per attempt, not its deadline, because the client retries nothing
+	/// underneath the call, so three attempts a second apart give up in a few seconds — 8 s here on
+	/// 2026-09-24, where Windows refuses a loopback connect after about two seconds. With the SDK's own
+	/// retries underneath, each attempt cost the whole deadline: at five seconds the test took 17 s against
+	/// the 20 s wait and lost on a slow CI runner (2026-09-23), and at the default it would not have ended
+	/// inside the wait at all.
 	/// </para>
 	/// </summary>
 	[Fact]
@@ -614,21 +618,23 @@ public sealed class HostStartupTests
 		using TempFolder folder = new();
 		await File.WriteAllTextAsync(folder.Combine("notes.md"), "alpha beta gamma");
 
+		Stopwatch clock = Stopwatch.StartNew();
 		using HostFixture host = new(
 			folder,
 			($"{AgentConfig.SectionName}:Profile", "ollama-blob"),
-			($"{AgentConfig.SectionName}:Indexing:OllamaEndpoint", "http://127.0.0.1:9/v1"),
-			($"{AgentConfig.SectionName}:Indexing:OllamaTimeoutSeconds", "1"));
+			($"{AgentConfig.SectionName}:Indexing:OllamaEndpoint", "http://127.0.0.1:9/v1"));
 
 		using HttpClient client = host.CreateClient();
 		FolderResponse? response = await client.GetFromJsonAsync<FolderResponse>("/");
 
 		IIndexState state = host.Services.GetRequiredService<IIndexState>();
 		await WaitFor(() => state.Status != IndexStatus.Building, "the probe to give up");
+		clock.Stop();
 
 		response!.Profile.Should().Be("ollama-blob");
 		state.Status.Should().Be(IndexStatus.Failed);
 		state.Error!.Message.Should().Contain("Ollama").And.Contain("running at the configured endpoint");
+		clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15), "a refused port costs a probe attempt one connection, not the 120 s deadline");
 	}
 
 	private sealed record FolderResponse(String Name, String AnalyzedFolder, String Profile, String? ProfileNote);

@@ -188,7 +188,11 @@ synonymy within it (rank `k` well below corpus rank; reduction scaled `1/√λ`,
 cancels `Σ` out — `SPEC-161`). The **Ollama** one (`SPEC-162`) is a real pretrained model served
 locally, and is the only one that can retrieve a passage sharing none of the query's words. It is
 also the only one that opens a socket, which is why offline-by-construction is a property of
-*which profiles exist*, not of an operator's choice of endpoint.
+*which profiles exist*, not of an operator's choice of endpoint. Its client retries nothing underneath
+a call and carries the configured deadline as its own network timeout: the startup probe and the
+outbox dispatcher are the retry layers, and a server that is not there costs a probe attempt one
+connection, not four and the whole deadline — with the SDK's retries underneath, a refused port cost
+8 s per attempt and a 5 s deadline read as 17 s.
 
 ### Indexing — live
 

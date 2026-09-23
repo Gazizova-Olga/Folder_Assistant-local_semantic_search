@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — core implemented and live-verified; the default profile |
-| Version | 0.8.0 |
+| Version | 0.9.0 |
 | Owner | Embedding |
-| Last updated | 2026-09-16 |
+| Last updated | 2026-09-24 |
 
 ## Purpose
 
@@ -88,6 +88,19 @@ retried like a refusal — a model paging in on its first call is exactly the tr
 exist for — and a probe that hits it three times fails the index, which is retried on its own
 schedule.
 
+**One deadline, and nothing retrying underneath it.** The client library carries two defaults of its
+own that would sit under the rule above: a network timeout of 100 seconds whatever the host
+configures, and a retry policy that tries a failed connection four times with backoff. Both are
+overridden, and they go together. The retry policy is off, because the layers above this call already
+retry — the probe three times, the outbox dispatcher with backoff to its attempt limit — and a third
+underneath them multiplied the cost of a server that is not there: measured on 2026-09-24 on this
+tree, a refused port cost one probe attempt four connections and 8 s, and the failure was reported as
+"Retry failed after 4 tries" rather than as the refusal; a dropped connection was tried four times
+too. With nothing retrying under the call, the SDK's own timeout would be the effective deadline for
+any configured value above 100 seconds, so it is set to the configured one and one number bounds the
+call. The chat client keeps the SDK's retries ([SPEC-140](SPEC-140-provider-adapters.md)): nothing
+above a turn retries it.
+
 ### Composition and configuration
 
 Two profiles, `ollama-blob` and `ollama-vec`, pairing the embedder with each vector backend. Both
@@ -149,6 +162,11 @@ implementation able to reach a *remote* service must not be a profile in this as
   model named; the caller's cancellation ends it as a cancellation; the probe retries it three times;
   a zero deadline is refused — and end to end through the dispatcher, where a hung embed retires its
   operation as failed within the deadline with `TimeoutException` recorded against it.
+- **The client's own defaults overridden** (2026-09-24). Its network timeout is the configured
+  deadline and its retry policy is off. The timeout is held on the options; the retries are observed
+  through the real client against a loopback listener that drops every connection — the call fails
+  after exactly one, where it had cost four — and through the host, where a refused Ollama fails the
+  index in a few seconds at the default deadline, where each probe attempt had cost the whole of it.
 
 Nothing is pending.
 

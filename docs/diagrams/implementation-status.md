@@ -144,6 +144,7 @@ composition without a caller.
 |---|---|---|
 | §5.1 **2 + 5** — one writer of `file_manifest`; the pass records through the front end's comparison, embeds what lacks vectors, marks delivered, deletes nothing | `store`, `pass`, `bridge` | **Landed** 2026-09-14 (`bf9fc4f`) |
 | §5.1 **3** — an embed call has a deadline, surfaced as a timeout rather than a cancellation; telemetry tells the caller's cancellation from a deadline | `ollama`, `etel`, `rtel` | **Landed** 2026-09-14 |
+| §10 — the embedding client retries nothing underneath a call and carries the configured deadline as its own network timeout: the probe and the dispatcher are the retry layers, and a server that is not there costs a probe attempt one connection rather than four and the whole deadline; SPEC-162 0.9.0 | `ollama` | **Landed** 2026-09-24 |
 | §5.1 **4** — a corpus-fitted profile with no fit fails a delivery rather than marking it synced | `bridge` | **Landed** 2026-09-14 |
 | §5.1 **6** — the bridge's gate wraps the write, not the embed | `bridge` | **Landed** 2026-09-14 |
 | §10 — a removal queued before the file came back is retired without ending the row it has since taken again | `indexer` | **Landed** 2026-09-15 |

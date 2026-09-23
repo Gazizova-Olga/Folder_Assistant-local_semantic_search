@@ -191,6 +191,12 @@ internal record IndexingConfig
 	/// on a CPU here, a window of 64 takes about 25 s, so 120 s is generous by a factor of five and still
 	/// ends a hung call inside one delivery's lifetime. Raise it with the window, or on a slower machine.
 	/// </para>
+	///
+	/// <para>
+	/// It is also the client's own network timeout, and nothing retries underneath the call: the startup
+	/// probe and the outbox dispatcher retry above it (<c>SPEC-162</c>), so a server that is not there
+	/// costs one connection per attempt rather than this whole deadline.
+	/// </para>
 	/// </summary>
 	public Int32 OllamaTimeoutSeconds { get; init; } = 120;
 

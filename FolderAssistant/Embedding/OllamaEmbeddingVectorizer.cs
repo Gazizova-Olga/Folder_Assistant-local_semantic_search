@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
 using OpenAI;
 
@@ -24,7 +25,9 @@ namespace FolderAssistant.Embedding;
 /// at the local endpoint. That is a dependency this project did not previously have, and it is taken here
 /// rather than pretended away: nothing else in the tree speaks to a model server yet. No request leaves
 /// the machine — the endpoint is localhost — and the offline-by-construction guarantee the other profiles
-/// carry is what this one trades for real semantics.
+/// carry is what this one trades for real semantics. The client retries nothing underneath a call and
+/// carries the configured deadline as its own network timeout (<see cref="ClientOptions"/>): the startup
+/// probe and the outbox dispatcher are the retry layers above it.
 /// </para>
 /// </summary>
 internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthCheck, IDisposable
@@ -63,7 +66,7 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 		String modelVersionId,
 		Int32 dimension,
 		TimeSpan timeout)
-		: this(BuildGenerator(endpoint, model), model, modelVersionId, dimension, timeout)
+		: this(BuildGenerator(endpoint, model, timeout), model, modelVersionId, dimension, timeout)
 	{
 	}
 
@@ -204,13 +207,29 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 
 	public void Dispose() => (this._generator as IDisposable)?.Dispose();
 
-	private static IEmbeddingGenerator<String, Embedding<Single>> BuildGenerator(String endpoint, String model)
+	/// <summary>
+	/// The pipeline options the client is built with. Two of the SDK's defaults are overridden, and they go
+	/// together. Its retry policy is off: the startup probe and the outbox dispatcher each retry above this
+	/// call already, and the SDK's own retries underneath them cost a server that is not there four
+	/// connections per attempt instead of one, reported as "Retry failed after 4 tries" rather than as the
+	/// refusal. With nothing retrying under the call, the SDK's own network timeout — 100 s by default,
+	/// whatever the host configures — would be the effective deadline for any configured value above it,
+	/// so it is set to the configured one and one number bounds the call. Separate and internal so a test
+	/// can hold the values rather than infer them from a hang.
+	/// </summary>
+	internal static OpenAIClientOptions ClientOptions(String endpoint, TimeSpan timeout)
+		=> new()
+		{
+			Endpoint = new Uri(endpoint),
+			NetworkTimeout = timeout,
+			RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
+		};
+
+	private static IEmbeddingGenerator<String, Embedding<Single>> BuildGenerator(String endpoint, String model, TimeSpan timeout)
 	{
 		// Ollama authenticates nothing, but the OpenAI client requires a non-empty credential, so a
 		// placeholder stands in. It is never sent anywhere that would check it.
-		OpenAIClientOptions options = new() { Endpoint = new Uri(endpoint) };
-
-		return new OpenAIClient(new ApiKeyCredential("ollama-local-no-key"), options)
+		return new OpenAIClient(new ApiKeyCredential("ollama-local-no-key"), ClientOptions(endpoint, timeout))
 			.GetEmbeddingClient(model)
 			.AsIEmbeddingGenerator();
 	}
