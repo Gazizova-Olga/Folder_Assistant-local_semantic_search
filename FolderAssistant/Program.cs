@@ -98,9 +98,9 @@ internal sealed class Program
 		// Per-call retrieval telemetry, the same seam shape the embedding sink above uses.
 		builder.Services.AddSingleton<IRetrievalTelemetry, LoggerRetrievalTelemetry>();
 
-		// The retrieval query both search tools ask. Wrapped, so whichever backend the profile chose is timed by the same instrument. Measuring
-		// inside each backend instead would make the two sets of numbers incomparable, which is the
-		// one thing they exist to be.
+		// The retrieval query both search tools ask. Wrapped, so whichever backend the profile chose is
+		// timed by the same instrument. Measuring inside each backend instead would make the two sets of
+		// numbers incomparable, which is the one thing they exist to be.
 		builder.Services.AddSingleton(sp => RetrievalTelemetryQuery.Wrap(
 			sp.GetRequiredService<ModuleSet>().CreateRetrievalQuery(
 				sp.GetRequiredService<IVectorizer>(),
@@ -223,14 +223,16 @@ internal sealed class Program
 			return provider => ProviderClientFactory.Create(provider, config.ConnectionTimeout);
 		});
 
-		// The agents themselves, one handle per roster entry over its own client. Nothing here connects,
-		// and a configuration that cannot name a provider at all fails when the registry is first asked
-		// for, with a sentence saying what is missing.
+		// The agents themselves, one handle per roster entry over its own client, each holding the running
+		// front end's batch for the whole of every run so a multi-step edit costs the index one pass. Nothing
+		// here connects, and a configuration that cannot name a provider at all fails when the registry is
+		// first asked for, with a sentence saying what is missing.
 		builder.Services.AddSingleton(sp => new AgentRegistry(
 			sp.GetRequiredService<Roster>(),
 			sp.GetRequiredService<AgentToolCatalog>(),
 			sp.GetRequiredService<Func<ProviderConfig, IChatClient>>(),
-			sp.GetService<ILoggerFactory>()));
+			sp.GetService<ILoggerFactory>(),
+			sp.GetRequiredService<IIndexChangeNotifier>()));
 
 		builder.Services.AddSingleton(sp => new StaticWorkflowRoute(
 			sp.GetRequiredService<Roster>(),

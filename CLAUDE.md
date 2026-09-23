@@ -230,8 +230,10 @@ Properties worth stating because they are easy to "simplify" away:
   lets whoever knows where its work ends say so. Holds nest and the last release publishes;
   a hold nobody releases stops suppressing after two minutes, timed from the first — the same
   rule as a reconcile loop surviving a bad pass, since an index that stops converging for the
-  life of the process is the one outcome none of this may produce. Its caller is the agent-run
-  boundary, which does not exist yet.
+  life of the process is the one outcome none of this may produce. Its caller is the agent run:
+  `BatchHoldingAgent` wraps every agent the registry builds and holds from before a run to after it
+  returns, throws, or its enumeration is disposed — **never at a transport**, because an SSE
+  connection outlives many turns. A delegate's run nests inside its caller's.
 - **Whatever writes a file's record writes the columns it owns, not the row it read.** The
   library states conclusions and names operations by id; it never hands back a record it
   fetched. That rule binds the store harder than it binds the library: a pass classifying from

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution and the runner written and implemented; durable session persistence and every front end not |
-| Version | 0.6.2 |
+| Version | 0.6.3 |
 | Owner | Agents |
 | Last updated | 2026-09-23 |
 
@@ -209,6 +209,17 @@ is the agent framework's chat-client agent, and four things about it are decided
   client, and a client is a disposable pipeline something has to end. Only synchronously disposable
   clients exist, so there is no async half. It also carries the tool list the agent was built with, so
   what an agent may call can be read without running a turn.
+- **Every run holds the index's batch, at the run and nowhere else.** Given the running front end's
+  `IIndexChangeNotifier`, the factory wraps the agent in `BatchHoldingAgent`, which opens
+  `BeginBatch` ([SPEC-121](SPEC-121-file-indexing-front-end.md)) before a run and releases it when the
+  run ends — a whole run when it returns or throws, a streamed run when its enumeration is disposed,
+  which is when the caller stopped reading. An agent that writes a file, reads it back and writes it
+  again otherwise costs the index a pass per write, each in its own quiet window. **The boundary is
+  the agent run, never a transport**: an SSE connection outlives many turns, and a hold that lasted
+  for one would stop the index following the folder for as long as a tab stayed open. The registry
+  wraps every agent, so a delegate's run holds inside its caller's — holds nest, and the last release
+  publishes. A leaked enumerator costs a bounded delay, because a hold expires on its own. Built
+  without a notifier — a test's bare handle — the agent runs bare.
 
 The composition root registers the catalog, the roster, the registry and the route as factories, and
 the function that builds a chat client for a provider as a service of its own — the one seam a host
@@ -322,7 +333,7 @@ internal sealed class AgentToolCatalog
 
 internal sealed class AgentRegistry : IDisposable
 {
-	AgentRegistry(Roster roster, AgentToolCatalog catalog, Func<ProviderConfig, IChatClient> clients, ILoggerFactory? loggerFactory = null);
+	AgentRegistry(Roster roster, AgentToolCatalog catalog, Func<ProviderConfig, IChatClient> clients, ILoggerFactory? loggerFactory = null, IIndexChangeNotifier? indexer = null);
 	IReadOnlyList<AgentHandle> Handles { get; }
 	AgentHandle Get(String name);
 	static String DelegationToolName(String target);
@@ -389,9 +400,14 @@ internal static class ToolSet
 internal static class AgentFactory
 {
 	static AgentHandle Create(AgentConfig config, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null);
-	static AgentHandle Create(String name, String description, String? systemPrompt, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null);
+	static AgentHandle Create(String name, String description, String? systemPrompt, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null, IIndexChangeNotifier? indexer = null);
 	static IChatClient WithFunctionInvocation(IChatClient client, ILoggerFactory? loggerFactory);
 	static String Instructions(String? systemPrompt, String name, String description);
+}
+
+internal sealed class BatchHoldingAgent : DelegatingAIAgent
+{
+	BatchHoldingAgent(AIAgent inner, IIndexChangeNotifier indexer);   // one hold per run, released when the run or its enumeration ends
 }
 
 internal sealed class AgentHandle : IDisposable
@@ -442,6 +458,14 @@ internal sealed class AgentHandle : IDisposable
   the agent's own and every other field the root's; the role is never inherited.
 - **The catalog** — the named tools in the order named, none for none; an unknown name and a repeated
   tool refused.
+- **The batch hold, through a real agent over a scripted client** whose tool reads the hold while it runs — one
+  hold open from before the first tool call to after the answer, and none after; a run that fails releases
+  on its way out; a streamed run holds from the first update until the enumeration is disposed; a
+  delegate's run holds inside its caller's, two deep, both released; without an indexer the agent runs
+  bare. **Host** — a turn through the runner that creates two files reports both while one hold is open,
+  and the hold is released when the turn ends. Mutation kills: the streamed hold released at the first
+  update fails exactly the streamed test; the hold opened after the run fails four; the root handing the
+  registry a notifier that is not the front end's fails exactly the host test.
 - **The registry and the route** — one handle per entry holding its allowlist and one delegation tool
   per target, named and described by the target, under the delegation group; a delegation through a
   real agent runs the target on the request alone with the target's own prompt and tools and returns
@@ -507,6 +531,9 @@ Not covered: a front end, durable session persistence, and two concurrent turns 
 
 ## Changelog
 
+- **0.6.3** (2026-09-23) — every agent run holds the index's batch through `BatchHoldingAgent`, applied by
+  the factory when given the front end and by the registry to every agent; released when the run or its
+  enumeration ends; never at a transport.
 - **0.6.2** (2026-09-23) — the execution opens the passage search's memo scope around every turn; the
   default reader holds `SearchIndex`.
 - **0.6.1** (2026-09-23) — the streamed failure note carries SPEC-140's described sentence for a

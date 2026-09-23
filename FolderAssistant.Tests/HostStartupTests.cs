@@ -9,6 +9,7 @@ using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
 using FolderAssistant.Tests.Agents;
+using FolderAssistant.Tests.Tools;
 using FolderAssistant.Tools;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -402,6 +403,43 @@ public sealed class HostStartupTests
 		toolResult.Should().Contain("alpha beta gamma delta epsilon zeta").And.Contain("notes.md");
 		afterFirstTurn.Should().Be(1);
 		retrievals.Calls.Should().HaveCount(2);
+	}
+
+	/// <summary>
+	/// The batch hold at the agent-run boundary, through the real root: a turn that writes two files reports
+	/// both to the front end while one hold is open, and the hold is released when the turn ends — so the
+	/// index sees the edit as one batch and not one pass per step. The notifier is replaced to observe it;
+	/// everything else is the application's.
+	/// </summary>
+	[Fact]
+	public async Task A_Turn_Holds_The_Index_Batch_Around_Every_File_It_Changes()
+	{
+		using TempFolder folder = new();
+		RecordingNotifier indexer = new();
+		ScriptedChatClient model = new(
+			ScriptedChatClient.Call("Create", new() { ["path"] = "a.md", ["content"] = "alpha" }),
+			ScriptedChatClient.Call("Create", new() { ["path"] = "b.md", ["content"] = "beta" }),
+			ScriptedChatClient.Text("Both written."));
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"))
+		{
+			TestServices = services =>
+			{
+				services.AddSingleton<Func<ProviderConfig, IChatClient>>(_ => _ => model);
+				services.AddSingleton<IIndexChangeNotifier>(indexer);
+			},
+		};
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+		WorkflowRunner runner = host.Services.GetRequiredService<WorkflowRunner>();
+
+		ChatResponse response = await runner.GetResponseAsync([new ChatMessage(ChatRole.User, "write two notes")]);
+
+		response.Text.Should().Be("Both written.");
+		indexer.Reports.Select(report => Path.GetFileName(report.Path)).Should().Equal("a.md", "b.md");
+		indexer.HoldsAtReport.Should().Equal(1, 1);
+		indexer.HoldsBegun.Should().Be(1);
+		indexer.OpenHolds.Should().Be(0);
 	}
 
 	private sealed class RecordingRetrievalTelemetry : IRetrievalTelemetry

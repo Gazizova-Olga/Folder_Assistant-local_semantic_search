@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.20.0 |
+| Version | 0.20.1 |
 | Owner | Indexing |
-| Last updated | 2026-09-16 |
+| Last updated | 2026-09-23 |
 
 ## Purpose
 
@@ -171,7 +171,9 @@ it delays every ordinary external edit by the same amount to fix a case it canno
 
 `BeginBatch` puts the boundary where the knowledge is. It holds publishing until the returned handle
 is disposed; what accumulates in the meantime keeps coalescing, so a file written five times leaves
-one entry and is published once.
+one entry and is published once. The application holds at the agent-run boundary
+([SPEC-100](SPEC-100-conversation-orchestration.md)): every agent run, a delegate's nested inside its
+caller's, is one batch.
 
 - **A hold covers everything pending, not only what was reported through the seam.** A caller's own
   writes reach the debouncer through the watcher as well, so a hold that suppressed one source and

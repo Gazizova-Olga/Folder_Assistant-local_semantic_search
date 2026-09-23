@@ -107,7 +107,8 @@ colour-coded.
   interface a front end will talk to. Sessions are held in memory until the conversation database
   exists. Each turn is timed and classified inside the execution, because a streamed turn that fails
   says so as text and ends cleanly, which anything watching from outside would count as a success.
-  No front end exists, so nothing calls it yet.
+  Every agent run holds the index's batch from start to end, so a multi-step edit the agent makes
+  costs the index one pass and not one per write. No front end exists, so nothing calls it yet.
 
 **Not built**
 
@@ -188,7 +189,7 @@ flowchart TB
         roster["Roster · catalog · registry · routing<br/>default roster in code; cycles refused at startup"]
         runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]
         searchidx["SearchIndex tool<br/>over-fetch, verify, screen, cut, reduce; memoized per turn"]
-        batching["Index batching across a turn<br/>BeginBatch at the agent-run boundary"]
+        batching["BatchHoldingAgent<br/>one hold per agent run, nested for delegates; never at a transport"]
         console["Console loop<br/>beside the host; stdin EOF does not stop it"]
     end
 
@@ -222,7 +223,7 @@ flowchart TB
     guard --> readt & textsearch & mutate & about
     readt & textsearch & about & searchidx & mutate --> facade --> roster --> runner
     provider --> roster
-    runner --> batching -.-> hold
+    runner --> batching --> hold
     runner --> console & turns & responses
     turns --> convdb
     history & status --> convdb
@@ -235,8 +236,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner built
-    class convdb,batching,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching built
+    class convdb,console,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

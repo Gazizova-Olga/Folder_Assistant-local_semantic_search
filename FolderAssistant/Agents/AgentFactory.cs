@@ -1,3 +1,4 @@
+using FolderAssistant.Indexing.Watching;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
@@ -47,8 +48,11 @@ internal static class AgentFactory
 			loggerFactory);
 	}
 
-	/// <summary>The same, for a role the roster defines rather than the root configuration.</summary>
-	public static AgentHandle Create(String name, String description, String? systemPrompt, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null)
+	/// <summary>
+	/// The same, for a role the roster defines rather than the root configuration. With <paramref name="indexer"/>,
+	/// the agent holds the index's batch for every run (<see cref="BatchHoldingAgent"/>); without one it runs bare.
+	/// </summary>
+	public static AgentHandle Create(String name, String description, String? systemPrompt, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null, IIndexChangeNotifier? indexer = null)
 	{
 		ArgumentException.ThrowIfNullOrWhiteSpace(name);
 		ArgumentException.ThrowIfNullOrWhiteSpace(description);
@@ -76,8 +80,13 @@ internal static class AgentFactory
 		};
 
 		IChatClient invoking = WithFunctionInvocation(client, loggerFactory);
+		AIAgent agent = new ChatClientAgent(invoking, options, loggerFactory);
+		if (indexer is not null)
+		{
+			agent = new BatchHoldingAgent(agent, indexer);
+		}
 
-		return new AgentHandle(name, new ChatClientAgent(invoking, options, loggerFactory), invoking, tools);
+		return new AgentHandle(name, agent, invoking, tools);
 	}
 
 	/// <summary>

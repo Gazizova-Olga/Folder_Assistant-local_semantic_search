@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.RegularExpressions;
+using FolderAssistant.Indexing.Watching;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -34,7 +35,8 @@ internal sealed partial class AgentRegistry : IDisposable
 	/// <param name="catalog">Every tool the application can grant.</param>
 	/// <param name="clients">Builds a chat client for an agent's effective provider.</param>
 	/// <param name="loggerFactory">Optional; the delegation facades and the agents log through it.</param>
-	public AgentRegistry(Roster roster, AgentToolCatalog catalog, Func<ProviderConfig, IChatClient> clients, ILoggerFactory? loggerFactory = null)
+	/// <param name="indexer">Optional; with it every agent holds the index's batch for the whole of each run.</param>
+	public AgentRegistry(Roster roster, AgentToolCatalog catalog, Func<ProviderConfig, IChatClient> clients, ILoggerFactory? loggerFactory = null, IIndexChangeNotifier? indexer = null)
 	{
 		ArgumentNullException.ThrowIfNull(roster);
 		ArgumentNullException.ThrowIfNull(catalog);
@@ -57,7 +59,8 @@ internal sealed partial class AgentRegistry : IDisposable
 					definition.SystemPrompt,
 					clients(definition.Provider),
 					tools,
-					loggerFactory);
+					loggerFactory,
+					indexer);
 
 				this._handles.Add(definition.Name, handle);
 				this._inOrder.Add(handle);
