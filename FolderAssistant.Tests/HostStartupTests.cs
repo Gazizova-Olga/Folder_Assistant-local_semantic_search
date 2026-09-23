@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
@@ -9,6 +10,7 @@ using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
+using FolderAssistant.Surfaces;
 using FolderAssistant.Tests.Agents;
 using FolderAssistant.Tests.Tools;
 using FolderAssistant.Tools;
@@ -637,7 +639,147 @@ public sealed class HostStartupTests
 		clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15), "a refused port costs a probe attempt one connection, not the 120 s deadline");
 	}
 
+	/// <summary>
+	/// The first front end, through the real host: a question typed at the console reaches the composed
+	/// runner and the model's answer is written back, and <c>exit</c> stops the host — the console and the
+	/// web host are one process, and the person leaving ends it.
+	/// </summary>
+	[Fact]
+	public async Task A_Question_Typed_At_The_Console_Is_Answered_And_Exit_Stops_The_Host()
+	{
+		using TempFolder folder = new();
+		ScriptedChatClient model = new(ScriptedChatClient.Text("Three words."));
+		StringWriter console = new();
+		using TypedLines keyboard = new();
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"))
+		{
+			TestServices = services =>
+			{
+				services.AddSingleton<Func<ProviderConfig, IChatClient>>(_ => _ => model);
+				services.AddSingleton(new ConsoleStreams(keyboard, console, InputRedirected: false));
+			},
+		};
+
+		using HttpClient client = host.CreateClient();
+		IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+
+		keyboard.Type("what is in notes.md?");
+		await WaitFor(() => console.ToString().Contains("Three words.", StringComparison.Ordinal), "the answer to be written");
+		(await client.GetAsync("/")).StatusCode.Should().Be(HttpStatusCode.OK, "the host serves while the console is in use");
+		keyboard.Type("exit");
+		await WaitFor(() => lifetime.ApplicationStopping.IsCancellationRequested, "exit to stop the host");
+
+		model.Calls.Should().ContainSingle().Which.Messages.Should().Contain(message => message.Role == ChatRole.User && message.Text == "what is in notes.md?");
+		console.ToString().Should().Contain(ConsoleChatLoop.Banner(Path.GetFullPath(folder.Path)));
+	}
+
+	/// <summary>
+	/// The keyless host boots and serves its index, and the refusal of a configuration naming no provider
+	/// reaches the person at the prompt, on their first question, naming the setting — not the host at
+	/// boot, which the console taking the runner at construction would have caused. The host is still up
+	/// to answer the second line, and stops on it.
+	/// </summary>
+	[Fact]
+	public async Task A_Question_With_No_Provider_Configured_Is_Answered_With_The_Missing_Setting_And_The_Host_Serves_On()
+	{
+		using TempFolder folder = new();
+		StringWriter console = new();
+		using TypedLines keyboard = new();
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"))
+		{
+			TestServices = services =>
+				services.AddSingleton(new ConsoleStreams(keyboard, console, InputRedirected: false)),
+		};
+
+		using HttpClient client = host.CreateClient();
+		IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+
+		keyboard.Type("what is here?");
+		await WaitFor(() => console.ToString().Contains(MicrosoftAgentExecution.FailurePrefix, StringComparison.Ordinal), "the refusal to be written");
+		(await client.GetAsync("/")).StatusCode.Should().Be(HttpStatusCode.OK, "a keyless host serves its index");
+		keyboard.Type("exit");
+		await WaitFor(() => lifetime.ApplicationStopping.IsCancellationRequested, "exit to stop the host");
+
+		console.ToString().Should().Contain(MicrosoftAgentExecution.FailurePrefix + "Provider:ApiKey is required");
+	}
+
+	/// <summary>
+	/// A headless run must not stop the host: over a redirected standard input the loop is not started,
+	/// so the <c>exit</c> waiting in that input is never read and the host serves on. The wait is a window
+	/// in which a loop that ignored the flag would have read the line and stopped the host within
+	/// milliseconds, as the test above shows it does.
+	/// </summary>
+	[Fact]
+	public async Task A_Redirected_Standard_Input_Does_Not_Start_The_Console_And_The_Host_Serves_On()
+	{
+		using TempFolder folder = new();
+		StringWriter console = new();
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"))
+		{
+			TestServices = services =>
+				services.AddSingleton(new ConsoleStreams(new StringReader("exit\n"), console, InputRedirected: true)),
+		};
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+		await Task.Delay(500);
+
+		IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+		lifetime.ApplicationStopping.IsCancellationRequested.Should().BeFalse();
+		console.ToString().Should().BeEmpty("the loop was not started, so not even the banner was written");
+		(await client.GetAsync("/")).StatusCode.Should().Be(HttpStatusCode.OK);
+	}
+
+	/// <summary>
+	/// The other half of the same rule: a standard input that ends — a closed pipe, Ctrl+Z — ends the loop
+	/// and nothing else. The banner proves the loop ran; the host still answers afterwards.
+	/// </summary>
+	[Fact]
+	public async Task A_Closed_Standard_Input_Ends_The_Console_And_The_Host_Serves_On()
+	{
+		using TempFolder folder = new();
+		StringWriter console = new();
+		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"))
+		{
+			TestServices = services =>
+				services.AddSingleton(new ConsoleStreams(new StringReader(""), console, InputRedirected: false)),
+		};
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+		await WaitFor(() => console.ToString().Contains(ConsoleChatLoop.Prompt, StringComparison.Ordinal), "the loop to run to the end of its input");
+		await Task.Delay(200);
+
+		IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+		lifetime.ApplicationStopping.IsCancellationRequested.Should().BeFalse();
+		(await client.GetAsync("/")).StatusCode.Should().Be(HttpStatusCode.OK);
+	}
+
 	private sealed record FolderResponse(String Name, String AnalyzedFolder, String Profile, String? ProfileNote);
+
+	/// <summary>
+	/// A keyboard for the console under test: each read waits for the test to type the next line, so the
+	/// test decides what the host has done before the next line arrives — a scripted string would hand the
+	/// loop <c>exit</c> before the test had checked anything.
+	/// </summary>
+	private sealed class TypedLines : TextReader
+	{
+		private readonly BlockingCollection<String?> _lines = [];
+
+		public void Type(String line) => this._lines.Add(line);
+
+		public override String? ReadLine() => this._lines.Take();
+
+		protected override void Dispose(Boolean disposing)
+		{
+			if (disposing)
+			{
+				this._lines.Dispose();
+			}
+
+			base.Dispose(disposing);
+		}
+	}
 
 	/// <summary>
 	/// A host pointed at a temporary folder, with settings injected the way a deployment would add
@@ -675,6 +817,11 @@ public sealed class HostStartupTests
 
 				configuration.AddInMemoryCollection(values);
 			});
+
+			// No test reads the test process's own standard input: the console is redirected unless a test
+			// types at it through its own streams, registered after these so that they win.
+			builder.ConfigureTestServices(services =>
+				services.AddSingleton(new ConsoleStreams(TextReader.Null, TextWriter.Null, InputRedirected: true)));
 
 			if (this.TestServices is not null)
 			{

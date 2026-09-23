@@ -1,13 +1,14 @@
 # Implementation status
 
 The whole structure the plan converges on, every block coloured by what is true of it now — as of
-2026-09-23. Updated with every commit that moves a block; at the end, every block is green.
+2026-09-24. Updated with every commit that moves a block; at the end, every block is green.
 
 **Five states, not two.** *Built but unreachable* is the category a diagram with only *done* and
-*not done* hides: retrieval is implemented twice over, tested, composed — and it still never runs.
-*Live with a defect queued* is the other one worth its own colour: a block that runs in the
-application and has a numbered item against it in the plan's §5.1, so the green it will earn is
-not the green it has.
+*not done* hides: for most of Phase B, retrieval was implemented twice over, tested, composed — and
+never ran. It emptied on 2026-09-24, when the console gave every built block its caller, and it is
+kept because the next block built ahead of its caller lands in it. *Live with a defect queued* is
+the other one worth its own colour: a block that runs in the application and has a numbered item
+against it in the plan's §5.1, so the green it will earn is not the green it has.
 
 ```mermaid
 flowchart TB
@@ -74,7 +75,7 @@ flowchart TB
         runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]
         searchidx["SearchIndex tool<br/>over-fetch, verify, screen, cut, reduce; memoized per turn"]
         batching["BatchHoldingAgent<br/>one hold per agent run, nested for delegates; never at a transport"]
-        console["Console loop<br/>beside the host; stdin EOF does not stop it"]
+        console["Console loop<br/>beside the host; exit stops both; redirected or closed stdin does not"]
     end
 
     subgraph surface["Conversation and HTTP — Phase C, SPEC-170 to write"]
@@ -120,8 +121,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching built
-    class convdb,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
+    class convdb,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -131,7 +132,7 @@ flowchart TB
 |---|---|---|
 | green | **Live** | Constructed by the composition root and reached when the application runs. |
 | amber | **Live, defect queued** | Runs, and has a numbered item against it in the plan's §5.1 that is not yet landed. |
-| orange | **Built but unreachable** | Implemented and covered by tests; no code path in a running process reaches it. |
+| orange | **Built but unreachable** | Implemented and covered by tests; no code path in a running process reaches it. Empty since 2026-09-24. |
 | grey | **Planned** | No implementation. Its phase and spec are named in the block's subgraph. |
 | dashed | **Deferred** | Consciously out of scope until the first push is green; listed so the omission is visible. |
 
@@ -176,7 +177,7 @@ composition without a caller.
 | **B5** — readable provider errors: one describer turning a provider's failure into a sentence naming the key to look at or the time to try again — the credentials, the deployment, the endpoint, the timeout; `Retry-After` as an HTTP date whichever form it came in; the inner chain walked; null for what is not the provider's; the turn's streamed failure note uses it; SPEC-140 0.3.0, SPEC-100 0.6.1 | `provider` | **Landed** 2026-09-23 |
 | **B6** — `SearchIndex`, the passage search: over-fetch by a multiplier to a cap, every hit rebuilt and verified through the passage builder with stale and unavailable passages withheld and said, the low-confidence screen on the best verified match (off by default), the relative score-gap cutoff against the query's own best, the reducer under a constant budget, every stage's count in the note; memoized per `(query, maxResults)` for one turn through an `AsyncLocal` scope the execution opens unconditionally; the default reader holds it; SPEC-101 0.8.0, SPEC-100 0.6.2, SPEC-110 status | `searchidx` | **Landed** 2026-09-23 |
 | **B7** — the batch hold at the agent-run boundary: `BatchHoldingAgent` over every agent the registry builds, `BeginBatch` opened before a run and released when it returns, throws, or its enumeration is disposed; a delegate's run nested in its caller's; never at a transport; SPEC-121's waiting caller; SPEC-100 0.6.3, SPEC-121 0.20.1 | `batching` | **Landed** 2026-09-23 |
-| **B8** — console loop and host | `console` | Queued |
+| **B8** — the console, the first front end: a hosted service beside the web host reading standard input a line at a time, each line one turn through the runner, streamed back; one conversation per process; `exit` stops the host with it; a redirected standard input does not start the loop and a closed one does not stop the host; the runner resolved on the first question so a keyless host boots and says the missing setting at the prompt; the streams registered as the seam a host test types through. **Every block built ahead of its caller in Phase A and B is live with it.** SPEC-100 0.7.0 | `console`, and every orange block | **Landed** 2026-09-24 |
 
 ## The gap, stated plainly
 
@@ -185,13 +186,13 @@ keeping the index in step with the folder — every changed file settled, record
 chunked, embedded and stored, with a periodic comparison healing whatever the watcher missed.
 `file_manifest` has one writer of what a row says, and a chunk row's foreign key is what holds it.
 
-`IRetrievalQuery` **is** registered in the composition root — the active profile resolves one of two
-implementations — and the context-assembly stage sits beside it in the same position: built, tested,
-composed, and with nothing calling it. What is still missing is a caller: nothing on the request path
-asks either of them anything, so every vector the pipeline writes is one the running application
-never reads.
+Since 2026-09-24 the question side is live too, end to end: the console reads a question, the runner
+runs the turn through the roster's coordinator, the agent calls the tools through their facades, and
+the passage search runs retrieval, the passage builder, the screen and the reducer. Every vector the
+pipeline writes is one a question can read, and the orange colour that held most of Phase B is empty.
 
-That narrows the gap to one edge, and the grey blocks are that edge in order: the tools, the agent
-that calls them, and the surface the agent is reached through. Until the first of those lands, both
-vector backends, the whole indexing subsystem and all the measured performance work are
-infrastructure with no consumer.
+What remains is grey, and it is Phase C: the HTTP surface and DevUI, the conversation database that
+lets a conversation outlive the process, the history and status endpoints, and the provenance framing
+on file content reaching a model that holds mutation tools. Beside them stand two measurements the
+plan names before any default moves — the roster's cost against the single agent, and the score-gap
+fraction from the benchmark — and the tuning they decide.

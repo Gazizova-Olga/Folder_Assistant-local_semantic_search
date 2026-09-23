@@ -8,6 +8,7 @@ using FolderAssistant.Indexing.Scanning;
 using FolderAssistant.Indexing.Watching;
 using FolderAssistant.Persistence;
 using FolderAssistant.Retrieval;
+using FolderAssistant.Surfaces;
 using FolderAssistant.Tools;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -240,13 +241,25 @@ internal sealed class Program
 
 		// The turn: the coordinator's session loaded, the agent run, the session saved, and the turn's
 		// telemetry recorded inside the execution. Sessions live for the life of the process; the
-		// conversation database is what replaces this store. The runner is what a front end talks to, and
-		// no front end exists, so it is resolved by nothing.
+		// conversation database is what replaces this store. The runner is what every front end talks to:
+		// the console below today, an HTTP surface when it exists.
 		builder.Services.AddSingleton<ITurnTelemetry, LoggerTurnTelemetry>();
 		builder.Services.AddSingleton(new ProviderErrorDescriber(TimeProvider.System));
 		builder.Services.AddSingleton<IAgentSessionStore, InMemoryAgentSessionStore>();
 		builder.Services.AddSingleton<IAgentExecution, MicrosoftAgentExecution>();
 		builder.Services.AddSingleton<WorkflowRunner>();
+
+		// The console: the first front end. It reads questions from standard input beside the web host and
+		// runs each through the runner; 'exit' stops the host with it. A redirected standard input — a
+		// service, a container, a pipe — does not start the loop, and a closed one does not stop the host,
+		// so a headless run keeps serving with nobody at the console. The streams are registered on their
+		// own because they are the one seam a host under test replaces to type at the console. The runner
+		// reaches the console as a function, resolved on the first question: resolving it builds every
+		// agent's client, which is where a configuration naming no provider is refused, and that refusal
+		// belongs at the prompt and not at boot — a keyless host boots and serves its index.
+		builder.Services.AddSingleton(new ConsoleStreams(Console.In, Console.Out, Console.IsInputRedirected));
+		builder.Services.AddSingleton<Func<WorkflowRunner>>(sp => sp.GetRequiredService<WorkflowRunner>);
+		builder.Services.AddHostedService<ConsoleChatService>();
 
 		// The front end: watcher, reconciler, per-change pipeline and outbox dispatcher, composed by
 		// the library and started by the indexing service once the whole-folder pass has succeeded.

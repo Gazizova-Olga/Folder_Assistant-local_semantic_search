@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — containment, the read tools, the text search, the passage search, the file-level semantic search and the mutation tools written and implemented; the facade over them is SPEC-100's and is built |
-| Version | 0.8.0 |
+| Version | 0.8.1 |
 | Owner | Tools |
-| Last updated | 2026-09-23 |
+| Last updated | 2026-09-24 |
 
 ## Purpose
 
@@ -31,7 +31,7 @@ cannot reach anything outside the folder, and cannot touch the index's own metad
 
 This version writes the containment rule, the four read tools, the text search, the file-level
 semantic search and the four mutation tools. All of it is built and registered, and the agent holds
-every method here through SPEC-100's facade; nothing runs a turn yet.
+every method here through SPEC-100's facade, and SPEC-100's console runs the turn.
 
 ## The rule
 
@@ -719,6 +719,7 @@ and the reports made — never through an index that would still look right afte
 
 ## Changelog
 
+- **0.8.1** (2026-09-24) — status only: SPEC-100's console runs the turn that reaches every tool here.
 - **0.8.0** (2026-09-23) — the passage search, `SearchIndex`: over-fetch, verification through the passage
   builder with stale and unavailable passages withheld and said, the low-confidence screen, the relative
   score-gap cutoff, the reduction under a constant budget, and the per-turn memo the execution opens;

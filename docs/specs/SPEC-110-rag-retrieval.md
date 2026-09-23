@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.12.0 |
+| Version | 0.12.1 |
 | Owner | Retrieval |
-| Last updated | 2026-09-23 |
+| Last updated | 2026-09-24 |
 
 ## Purpose
 
@@ -35,8 +35,8 @@ Both retrieval backends are implemented, and context assembly now exists as a se
 [SPEC-101](SPEC-101-file-tools.md)) asks the composed query, rebuilds and verifies every hit through
 the passage builder, screens the set, applies a relative score-gap cutoff and runs the reducer, in
 that order, with the counts each stage dropped said in its note. The file-level search
-(`FindFilesAbout`) asks the query alone. Both are reached from a turn through the tool facade; no
-front end runs a turn in the running application yet, so retrieval traffic comes from the test suite.
+(`FindFilesAbout`) asks the query alone. Both are reached from a turn through the tool facade, and SPEC-100's console runs turns, so
+retrieval traffic comes from a person's questions and from the test suite.
 
 Per-call telemetry wraps the composed query and is exported at `GET /metrics` (see Observability).
 

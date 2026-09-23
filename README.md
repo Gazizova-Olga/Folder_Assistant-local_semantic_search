@@ -39,9 +39,10 @@ The full statement of purpose and principles is [SPEC-000](docs/specs/SPEC-000-s
 
 ## Status
 
-The project is under active development. The tree is in three states, and
+The project is under active development. The tree is in two states, and
 [docs/diagrams/implementation-status.md](docs/diagrams/implementation-status.md) shows every block
-colour-coded.
+colour-coded. The third state, built but not yet reachable, held most of the agent work and emptied on
+2026-09-24, when the console gave every built block its caller.
 
 **Live and running**
 
@@ -54,18 +55,34 @@ colour-coded.
   decoded, asked by the indexing pass, the per-file delivery, the watcher and the text search alike.
   Plain text today; document formats can be added now that a rebuilt passage is verified against
   its chunk hash.
-- **Telemetry** — a structured log line per embed call, and retrieval metrics at `GET /metrics`.
-
-**Built and tested, not yet reachable at runtime**
-
-- Retrieval — cosine ranking within one embedding space, in managed code or through `sqlite-vec` —
-  and the context reducer that reranks, diversifies and fits passages under a token budget. Both are
-  called by the passage search tool below; no front end runs a turn yet, so the vectors are written
-  and read only by the test suite.
-- The **passage builder** that turns a hit back into text: the file is re-read and the chunk's
-  window rebuilt exactly as it was chunked, then hashed and compared with the hash the index
-  recorded. A window that no longer matches — the file changed after it was indexed — yields no
-  text at all, so a passage is either the text that was embedded or nothing.
+- **Telemetry** — a structured log line per embed call, per retrieval and per turn, and retrieval and
+  turn metrics at `GET /metrics`.
+- The **console**: start the application in a folder and ask it questions at the prompt. Each line
+  is one turn of one conversation, answered as it is produced; `exit` stops the application. A
+  redirected standard input never starts the console and a closed one never stops the host, so a
+  service or container run keeps serving.
+- The **turn runner** behind it: one turn of one conversation through the roster's coordinator — the
+  agent's session loaded, the agent run, the session saved when the turn succeeded — behind the
+  chat-client interface every front end talks to. Sessions are held in memory until the conversation
+  database exists. Each turn is timed and classified inside the execution, because a streamed turn
+  that fails says so as text and ends cleanly, which anything watching from outside would count as a
+  success. Every agent run holds the index's batch from start to end, so a multi-step edit the agent
+  makes costs the index one pass and not one per write.
+- The **roster**: which agents exist, what each may call and delegate to, and which one every turn
+  enters. One agent holding every tool by default; a default roster in code — an orchestrator
+  delegating to a reader and a mutator — behind a switch until its cost is measured; or the operator's
+  own. Validated whole at startup, so a delegation cycle or an unknown tool stops the host before it
+  listens. Each agent is built over its own client with one delegation tool per target.
+- The **provider client and the agent**: one client family in two shapes, OpenAI-compatible (a local
+  Ollama chat model included, with no key) and Azure OpenAI, built but never connected at startup,
+  with the SDK's network timeout set to the configured one; and one agent over it, with the
+  configured prompt verbatim. A provider's failure becomes one sentence naming the setting to check
+  or the time to try again, never the SDK's stack.
+- The **tool reflection and the facades**: every method the three holders describe is a tool named
+  after it, each wrapped in a facade that times it, logs it and applies its group's failure contract.
+  A file tool's failure comes back to the model as a `TOOL_FAILED:` string it is told to report; a
+  search tool's failure ends the turn, because a swallowed retrieval fault reads exactly like "nothing
+  relevant".
 - The **workspace path guard** every file tool resolves paths through: it refuses anything outside
   the folder, including escapes through symbolic links and junctions, hard links, and `subst` drives,
   and refuses the index's own metadata folder for every operation.
@@ -87,35 +104,21 @@ colour-coded.
   one, replace a line range, delete a file or a directory. Every write is a temporary file and a
   rename, retried while the indexer holds the file open; every completed change is reported to the
   index with its own kind, so the index follows the tool's edits without rediscovering them.
-- The **provider client and the agent**: one client family in two shapes, OpenAI-compatible (a local
-  Ollama chat model included, with no key) and Azure OpenAI, built but never connected at startup,
-  with the SDK's network timeout set to the configured one; and one agent over it, with the
-  configured prompt verbatim. A provider's failure becomes one sentence naming the setting to check
-  or the time to try again, never the SDK's stack.
-- The **tool reflection and the facades**: every method the three holders describe is a tool named
-  after it, each wrapped in a facade that times it, logs it and applies its group's failure contract.
-  A file tool's failure comes back to the model as a `TOOL_FAILED:` string it is told to report; a
-  search tool's failure ends the turn, because a swallowed retrieval fault reads exactly like "nothing
-  relevant".
-- The **roster**: which agents exist, what each may call and delegate to, and which one every turn
-  enters. One agent holding every tool by default; a default roster in code — an orchestrator
-  delegating to a reader and a mutator — behind a switch until its cost is measured; or the operator's
-  own. Validated whole at startup, so a delegation cycle or an unknown tool stops the host before it
-  listens. Each agent is built over its own client with one delegation tool per target.
-- The **turn runner**: one turn of one conversation through the roster's coordinator — the agent's
-  session loaded, the agent run, the session saved when the turn succeeded — behind the chat-client
-  interface a front end will talk to. Sessions are held in memory until the conversation database
-  exists. Each turn is timed and classified inside the execution, because a streamed turn that fails
-  says so as text and ends cleanly, which anything watching from outside would count as a success.
-  Every agent run holds the index's batch from start to end, so a multi-step edit the agent makes
-  costs the index one pass and not one per write. No front end exists, so nothing calls it yet.
+- **Retrieval** — cosine ranking within one embedding space, in managed code or through `sqlite-vec` —
+  and the context reducer that reranks, diversifies and fits passages under a token budget, both
+  called by the passage search.
+- The **passage builder** that turns a hit back into text: the file is re-read and the chunk's
+  window rebuilt exactly as it was chunked, then hashed and compared with the hash the index
+  recorded. A window that no longer matches — the file changed after it was indexed — yields no
+  text at all, so a passage is either the text that was embedded or nothing.
 
 **Not built**
 
-- The chat surface (console, HTTP), the conversation database.
+- The HTTP surface, the conversation database.
 
-In practice: you can run the application today to **index a folder, watch it follow your edits and
-read the telemetry**. You cannot yet ask it a question.
+In practice: you can run the application today to **index a folder, watch it follow your edits, ask
+it questions at the console and read the telemetry**. A conversation lasts as long as the process,
+and the console is the only way in.
 
 ### The whole structure, coloured by state
 
@@ -190,7 +193,7 @@ flowchart TB
         runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]
         searchidx["SearchIndex tool<br/>over-fetch, verify, screen, cut, reduce; memoized per turn"]
         batching["BatchHoldingAgent<br/>one hold per agent run, nested for delegates; never at a transport"]
-        console["Console loop<br/>beside the host; stdin EOF does not stop it"]
+        console["Console loop<br/>beside the host; exit stops both; redirected or closed stdin does not"]
     end
 
     subgraph surface["Conversation and HTTP — Phase C, SPEC-170 to write"]
@@ -236,8 +239,8 @@ flowchart TB
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
-    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching built
-    class convdb,console,turns,history,status,responses,provenance planned
+    class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
+    class convdb,turns,history,status,responses,provenance planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -315,6 +318,31 @@ directories `.git`, `.vs`, `bin`, `obj`, `node_modules` and the metadata folder 
 
 To see retrieval quality rather than only the write side, run the labelled benchmark with Ollama
 available — see [Benchmarks](#benchmarks).
+
+### Ask it a question
+
+The console runs beside the web host in the same process. Type at the prompt once the log shows the
+index ready — or before, for a literal lookup, which the text search answers without the index:
+
+```
+Folder Assistant — ask about C:\some\folder. Type 'exit' to stop.
+> what does this folder say about the release schedule?
+```
+
+Each line is one turn of one conversation, streamed back as the model produces it; the conversation
+lasts as long as the process. A question the model answers by searching the index is refused while
+the first index is still building, and the refusal is printed. `exit` stops the application, web host
+included.
+
+A chat model has to be configured first. With none, the first question is answered with the sentence
+naming the setting to fix — `Provider:ApiKey`, or `Provider:Endpoint` for a local server — and the host
+goes on serving. To stay local, point the provider at Ollama and a pulled chat model (`ollama pull
+qwen3:0.6b`); the comment in `appsettings.json` shows the three lines.
+
+Started with standard input redirected — as a service, in a container, under `nohup` — the console
+does not start and the host serves until it is stopped. The log and the chat share the same output, so
+a turn's tool calls appear as `info:` lines between the question and the answer; set
+`Logging:LogLevel:Default` to `Warning` for a quieter prompt.
 
 ## Configuration
 

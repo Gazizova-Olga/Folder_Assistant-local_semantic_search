@@ -24,27 +24,25 @@ Developed on its own since 2026-09-12: there is no reference tree, and nothing h
 from anywhere. `main` is pushed to the private `origin`; plain pushes of `main` and branch + PR
 are both in use.
 
-The tree is in three states, and the middle one is the one to watch
-([docs/diagrams/implementation-status.md](docs/diagrams/implementation-status.md)):
+The tree is in two states
+([docs/diagrams/implementation-status.md](docs/diagrams/implementation-status.md)); the third, *built
+but unreachable*, held most of Phase B and emptied on 2026-09-24 when the console gave every built
+block its caller:
 
 - **Live** — the whole-folder indexing pass at start; the file-indexing front end
   (`src/FolderAssistant.Indexing`) keeping the index in step with the folder afterwards; the index
-  database; embedding and retrieval telemetry served at `GET /metrics`.
-- **Built but unreachable** — retrieval (`IRetrievalQuery`, two backends), the passage builder and
-  the context reducer are composed in `Program.cs` and called by the passage search tool, which no
-  front end reaches. Every vector written is one the running application never reads. The
-  containment guard (`WorkspacePathGuard`), the read tools and text search over it (`ReadTools`), the
-  mutation tools over a second guard (`MutationTools`) and the two searches over the wrapped query
-  (`SearchTools`, all `SPEC-101`) are built, tested and registered. The provider client
-  and the agent over it (`ProviderClientFactory`, `AgentFactory`, `AgentHandle`; `SPEC-140`,
-  `SPEC-100`) are built the same way, and so are the tool reflection and the facade (`ToolReflection`,
-  `ToolFacade`, `ToolSet`), and the roster over them (`Roster`, `AgentToolCatalog`, `AgentRegistry`,
-  `StaticWorkflowRoute`): one handle per roster entry holding exactly its allowlist plus one delegation
-  tool per target, the roster validated at startup. The turn is built too (`MicrosoftAgentExecution`,
-  `WorkflowRunner`, sessions in memory), and **no front end exists, so the running application never
-  runs one.**
-- **Not built** — the chat surface (console, HTTP), the conversation database. The parts of the
-  architecture below that describe them are intent.
+  database; embedding, retrieval and turn telemetry served at `GET /metrics`; and **the whole path
+  from a question to an answer**: the console loop (`ConsoleChatService`, `ConsoleChatLoop`) reads a
+  line, the runner (`WorkflowRunner`) runs the turn through the roster's coordinator
+  (`MicrosoftAgentExecution`, sessions in memory; `Roster`, `AgentToolCatalog`, `AgentRegistry`,
+  `StaticWorkflowRoute`), the agent (`ProviderClientFactory`, `AgentFactory`, `AgentHandle`) calls
+  the tools through their facades (`ToolReflection`, `ToolFacade`, `ToolSet`) — the read tools and
+  text search (`ReadTools`), the mutation tools (`MutationTools`), the passage search and the
+  file-level search (`SearchTools`), each file holder over its own containment guard
+  (`WorkspacePathGuard`) — and the passage search runs retrieval (`IRetrievalQuery`, two backends),
+  the passage builder, the screen and the reducer. Every vector written is one a question can read.
+- **Not built** — the HTTP surface, the conversation database. The parts of the architecture below
+  that describe them are intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -293,11 +291,11 @@ Properties worth stating because they are easy to "simplify" away:
 - Indexing runs **off** the startup path; the web host does not wait for it. A first index that
   fails is reported as failed, not as still building, and is retried on an interval.
 
-### Retrieval — built, called by the search tools, no front end runs a turn
+### Retrieval — live, through the passage search tool
 
 Retrieval is **lazy** — it happens only when the model chooses to call a search tool, not
 as an unconditional pipeline stage. The query, the builder, the screen and the reducer are composed
-and called by `SearchIndex` in that order; nothing runs a turn in the running application yet.
+and called by `SearchIndex` in that order, and the console runs the turn that calls it.
 
 - **Semantic search** embeds the query, ranks chunks by cosine similarity within a single
   embedding space, and rebuilds passage text from disk (chunks store no text). Candidates
@@ -311,8 +309,8 @@ and called by `SearchIndex` in that order; nothing runs a turn in the running ap
   rule, because a second copy of the join would not fail, it would mark every passage stale. A
   mismatch yields a passage with **no text**, not a marked one: without the check an edit inside the
   settle window yields a wrong passage under a real path and a real score, and a stale passage
-  handed over with its text is the same thing with a label. Composed, called by nothing until the
-  passage search tool exists.
+  handed over with its text is the same thing with a label. Composed, and called by the passage
+  search tool.
 - **Text search** is an index-independent exact/regex folder scan, for literal lookups and
   for the window before the first index is ready.
 
@@ -328,7 +326,7 @@ half-built index: results from a partial index are indistinguishable from genuin
 ones. A query vector is compared only against vectors sharing its model version — scoring
 across embedding spaces is meaningless.
 
-### Tools — guard, both file holders and the search holder built, reached by nothing
+### Tools — guard, both file holders and the search holder, live through the agent
 
 The search holder (`SearchTools`) exists beside the read holder and holds two tools. **`SearchIndex`**
 (`SPEC-101`) is the passage search retrieval was built for, and it runs the stages in a fixed order,
@@ -382,7 +380,7 @@ the folder without the ability to change it, so "which agent can destroy data" i
 by reading one line of configuration. There is no shell-execution tool.
 
 Every caller-supplied path resolves through a containment guard (`WorkspacePathGuard`, `SPEC-101`
-— built, held by nothing yet) that refuses anything outside the workspace root. The textual rule
+— one instance per file holder) that refuses anything outside the workspace root. The textual rule
 decides on the normalised full path, and then each way it can be fooled is closed: a symbolic link
 or junction at **any** segment below the root, a file whose NTFS hard-link names include one outside
 the root, and a `subst` drive letter standing for a path that is. Only a *redirecting* reparse point
@@ -408,7 +406,7 @@ is indistinguishable from "nothing relevant", and the model would answer from pr
 believing it had searched. A file tool failure returns a `TOOL_FAILED:` string the model must
 report rather than answer around.
 
-### Agent — provider client, agent factory, tool facades, roster and the turn built, reached by nothing
+### Agent — provider client, agent factory, tool facades, roster, the turn and the console, live
 
 One provider family in two shapes, OpenAI-compatible and Azure, built by `ProviderClientFactory`
 (`SPEC-140`). A client is **built, not connected**: nothing reaches the network at construction, so
@@ -429,8 +427,8 @@ note uses it; a front end showing a thrown turn's failure should too.
 `AgentFactory` makes the framework's chat-client agent from the configuration: the configured
 system prompt **verbatim**, or one built from the name and description; the tool list as what it may
 call, none meaning none; and `AgentHandle` owning agent and client together, because the framework's
-agent does not own its client and a client is a pipeline something has to end. The root registers
-both as factories, resolved by nothing.
+agent does not own its client and a client is a pipeline something has to end. The registry builds
+one handle per roster entry.
 
 The tools the agent holds are the holders' own methods, reflected (`ToolReflection`): a public method
 carrying a `[Description]` is a tool named after it, with the holder's parameter descriptions as its
@@ -479,10 +477,26 @@ under way has no other channel — so a wrapper would record a success. Classifi
 before the exception type; a stream the caller stops reading is `Cancelled`, not `Success`; the
 still-building refusal is `NotReady` and stays out of the failure rate; the latency stops before the
 session save; `errorCode` is a log field and never a metric tag. `WorkflowRunner` is the roster as an
-`IChatClient`, the one thing a front end will talk to: it reads the conversation id from the caller's
+`IChatClient`, the one thing every front end talks to: it reads the conversation id from the caller's
 options and nothing else, and names the conversation on every response and update. The function that
 builds a chat client for a provider is registered as its own service, which is the one seam a host
 test replaces to run a turn without a model.
+
+The **console** (`ConsoleChatService`, `ConsoleChatLoop`, `SPEC-100`) is the first front end: a hosted
+service beside the web host reading standard input a line at a time, each non-blank line one turn's
+user message through the runner, streamed back as it is produced; one conversation per process, the
+one the runner named on the first turn. `exit` stops the host with it. **A redirected standard input
+does not start the loop, and a closed one does not stop the host** — a service, a container or a
+`nohup` run keeps serving with nobody at the console; a console that took the web host down with it is
+the failure the plan names, so a fault in the loop is logged and the host goes on. **The runner is
+resolved on the first question, never at construction**: building it builds every agent's client,
+which is where a keyless configuration is refused, and that refusal belongs at the prompt with the
+setting named — a keyless host boots and serves its index. The console's reader is synchronous whatever
+its async overload says, so a read is awaited against the stopping token and abandoned when it fires.
+The streams (`ConsoleStreams`) are registered on their own as the seam a host test types through, and
+the host fixture redirects them by default so no test reads the test process's own standard input.
+Turns run one at a time here; what two concurrent turns of one conversation should do is the HTTP
+surface's to decide.
 
 ### Persistence — index database live, conversation database not built
 

@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution and the runner written and implemented; durable session persistence and every front end not |
-| Version | 0.6.3 |
+| Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution, the runner and the console written and implemented; durable session persistence and the HTTP surface not |
+| Version | 0.7.0 |
 | Owner | Agents |
-| Last updated | 2026-09-23 |
+| Last updated | 2026-09-24 |
 
 ## Purpose
 
@@ -31,10 +31,11 @@ Routes a turn to an agent, runs it, and keeps the conversation's state across tu
 
 Built: the composition root, the agent factory that makes one agent from a role, the reflection and
 facade that hand the tool holders' methods to it, the roster — which agents exist, what each may call
-and delegate to, and which one every turn enters — and the turn itself, behind the interface a front
-end talks to. Not built: a front end, so nothing runs a turn in the running application; and durable
-session persistence ([SPEC-130](SPEC-130-persistence.md)'s conversation database), so a conversation
-lives as long as the process.
+and delegate to, and which one every turn enters — the turn itself, behind the interface every front
+end talks to, and the console, the first front end, so the running application runs a turn for every
+line typed at it. Not built: the HTTP surface; and durable session persistence
+([SPEC-130](SPEC-130-persistence.md)'s conversation database), so a conversation lives as long as the
+process.
 
 ### Configuration is bound lazily
 
@@ -224,9 +225,9 @@ is the agent framework's chat-client agent, and four things about it are decided
 The composition root registers the catalog, the roster, the registry and the route as factories, and
 the function that builds a chat client for a provider as a service of its own — the one seam a host
 under test replaces to run a turn without a model. The roster is resolved at startup by the filter;
-the registry, the route, the execution and the runner are resolved by nothing yet, so a host boots
-with a provider it cannot reach and a configuration that cannot name one fails when the registry is
-first asked for — never at boot.
+the registry, the route, the execution and the runner are resolved by the console on its first
+question and never at boot, so a host boots with a provider it cannot reach, and a configuration that
+cannot name one fails when the registry is first asked for — at the prompt, with the sentence.
 
 ### The turn
 
@@ -291,6 +292,50 @@ are each agent's own. A call that names no conversation starts one, and every re
 streamed update carries the conversation's id so the caller can name it on the next turn. The messages
 of a call are the turn's new ones; the earlier turns are the session's. It owns nothing, so disposing
 it ends nothing.
+
+### The console
+
+**The console is the first front end: a hosted service beside the web host, reading standard input a
+line at a time and running each non-blank line as one turn through the runner.** `ConsoleChatLoop`
+writes a banner naming the folder, then a prompt; a line is trimmed, a blank one skipped, and any
+other becomes one user message of one conversation — the conversation the runner named on the first
+turn, so every later line is answered with the earlier ones in the session. The answer is streamed
+back as the runner produces it and ended with a newline; a turn that failed inside its stream arrives
+as the execution's failure text and is printed as such. One conversation per process: nothing here
+starts a second.
+
+- **`exit` stops the host with the loop.** The word alone, whatever its case or surrounding space,
+  ends the loop with `ExitRequested`, and `ConsoleChatService` asks the host to stop. The console and
+  the web host are one process, and the person leaving ends it.
+- **A redirected standard input does not start the loop, and a closed one does not stop the host.**
+  Over a pipe, a file or no terminal — a service, a container, `nohup` — the loop would read to the
+  end at once with nobody to type, so it is not started and the host serves until stopped, said once
+  at information. Standard input ending under the loop — Ctrl+Z, a closed pipe — ends the loop with
+  `InputEnded` and nothing else. **Nothing the loop does can stop the host except `exit`**: a fault in
+  the loop itself is logged at error and the host goes on, where the framework's default for a failed
+  background service is to stop the host.
+- **The runner is resolved on the first question, never at construction.** Building the runner builds
+  the route, the registry and every agent's client, and that is where a configuration naming no
+  provider is refused ([SPEC-140](SPEC-140-provider-adapters.md)). Taken at construction, the refusal
+  would stop the host at boot; taken at the first question it is printed at the prompt with the setting
+  named, and the host goes on serving its index. A runner that could not be built is asked for again on
+  the next question — nothing about the console makes a refusal permanent — and one that was is kept.
+- **A failure before the stream begins is printed with the execution's own prefix**
+  (`The turn failed: …`) and the next line is read. Classified by the caller's token first: the host's
+  own cancellation ends the loop as `Cancelled` and prints nothing.
+- **A read is awaited against the stopping token and abandoned when it fires.** The console's reader
+  is synchronous whatever its async overload says — `Console.In` wraps `ReadLine` in a completed task
+  — so a read the host cannot interrupt would hold shutdown until a key was pressed. The read runs on
+  its own task; the process that cancelled it is stopping.
+- **The streams are a seam.** `ConsoleStreams` — the reader, the writer and whether the input is
+  redirected — is registered by the root as the process's own standard input and output, and replaced
+  by a host test with a scripted reader and a writer it reads back; the host fixture redirects them by
+  default, so no test reads the test process's own standard input.
+- **Turns run one at a time.** The loop reads the next line after the answer ends, so two concurrent
+  turns of one conversation cannot come from here.
+
+The log and the chat share standard output: a turn's tool calls appear as log lines between the
+question and the answer at the default level. Whether the console should quiet the log is open.
 
 ## Contracts
 
@@ -375,6 +420,23 @@ internal interface ITurnTelemetry { void Record(TurnTelemetry turn); }
 internal sealed class WorkflowRunner : IChatClient
 {
 	WorkflowRunner(IAgentExecution execution);
+}
+
+internal sealed record ConsoleStreams(TextReader Input, TextWriter Output, Boolean InputRedirected);
+
+internal enum ConsoleLoopEnd { ExitRequested, InputEnded, Cancelled }
+
+internal sealed class ConsoleChatLoop
+{
+	const String ExitCommand = "exit";
+	ConsoleChatLoop(Func<IChatClient> runner, ConsoleStreams streams, String folderPath, ILogger? logger = null);   // the runner is built on the first question
+	static String Banner(String folderPath);
+	Task<ConsoleLoopEnd> RunAsync(CancellationToken cancellationToken);
+}
+
+internal sealed class ConsoleChatService : BackgroundService
+{
+	ConsoleChatService(Func<WorkflowRunner> runner, ConsoleStreams streams, AgentConfig config, IHostApplicationLifetime lifetime, ILogger<ConsoleChatService> logger);
 }
 
 internal static class ToolReflection
@@ -514,12 +576,30 @@ internal sealed class AgentHandle : IDisposable
   cancellation and the direct classification test; the latency read after the save fails exactly the
   latency test; the store keyed by conversation alone fails exactly the store test.
 
-Not covered: a front end, durable session persistence, and two concurrent turns of one conversation.
+- **The console, over a scripted reader, a writer read back and a runner that streams what it is
+  told** — a line is one user message and its streamed answer is written, then ended; the second line
+  names the conversation the runner named on the first; `exit` ends the loop without sending anything,
+  whatever its case or spacing; blank lines are skipped; the end of input ends the loop as such with
+  nothing sent; cancellation while waiting on a reader that never returns ends the loop promptly; a
+  turn that throws is said with the execution's prefix and the loop goes on; a runner that cannot be
+  built is said at the first question and asked for again on the next; cancellation during a turn ends
+  the loop as cancelled.
+- **Host** — a question typed at the console is answered by the scripted model through the real
+  runner and the host serves meanwhile, and `exit` stops the host; a keyless host boots, answers the
+  first question with the sentence naming the missing setting, serves on, and stops on `exit`; a
+  redirected standard input starts no loop — not even the banner — and the host serves on; a closed
+  standard input ends the loop and the host serves on. The keyless case is the one the console taking
+  the runner at construction fails: it failed every host test at boot.
+
+Not covered: durable session persistence, the HTTP surface, and two concurrent turns of one
+conversation, which the console cannot cause.
 
 ## Open questions
 
 - **What two concurrent turns of one conversation should do** — serialise, refuse the second, or stay
-  last-save-wins — is the front end's to decide when one exists.
+  last-save-wins — is the HTTP surface's to decide; the console runs turns one at a time.
+- **Whether the console should quiet the log.** The two share standard output, and a turn's tool
+  calls appear as log lines between the question and the answer at the default level.
 - **Whether the default roster becomes the default** waits on the measurement above; the switch and
   both rosters exist so that the measurement is one configuration value away once a turn can run.
 
@@ -531,6 +611,11 @@ Not covered: a front end, durable session persistence, and two concurrent turns 
 
 ## Changelog
 
+- **0.7.0** (2026-09-24) — the console, the first front end: a hosted service beside the web host
+  running each typed line as one turn through the runner; `exit` stops the host; a redirected standard
+  input starts no loop and a closed one stops nothing; the runner resolved on the first question so a
+  keyless host boots and says the missing setting at the prompt; the streams as the seam a host test
+  types through. Written with its implementation.
 - **0.6.3** (2026-09-23) — every agent run holds the index's batch through `BatchHoldingAgent`, applied by
   the factory when given the front end and by the registry to every agent; released when the run or its
   enumeration ends; never at a transport.

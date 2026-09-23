@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — placeholder |
-| Version | 0.5.0 |
+| Version | 0.6.0 |
 | Owner | — |
-| Last updated | 2026-09-16 |
+| Last updated | 2026-09-24 |
 
 ## Purpose
 
@@ -107,12 +107,12 @@ an admission of what is not yet decided; it is not a description of anything.
 - **Embed** — turn chunks into vectors through a replaceable implementation.
 - **Store** — one folder-scoped database holding the manifest, the chunks and the vectors.
 - **Retrieve** — embed a query, rank against stored vectors, assemble what fits a budget.
-  Composed as of this version: the active profile registers `IRetrievalQuery` in the
-  composition root, so it is resolvable from the container. **Nothing on the request path
-  calls it yet** — the agent still answers without consulting the index, and until that lands
-  the indexing and retrieval machinery, including its measured performance, serves nothing at
-  runtime.
-- **Converse** — route a turn to an agent that can call the tools above.
+  Composed and reached: the active profile registers `IRetrievalQuery` in the composition root, the
+  passage search tool calls it, the agent holds the tool, and the console runs the agent
+  (`SPEC-100`, since 2026-09-24). The measured performance in `SPEC-131` and `SPEC-162` is the
+  performance of the path a question takes.
+- **Converse** — route a turn to an agent that can call the tools above. The console is the first
+  way in; the HTTP surface is not built.
 
 ## Keeping the specs honest
 
