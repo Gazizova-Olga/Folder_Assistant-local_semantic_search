@@ -70,7 +70,7 @@ spec in `docs/specs/`, state *aligned* / *partially aligned* / *not aligned*, an
 change it deliberately — and wait. An approved deviation moves the spec **in the same commit** as
 the code; a spec that lands a commit later was wrong in between.
 
-Placeholder specs (`SPEC-140`, `SPEC-163`, `SPEC-900`, `SPEC-920`, `SPEC-930` say so) impose
+Placeholder specs (`SPEC-163`, `SPEC-900`, `SPEC-910`, `SPEC-930` say so) impose
 nothing; a change that touches one writes the requirement into it before the code. A spec reads as
 *what is true now*, with its changelog at the bottom.
 
@@ -634,8 +634,9 @@ Habits that matter more than a coverage number here:
 ## Documentation
 
 - [`docs/specs/`](docs/specs/) — one versioned spec per module; the requirement a change is
-  written from. Start at `SPEC-000`; the storage choice is `SPEC-131`. `SPEC-000` is known to
-  overclaim on two points (no network reach; an agent that exists) until its rewrite lands.
+  written from. Start at `SPEC-000`; the storage choice is `SPEC-131`, and the
+  security posture — what is reachable, what leaves the machine, what the agent may do to the
+  folder — is `SPEC-920`.
 - [`docs/diagrams/`](docs/diagrams/) — the architecture as it is meant to hold together, and
   the live / built / not-built status.
 - [`docs/benchmarks/`](docs/benchmarks/) — figures of the tree that measured them, never of the
