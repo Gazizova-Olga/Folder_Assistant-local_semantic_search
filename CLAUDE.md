@@ -106,7 +106,18 @@ their variable is set and assert nothing on purpose:
 BENCHMARK_FILES=4000 dotnet test --filter "FullyQualifiedName~CorpusBenchmark" -l "console;verbosity=detailed"
 RUN_SEMANTIC_BENCHMARK=1 dotnet test --filter "FullyQualifiedName~SemanticSearchBenchmark"   # needs Ollama
 RELEVANCE_FLOOR_BENCH=1 dotnet test --filter "FullyQualifiedName~RelevanceFloorBenchmark"
+CORPUS_PROBE=<folder> dotnet test --filter "FullyQualifiedName~MultilingualCorpusProbe"      # needs Ollama
 ```
+
+The last one is the only instrument that measures **through the tool the agent calls** rather than the
+ranking underneath it: `SearchIndex`, so the over-fetch, the passage rebuild and its hash check, the
+screen, the score-gap cutoff and the reduction are all inside the number. It wants a `queries.tsv`
+beside the corpus in the labelled format `SemanticSearchBenchmark` uses, and `tools/make-corpus.js`
+generates one — English, Russian and Turkish across every extension the registry claims, with file
+sizes computed from the real chunk rule so both shapes exist: files ending exactly on a chunk
+boundary, and files leaving a short trailing chunk. The generated corpus is never committed; the
+probe reports the chunk count the corpus was designed for against the one the chunker produced,
+because a corpus that only *means* to land on boundaries tests nothing in particular.
 
 `BENCHMARK_CORPUS=<path>` points the corpus benchmark at a real folder. Results live in
 `docs/benchmarks/`. **Never carry a number forward** — a commit stating a figure re-measures both
