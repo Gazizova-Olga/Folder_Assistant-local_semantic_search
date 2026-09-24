@@ -599,3 +599,13 @@ Package versions are managed centrally; `.csproj` files reference packages witho
   and what to do about each status.
 - [`docs/archive/`](docs/archive/) — designs considered and not built, kept for the reasoning that
   rejected them.
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE). Use it, change it, share it and build on it for any
+noncommercial purpose — personal use, research, teaching, or your own folder — and keep the notices
+that come with it. Commercial use is not granted by this license; ask if you want it.
+
+This is a source-available license, not an open-source one by the OSI definition. If your
+organisation's policy is that it only depends on OSI-approved licenses, this does not qualify, and
+that is deliberate rather than an oversight.
