@@ -46,7 +46,7 @@ backend not answering.
 it ranks anything, so an embedding backend that stops answering ends the search. Charging it to
 whichever retrieval backend happened to be composed would report a regression in the wrong place.
 Expect `latencyMs` near the embedder's deadline (`FolderAssistant:Indexing:OllamaTimeoutSeconds`,
-120 s by default) with `errorCode=TimeoutException` when this appears; a `TaskCanceledException`
+600 s by default) with `errorCode=TimeoutException` when this appears; a `TaskCanceledException`
 there is a transport's own deadline, which arrives earlier and means the same thing.
 
 ## Scraping

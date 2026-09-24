@@ -164,7 +164,19 @@ reported by `GET /` with a note (`DefaultResolution`, `SPEC-000`). **A fallback 
 embedder.** The default needs a local Ollama holding the model; when it is absent the startup probe
 fails the index with a message saying so and searches refuse until it is there. Nothing in-process
 runs in its place, because a substitute embedder answers from a different embedding space with no way
-for anyone to tell. The default was `lsa-vec` for one day (2026-09-15, on a benchmark re-run) and
+for anyone to tell.
+
+**Where the Ollama profiles may embed is checked, not assumed** (`EmbeddingEndpointGuard`,
+`SPEC-162`). `Indexing:OllamaEndpoint` must be an absolute http(s) URL on loopback or the host stops
+at startup with the setting named; `Indexing:AllowRemoteEmbeddingEndpoint` is the opt-out, logged at
+warning on every start and reported by `GET /` while it is set. The rule is textual —
+`Uri.IsLoopback`, no name resolution, because resolving is a network call at startup asserting
+something that can change under it — so a local alias is refused like any other name. The check runs
+in the vectorizer's own constructor, before a client exists, and the composition root forces that
+construction as a startup dependency: the constructor is what makes it unbypassable, the root is what
+makes it a startup failure instead of a first index that fails half a minute later looking like an
+unreachable server. Without it the promise in `SPEC-000` was a default rather than a property, and
+that was true from the day `ollama-vec` became the default (2026-09-16) until 2026-09-24. The default was `lsa-vec` for one day (2026-09-15, on a benchmark re-run) and
 became `ollama-vec` on 2026-09-16 by the owner's decision, with every profile re-measured that day on
 this tree on both Windows and Linux (`docs/benchmarks/`, and `docs/benchmarks/linux/` for the second).
 `lsa-vec` is the profile to name where nothing can be installed; it retrieves far better than the

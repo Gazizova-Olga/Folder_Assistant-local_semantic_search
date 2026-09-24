@@ -297,8 +297,56 @@ public sealed class HostStartupTests
 
 		namedResponse!.Profile.Should().Be("programmable-blob");
 		namedResponse.ProfileNote.Should().BeNull();
+		namedResponse.EmbeddingEndpointNote.Should().BeNull();
 		unnamedResponse!.Profile.Should().Be(SqliteVecExtension.IsAvailable ? "ollama-vec" : "ollama-blob");
 		(unnamedResponse.ProfileNote is null).Should().Be(SqliteVecExtension.IsAvailable);
+		unnamedResponse.EmbeddingEndpointNote.Should().BeNull();
+	}
+
+	/// <summary>
+	/// The promise the whole design rests on, enforced where an operator cannot walk past it: document
+	/// text goes to the embedding endpoint, so an endpoint off this machine stops the host at startup
+	/// rather than failing the first index half a minute later, where it reads as an unreachable server.
+	/// The refusal names the setting to change and the setting that makes the trade deliberate.
+	/// </summary>
+	[Fact]
+	public void A_Remote_Embedding_Endpoint_Stops_The_Host_Before_It_Listens()
+	{
+		using TempFolder folder = new();
+		using HostFixture remoteHost = new(
+			folder,
+			($"{AgentConfig.SectionName}:Profile", "ollama-blob"),
+			($"{AgentConfig.SectionName}:Indexing:Enabled", "false"),
+			($"{AgentConfig.SectionName}:Indexing:OllamaEndpoint", "http://gpu.example.com:11434/v1"));
+
+		Action boot = () => remoteHost.CreateClient();
+
+		boot.Should().Throw<Exception>()
+			.Which.ToString().Should()
+				.Contain("Indexing:OllamaEndpoint").And
+				.Contain("Indexing:AllowRemoteEmbeddingEndpoint");
+	}
+
+	/// <summary>
+	/// And with the opt-out the host runs — reporting it where the profile fallback is reported, for the
+	/// same reason: a system running something other than what its documentation promises has to say so
+	/// somewhere a person can look, not only in a startup line that has scrolled away.
+	/// </summary>
+	[Fact]
+	public async Task The_Root_Reports_A_Remote_Embedding_Endpoint_The_Operator_Allowed()
+	{
+		using TempFolder folder = new();
+		using HostFixture host = new(
+			folder,
+			($"{AgentConfig.SectionName}:Profile", "ollama-blob"),
+			($"{AgentConfig.SectionName}:Indexing:Enabled", "false"),
+			($"{AgentConfig.SectionName}:Indexing:OllamaEndpoint", "http://gpu.example.com:11434/v1"),
+			($"{AgentConfig.SectionName}:Indexing:AllowRemoteEmbeddingEndpoint", "true"));
+
+		FolderResponse? response = await host.CreateClient().GetFromJsonAsync<FolderResponse>("/");
+
+		response!.EmbeddingEndpointNote.Should().NotBeNull()
+			.And.Subject.As<String>().Should().Contain("gpu.example.com");
 	}
 
 	/// <summary>
@@ -755,7 +803,12 @@ public sealed class HostStartupTests
 		(await client.GetAsync("/")).StatusCode.Should().Be(HttpStatusCode.OK);
 	}
 
-	private sealed record FolderResponse(String Name, String AnalyzedFolder, String Profile, String? ProfileNote);
+	private sealed record FolderResponse(
+		String Name,
+		String AnalyzedFolder,
+		String Profile,
+		String? ProfileNote,
+		String? EmbeddingEndpointNote);
 
 	/// <summary>
 	/// A keyboard for the console under test: each read waits for the test to type the next line, so the

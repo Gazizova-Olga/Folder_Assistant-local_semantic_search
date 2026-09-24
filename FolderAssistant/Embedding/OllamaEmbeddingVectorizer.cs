@@ -49,34 +49,65 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 
 	private static readonly TimeSpan HealthCheckRetryDelay = TimeSpan.FromSeconds(1);
 
+	/// <summary>
+	/// The probe's own bound, deliberately not the configured deadline. That deadline is sized for a full
+	/// embed window of the slowest chunks a folder holds — 600 s by default — while the probe embeds two
+	/// words, so sharing it would mean a server that accepts connections and never answers takes three
+	/// attempts of ten minutes to be reported, with the index reading <c>Building</c> throughout. A server
+	/// that is simply not there still fails in milliseconds on a refused connection; this bounds the case
+	/// where something answers the socket and then says nothing.
+	///
+	/// <para>
+	/// Thirty seconds rather than a second or two because the first call after a cold start pages the
+	/// model in, which is the transient the retries exist for and must not be mistaken for an outage.
+	/// </para>
+	/// </summary>
+	internal static readonly TimeSpan HealthCheckDeadline = TimeSpan.FromSeconds(30);
+
 	private readonly IEmbeddingGenerator<String, Embedding<Single>> _generator;
 	private readonly TimeSpan _timeout;
+	private readonly TimeSpan _probeDeadline;
 
 	/// <param name="timeout">
 	/// The bound on one call, whatever its batch size. A call that never returns would otherwise hold a
 	/// delivery in flight forever with its attempts still at zero — retry, backoff and the attempt limit
 	/// never engage — and during the first pass would leave the index <c>Building</c> for the life of the
-	/// process. Sized for a full embed window: measured at 386 ms per chunk on a CPU here, a window of 64
-	/// takes about 25 s, so the configured default of 120 s is generous by a factor of five and still ends
-	/// a hung call inside one delivery's lifetime.
+	/// process. Sized for a full embed window of the slowest chunks a folder holds: a chunk costs what its
+	/// model tokens cost, measured here CPU-only at about 2.1 s for a full English window and 4.3 s for a
+	/// Russian one, so a window of 64 is about 190 s and the configured default of 600 s leaves room for a
+	/// slower machine while still ending a hung call inside one delivery's lifetime. The startup probe
+	/// bounds itself far shorter (<see cref="HealthCheckDeadline"/>), because it embeds two words.
+	/// </param>
+	/// <param name="allowRemoteEndpoint">
+	/// Whether <paramref name="endpoint"/> may name a host that is not on loopback. The check is made
+	/// here, before a client exists, because this constructor is the narrowest point every composition
+	/// path to a model server passes through: a profile that could be pointed at a remote host by a
+	/// configuration value nobody checked is not the offline system this one claims to be
+	/// (<c>EmbeddingEndpointGuard</c>).
 	/// </param>
 	public OllamaEmbeddingVectorizer(
 		String endpoint,
 		String model,
 		String modelVersionId,
 		Int32 dimension,
-		TimeSpan timeout)
-		: this(BuildGenerator(endpoint, model, timeout), model, modelVersionId, dimension, timeout)
+		TimeSpan timeout,
+		Boolean allowRemoteEndpoint)
+		: this(BuildGenerator(endpoint, model, timeout, allowRemoteEndpoint), model, modelVersionId, dimension, timeout)
 	{
 	}
 
-	/// <summary>Test seam: takes a generator directly, so the suite needs no live server.</summary>
+	/// <summary>
+	/// Test seam: takes a generator directly, so the suite needs no live server.
+	/// <paramref name="probeDeadline"/> shortens <see cref="HealthCheckDeadline"/> so that a test of the
+	/// probe's own bound does not have to wait three times thirty seconds to see it.
+	/// </summary>
 	internal OllamaEmbeddingVectorizer(
 		IEmbeddingGenerator<String, Embedding<Single>> generator,
 		String model,
 		String modelVersionId,
 		Int32 dimension,
-		TimeSpan timeout)
+		TimeSpan timeout,
+		TimeSpan? probeDeadline = null)
 	{
 		ArgumentNullException.ThrowIfNull(generator);
 		ArgumentException.ThrowIfNullOrWhiteSpace(model);
@@ -86,6 +117,7 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 
 		this._generator = generator;
 		this._timeout = timeout;
+		this._probeDeadline = probeDeadline ?? HealthCheckDeadline;
 		this.Descriptor = new ModelDescriptor(modelVersionId, "ollama", model, dimension, "cosine");
 	}
 
@@ -175,10 +207,16 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 	{
 		for (Int32 attempt = 1; attempt <= HealthCheckAttempts; attempt++)
 		{
+			// The probe's own deadline, linked to the caller's: this call is two words, not a window, and
+			// the configured deadline is sized for the window. Reaching it is a failed attempt like any
+			// other — retried, and reported as unusable on the last one.
+			using CancellationTokenSource probeDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+			probeDeadline.CancelAfter(this._probeDeadline);
+
 			try
 			{
 				// Document, not Query: the probe should not prepend the model's retrieval instruction.
-				_ = await this.VectorizeAsync(["health check"], EmbeddingKind.Document, cancellationToken)
+				_ = await this.VectorizeAsync(["health check"], EmbeddingKind.Document, probeDeadline.Token)
 					.ConfigureAwait(false);
 
 				return;
@@ -188,15 +226,27 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 				// The vectorizer's own width or count validation. Non-transient — surface it as-is.
 				throw;
 			}
-			catch (Exception ex) when (ex is not OperationCanceledException)
+			catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+			{
+				// The caller stopped, which is not this server's fault and is not an attempt.
+				throw;
+			}
+			catch (Exception ex) when (ex is not OperationCanceledException || probeDeadline.IsCancellationRequested)
 			{
 				if (attempt >= HealthCheckAttempts)
 				{
+					// A cancelled probe says nothing useful in its own message ("The operation was
+					// canceled"), so the reason is named here instead: a server that answered the socket
+					// and then said nothing is a different fault from one that refused it.
+					String reason = probeDeadline.IsCancellationRequested
+						? $"the server did not answer a two-word probe within {this._probeDeadline.TotalSeconds:F0} s"
+						: ex.Message;
+
 					throw new InvalidOperationException(
 						$"The Ollama embedding backend is not usable: a probe embed with model "
 						+ $"'{this.Descriptor.ModelName}' failed {HealthCheckAttempts} times. Check that Ollama is "
 						+ "running at the configured endpoint and that the model has been pulled. "
-						+ $"Underlying error: {ex.Message}",
+						+ $"Underlying error: {reason}",
 						ex);
 				}
 
@@ -225,8 +275,16 @@ internal sealed class OllamaEmbeddingVectorizer : IVectorizer, IEmbeddingHealthC
 			RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
 		};
 
-	private static IEmbeddingGenerator<String, Embedding<Single>> BuildGenerator(String endpoint, String model, TimeSpan timeout)
+	private static IEmbeddingGenerator<String, Embedding<Single>> BuildGenerator(
+		String endpoint,
+		String model,
+		TimeSpan timeout,
+		Boolean allowRemoteEndpoint)
 	{
+		// Before anything is built: document text is what goes to this endpoint, so where it points is
+		// checked rather than assumed (SPEC-162).
+		EmbeddingEndpointGuard.Validate(endpoint, allowRemoteEndpoint);
+
 		// Ollama authenticates nothing, but the OpenAI client requires a non-empty credential, so a
 		// placeholder stands in. It is never sent anywhere that would check it.
 		return new OpenAIClient(new ApiKeyCredential("ollama-local-no-key"), ClientOptions(endpoint, timeout))

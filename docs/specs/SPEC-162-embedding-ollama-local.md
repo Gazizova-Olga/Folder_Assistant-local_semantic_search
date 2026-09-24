@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — core implemented and live-verified; the default profile |
-| Version | 0.9.0 |
+| Version | 0.11.0 |
 | Owner | Embedding |
 | Last updated | 2026-09-24 |
 
@@ -77,16 +77,27 @@ Two things about the failure are the rule:
   caller's token, not on the exception type: a transport reports its own deadline as a cancellation
   too, and that is the backend's fault just the same. The caller's own cancellation passes through
   as what it is.
-- **It is sized for a full embed window.** The deadline bounds one call, and a call is at most
-  `EmbeddingBatchSizeChunks` chunks. Measured here at 386 ms per chunk on a CPU, a window of 64
-  takes about 25 s; the default of 120 s is generous by a factor of five and still ends a hung call
-  inside one delivery's lifetime. An operator who raises the window, or runs on a slower machine,
-  raises the deadline with it.
+- **It is sized for a full embed window of the slowest chunks a real folder holds.** The deadline
+  bounds one call, and a call is at most `EmbeddingBatchSizeChunks` chunks — but a chunk costs what
+  its *model tokens* cost, not a flat amount, and that is what the first sizing got wrong. Measured
+  here on 2026-09-24, CPU-only, on full 256-token windows: about **2.1 s** for an English chunk and
+  **4.3 s** for a Russian one, 3.0 s per chunk over a mixed batch of sixteen. The 600 ms of
+  2026-09-16 was the same machine measuring a 20-document English corpus whose chunks are far
+  shorter than a full window. A window of 64 mixed-language chunks is therefore about **190 s**, and
+  under the old 120 s default **every window timed out, retried, and timed out again**: a folder of
+  Russian or Turkish text could not be indexed at all, while each failure read as a hung server.
+  **The default is 600 s from 2026-09-24**, which holds a full window of the slowest chunks measured
+  with room for a slower machine. An operator who raises the window raises the deadline with it.
 
-The startup probe is bounded by the same deadline, so it cannot hang either. A probe that hits it is
-retried like a refusal — a model paging in on its first call is exactly the transient the retries
-exist for — and a probe that hits it three times fails the index, which is retried on its own
-schedule.
+The startup probe **bounds itself, and not by this deadline** — it embeds two words, not a window,
+so `HealthCheckDeadline` (30 s) is what ends it. Sharing the configured deadline is what raising
+that deadline would have cost: a server that accepts a connection and then says nothing would take
+three attempts of ten minutes to be reported, with the index reading `Building` throughout. Thirty
+seconds rather than one, because the first call after a cold start pages the model in, and that is
+the transient the retries exist for. A probe that hits its bound is retried like a refusal, and one
+that hits it three times fails the index — reported as *the server did not answer a two-word probe*,
+which is a different fault from a refused connection and says so — and the index is retried on its
+own schedule. A server that is simply absent still fails in milliseconds, on the refusal.
 
 **One deadline, and nothing retrying underneath it.** The client library carries two defaults of its
 own that would sit under the rule above: a network timeout of 100 seconds whatever the host
@@ -110,7 +121,8 @@ answer it without making a network call at startup.
 
 Configuration is `Indexing.Ollama*`: endpoint (`http://localhost:11434/v1`), model, the
 `model_version_id` vectors are stored under, the expected dimension, and the deadline on one call
-(`OllamaTimeoutSeconds`, 120). The model-version-id is deliberately separate from the model name —
+(`OllamaTimeoutSeconds`, 600) — plus `Indexing.AllowRemoteEmbeddingEndpoint`, the one setting that
+relaxes the endpoint rule below. The model-version-id is deliberately separate from the model name —
 vectors are keyed by version, not by whatever the server happens to be serving today. A deadline of
 zero or less is refused at construction: a call that may run forever is the defect the deadline
 exists to close, not a setting.
@@ -122,6 +134,37 @@ network, because nothing in the assembly can. **This one can reach a socket.** I
 nothing leaves the machine, but the guarantee is now a property of the endpoint rather than of the
 binary, and that is the cost of real semantics. `SPEC-000` states the rule this stays inside: an
 implementation able to reach a *remote* service must not be a profile in this assembly.
+
+### The endpoint is checked, because that is what makes the sentence above true
+
+`Indexing:OllamaEndpoint` must parse as an absolute http(s) URL whose host is a loopback address, or
+the application **stops at startup** with the setting named. The text of every indexed file is what
+travels to that endpoint, so a free-form value with nothing reading it means the guarantee in the
+paragraph above is a default rather than a property — the difference between "nothing leaves the
+machine" and "nothing leaves the machine unless a setting nobody looked at says otherwise", which is
+the silently-plausible failure this system is built against.
+
+- **The rule is textual.** `Uri.IsLoopback` on the parsed value, no name resolution. Resolving would
+  be a network call at startup, and a name that resolves to `127.0.0.1` today can resolve elsewhere
+  tomorrow, so the check would assert something it cannot keep. A local alias is therefore refused
+  like any other name, and the opt-out below is how an operator says they meant it. The machine's own
+  host name is refused for the same reason.
+- **`Indexing:AllowRemoteEmbeddingEndpoint` is the opt-out**, and it is never silent: set, it is
+  logged at warning on every start and reported by `GET /` for as long as it is set, exactly as the
+  default profile's store fallback is (`SPEC-000`). A promise the operator has traded away is
+  reported wherever the system reports what it is running.
+- **The check is made in the vectorizer's own constructor**, before a client exists, and the
+  composition root forces that construction as a startup dependency. The constructor is the narrowest
+  point every path to a model server passes, so a second call site or a later profile cannot reach
+  one around the rule; the root's dependency is what turns the refusal into a startup failure rather
+  than a first index that fails thirty seconds later and reads as an unreachable server.
+- **A value that is not an http(s) URL is refused too**, opt-out or not. Left to the transport it
+  would surface as a connection failure, which sends an operator looking at their Ollama server
+  rather than at their configuration.
+
+The chat provider is deliberately *not* held to this (`SPEC-140`): it is the one place document text
+may leave the machine, chosen by the operator in `Provider` configuration, and `SPEC-000` names it as
+the exception. The asymmetry is the point — the exception is one named setting, not every endpoint.
 
 ## Non-functional requirements
 
@@ -255,6 +298,12 @@ of 2026-09-12, unchanged since.
   folder indexes from nothing in about twelve seconds. The 2026-09-12 figure of 386 ms was a different
   machine. The embed window still buys nothing measurable (1.03× at 64, spreads overlapping): inference,
   not the round trip, is what is paid for.
+
+  **Read that figure as per *this corpus's* chunks, not per chunk.** These twenty documents are short
+  enough that most produce one chunk well under a full window. On 2026-09-24, on the same machine and
+  still CPU-only, full 256-token windows measured **2.1 s** (English) and **4.3 s** (Russian) — the
+  cost is in the model tokens, and a language that spends more tokens per word spends more seconds
+  per chunk. That is what resized the deadline; see *A bounded call*.
 - **Query latency** with the pretrained model is about **175 ms** on Windows and **180 ms** on Linux,
   almost all of it embedding the query.
 - **The backend gap reproduces on both** (`SPEC-131`): at 8,000 documents the native store answers in

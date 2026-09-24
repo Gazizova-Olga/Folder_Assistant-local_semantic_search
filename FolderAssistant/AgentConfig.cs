@@ -164,6 +164,21 @@ internal record IndexingConfig
 	/// <summary>Base URL of the local Ollama OpenAI-compatible embeddings endpoint.</summary>
 	public String OllamaEndpoint { get; init; } = "http://localhost:11434/v1";
 
+	/// <summary>
+	/// Permits <see cref="OllamaEndpoint"/> to name a host that is not on loopback. Off, and an endpoint
+	/// that is not loopback stops the application at startup with the setting named
+	/// (<c>EmbeddingEndpointGuard</c>, <c>SPEC-162</c>).
+	///
+	/// <para>
+	/// The promise this protects is the system's headline one: the text of every indexed file is what
+	/// goes to the embedding endpoint, so a free-form endpoint with nothing checking it means the
+	/// offline guarantee is only a default. An operator who has a GPU host on their own network can
+	/// have it — by saying so here, where the decision is visible in configuration and reported by
+	/// <c>GET /</c> — rather than by leaving a setting at a value nobody looked at.
+	/// </para>
+	/// </summary>
+	public Boolean AllowRemoteEmbeddingEndpoint { get; init; }
+
 	/// <summary>The Ollama embedding model. The default is the one this system targets.</summary>
 	public String OllamaModel { get; init; } = "qwen3-embedding:0.6b";
 
@@ -187,18 +202,26 @@ internal record IndexingConfig
 	/// during the first pass would leave the index <c>Building</c> for the life of the process.
 	///
 	/// <para>
-	/// Sized for a full embed window (<see cref="EmbeddingBatchSizeChunks"/>): measured at 386 ms per chunk
-	/// on a CPU here, a window of 64 takes about 25 s, so 120 s is generous by a factor of five and still
-	/// ends a hung call inside one delivery's lifetime. Raise it with the window, or on a slower machine.
+	/// Sized for a full embed window (<see cref="EmbeddingBatchSizeChunks"/>) of the slowest chunks a
+	/// real folder holds, which is what moved it from 120 s to 600 s on 2026-09-24. The cost of a chunk
+	/// tracks the model tokens in it, not the chunk count: measured here, CPU-only, on full 256-token
+	/// windows, about 2.1 s for an English chunk and 4.3 s for a Russian one — where the 20-document
+	/// English corpus of 2026-09-16 gave 600 ms for its much shorter chunks. A window of 64 mixed-language
+	/// chunks is therefore about 190 s of work, and under the old 120 s every window timed out, retried
+	/// and timed out again, so a folder of Russian or Turkish text could not be indexed at all while each
+	/// failure looked like a hung server. Raise it further with the window, or on a slower machine.
 	/// </para>
 	///
 	/// <para>
 	/// It is also the client's own network timeout, and nothing retries underneath the call: the startup
 	/// probe and the outbox dispatcher retry above it (<c>SPEC-162</c>), so a server that is not there
-	/// costs one connection per attempt rather than this whole deadline.
+	/// costs one connection per attempt rather than this whole deadline. The probe embeds two words
+	/// rather than a window, so it bounds itself far shorter than this
+	/// (<c>OllamaEmbeddingVectorizer.HealthCheckDeadline</c>) — otherwise raising this value would make a
+	/// server that accepts connections and never answers take half an hour to be reported.
 	/// </para>
 	/// </summary>
-	public Int32 OllamaTimeoutSeconds { get; init; } = 120;
+	public Int32 OllamaTimeoutSeconds { get; init; } = 600;
 
 	/// <summary>
 	/// How long a changed file must go untouched before its change is processed, so a burst of edits to

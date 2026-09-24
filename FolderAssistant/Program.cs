@@ -64,6 +64,18 @@ internal sealed class Program
 
 			logger.LogInformation("Composition profile: {Profile}", resolution.Profile.Name);
 
+			// The other opted-out promise, said at the same volume as the fallback above: an operator who
+			// has allowed a remote embedding endpoint sees it on every start, not only in GET /.
+			IndexingConfig indexing = sp.GetRequiredService<AgentConfig>().Indexing;
+			String? endpointNote = EmbeddingEndpointGuard.RemotePermissionNote(
+				indexing.OllamaEndpoint,
+				indexing.AllowRemoteEmbeddingEndpoint);
+
+			if (endpointNote is not null)
+			{
+				logger.LogWarning("{EmbeddingEndpointNote}", endpointNote);
+			}
+
 			return resolution;
 		});
 		builder.Services.AddSingleton(sp => sp.GetRequiredService<DefaultResolution>().Profile);
@@ -350,13 +362,18 @@ internal sealed class Program
 		WebApplication app = builder.Build();
 
 		// The active profile is reported here so that what is running is one request away, fallback
-		// included: the note is null unless the default could not run and its blob twin did.
+		// included: the note is null unless the default could not run and its blob twin did. The
+		// embedding note is the same idea for the other promise an operator can opt out of — it is null
+		// unless the endpoint document text goes to has been allowed off this machine.
 		app.MapGet("/", (AgentConfig config, DefaultResolution profile) => Results.Ok(new
 		{
 			name = "Folder Assistant",
 			analyzedFolder = config.ResolveAnalyzedFolderPath(),
 			profile = profile.Profile.Name,
 			profileNote = profile.FallbackNote,
+			embeddingEndpointNote = EmbeddingEndpointGuard.RemotePermissionNote(
+				config.Indexing.OllamaEndpoint,
+				config.Indexing.AllowRemoteEmbeddingEndpoint),
 		}));
 
 		// Prometheus scrapes this directly, on the port the app already serves. A collector in
@@ -374,13 +391,19 @@ internal sealed class Program
 	{
 		[SuppressMessage("Major Code Smell", "S1144:Unused private types or members should be removed",
 			Justification = "False positive: the constructor is invoked by the DI container, and that invocation is " +
-				"the mechanism ordering the database bootstrap before the server accepts a request (SPEC-130) and " +
-				"the roster's validation before a turn can run (SPEC-100). It looks unused precisely because " +
-				"nothing calls it explicitly.")]
-		public StartupDependencies(DatabaseBootstrapResult database, Roster roster)
+				"the mechanism ordering the database bootstrap before the server accepts a request (SPEC-130), " +
+				"the roster's validation before a turn can run (SPEC-100), and the embedding endpoint's check " +
+				"before anything embeds (SPEC-162). It looks unused precisely because nothing calls it explicitly.")]
+		public StartupDependencies(DatabaseBootstrapResult database, Roster roster, IVectorizer vectorizer)
 		{
 			_ = database;
 			_ = roster;
+
+			// Building the vectorizer is what runs EmbeddingEndpointGuard, so a configuration that would
+			// send document text off the machine stops the host here rather than failing the first index
+			// thirty seconds later, where it reads as an unreachable server. Construction reaches no
+			// network, exactly as the provider client does not (SPEC-140).
+			_ = vectorizer;
 		}
 
 		public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => next;

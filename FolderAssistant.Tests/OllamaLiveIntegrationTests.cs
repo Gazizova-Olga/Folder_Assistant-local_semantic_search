@@ -188,7 +188,7 @@ public sealed class OllamaLiveIntegrationTests
 
 		vectorizer = new OllamaEmbeddingVectorizer(
 			config.OllamaEndpoint, config.OllamaModel, config.OllamaModelVersionId, config.OllamaEmbeddingDimension,
-			TimeSpan.FromSeconds(config.OllamaTimeoutSeconds));
+			TimeSpan.FromSeconds(config.OllamaTimeoutSeconds), config.AllowRemoteEmbeddingEndpoint);
 
 		return true;
 	}
@@ -199,7 +199,7 @@ public sealed class OllamaLiveIntegrationTests
 
 		using OllamaEmbeddingVectorizer candidate = new(
 			config.OllamaEndpoint, config.OllamaModel, config.OllamaModelVersionId, config.OllamaEmbeddingDimension,
-			TimeSpan.FromSeconds(config.OllamaTimeoutSeconds));
+			TimeSpan.FromSeconds(config.OllamaTimeoutSeconds), config.AllowRemoteEmbeddingEndpoint);
 
 		try
 		{

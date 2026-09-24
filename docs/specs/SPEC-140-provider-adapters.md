@@ -178,8 +178,13 @@ server.
 
 ## Open questions
 
-- Whether a local endpoint should be required to be loopback unless an explicit opt-out is set, the
-  same question [SPEC-162](SPEC-162-embedding-ollama-local.md) leaves open for the embedder.
+- ~~Whether a local endpoint should be required to be loopback unless an explicit opt-out is set~~ —
+  answered for the **embedder** on 2026-09-24: it is required, with a reported opt-out
+  ([SPEC-162](SPEC-162-embedding-ollama-local.md)). It stays open here, and the asymmetry is
+  deliberate: `Provider:Endpoint` is the one place document text is *meant* to be able to leave the
+  machine, so a loopback rule on it would have to be an opt-out that is on by default for most
+  operators, which enforces nothing and only adds a setting. What a reader needs instead is that
+  `SPEC-000` names this as the exception, which it does.
 
 ## References
 

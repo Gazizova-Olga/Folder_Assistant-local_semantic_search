@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Status | Draft — placeholder |
-| Version | 0.6.0 |
+| Status | Draft — the principles below describe the tree as it is; the module specs own behaviour |
+| Version | 0.7.0 |
 | Owner | — |
 | Last updated | 2026-09-24 |
 
@@ -63,16 +63,27 @@ an admission of what is not yet decided; it is not a description of anything.
   re-embeds the folder on every run. A bundle makes those combinations unnameable, and gives
   every runnable configuration a name that can be put in a benchmark result.
 - **A profile may not cross the trust boundary.** A profile name in configuration *is* a
-  runtime flag, and that is only safe because every profile compiled into this binary is
-  offline and local: no configuration value can make the system reach the network, because
-  nothing in the assembly can. An implementation that changes that must not be a profile
-  here — it belongs in a separate assembly or publish, so the guarantee stays "it is not in
-  the binary" rather than "the configuration says not to". That, and not modularity, is the
-  criterion for ever splitting an assembly; the contracts already provide the modularity.
+  runtime flag, and that is only safe because **no configuration value can make a profile send
+  document text off this machine**. For the in-process profiles that is a property of the
+  assembly: there is no endpoint, so there is nothing to point anywhere. For the `ollama-*`
+  profiles it is a property that has to be *kept*, because they speak to a server over a
+  configured endpoint — so the endpoint is checked to be loopback at startup, and the opt-out
+  that permits otherwise is logged on every start and reported by `GET /` for as long as it is
+  set ([SPEC-162](SPEC-162-embedding-ollama-local.md)). An implementation that *cannot* be held
+  to that must not be a profile here — it belongs in a separate assembly or publish, so the
+  guarantee stays "it is not in the binary" rather than "the configuration says not to". That,
+  and not modularity, is the criterion for ever splitting an assembly; the contracts already
+  provide the modularity.
   **The chat provider is the one deliberate exception** ([SPEC-140](SPEC-140-provider-adapters.md)):
   it is not a profile, it is chosen by the operator in `Provider` configuration and by nothing else,
-  and it is the one place document text can leave the machine. The sentence above is true of
+  and it is the one place document text can leave the machine. The rule above is true of
   embedding and retrieval and of nothing that talks to a chat model.
+
+  The wording matters because the earlier one — "no configuration value can make the system reach
+  the network, because nothing in the assembly can" — was **false from the day the Ollama profiles
+  became the default** (2026-09-16) until the endpoint check landed (2026-09-24). The endpoint was
+  free-form configuration; anything that named a host got the text of every indexed file. A
+  document promising a property nothing enforces is the same defect as an answer nobody checked.
 - **A named profile that cannot resolve is a startup failure, never a fallback.** An unknown
   name, or one whose implementation is unavailable on this platform, throws. Falling back
   would run a configuration nobody asked for while reporting success, and the result would be
@@ -96,7 +107,8 @@ an admission of what is not yet decided; it is not a description of anything.
   identity are recorded, never inferred.
 - **Local by construction where it matters.** No document text leaves the machine on the
   default path. The default embeds through a server on loopback (2026-09-16), so it needs a
-  local process to be running; it needs nothing beyond the machine to be reachable. Profiles
+  local process to be running; it needs nothing beyond the machine to be reachable, and an
+  endpoint that names anything else stops the application rather than being used. Profiles
   that need no process at all exist and are named explicitly.
 - **Observable enough to debug.** A loop that survives its own faults and keeps going looks
   identical to one that is working, unless it says otherwise.

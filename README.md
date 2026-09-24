@@ -24,9 +24,12 @@ Search over your own files should not require uploading them anywhere, and an as
 your files should never invent an answer and present it as if it came from them. Both aims shape the
 design:
 
-- **Offline by construction.** The embedding profiles that ship are in-process or loopback-only
-  (Ollama on `localhost`). Which profiles exist is what keeps the system offline, not an operator's
-  choice of endpoint.
+- **Offline by construction, and checked.** The embedding profiles that ship are in-process or
+  loopback-only: the in-process ones have no endpoint at all, and the Ollama ones refuse to start
+  against an endpoint that is not a loopback address. Sending your documents to a server elsewhere
+  takes an explicit setting, which is logged at every start and reported by `GET /` while it is set.
+  The one thing that can leave the machine is what you send a chat provider, and pointing that at a
+  local model keeps even it here.
 - **Fail loudly, never plausibly.** The failure mode the whole design guards against is a silently
   plausible wrong answer. A search while the first index is still building is refused rather than
   answered from a half-built index; an unknown embedding profile stops the application at startup
@@ -373,9 +376,10 @@ The settings most likely to matter:
 | `Indexing:DebounceMilliseconds` | `750` | Quiet window before a changed file is re-indexed. |
 | `Indexing:ReconciliationIntervalSeconds` | `300` | How often the folder is re-scanned as a safety net. |
 | `Indexing:FailedIndexRetryIntervalSeconds` | `30` | How often a failed first index is retried. |
-| `Indexing:OllamaEndpoint` | `http://localhost:11434/v1` | Where the Ollama profiles embed. |
+| `Indexing:OllamaEndpoint` | `http://localhost:11434/v1` | Where the Ollama profiles embed. Must be loopback unless the setting below says otherwise. |
+| `Indexing:AllowRemoteEmbeddingEndpoint` | `false` | Permits an endpoint that is not loopback. Reported at startup and by `GET /` while set. |
 | `Indexing:OllamaModel` | `qwen3-embedding:0.6b` | The model they use. |
-| `Indexing:OllamaTimeoutSeconds` | `120` | Deadline on one embed call. |
+| `Indexing:OllamaTimeoutSeconds` | `600` | Deadline on one embed call — a full window of the slowest chunks. The startup probe bounds itself at 30 s. |
 
 Every property, its default and its reason are documented in `FolderAssistant/AgentConfig.cs`.
 

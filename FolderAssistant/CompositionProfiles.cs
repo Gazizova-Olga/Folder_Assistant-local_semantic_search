@@ -116,7 +116,8 @@ internal static class CompositionProfiles
 					indexing.OllamaModel,
 					indexing.OllamaModelVersionId,
 					indexing.OllamaEmbeddingDimension,
-					TimeSpan.FromSeconds(indexing.OllamaTimeoutSeconds)),
+					TimeSpan.FromSeconds(indexing.OllamaTimeoutSeconds),
+					indexing.AllowRemoteEmbeddingEndpoint),
 				CreateVectorStoreWriter: static () => new SqliteBlobVectorStoreWriter(),
 				CreateVectorStoreReader: static () => new SqliteBlobVectorStoreReader(),
 				CreateRetrievalQuery: static (vectorizer, reader, indexState)
@@ -130,7 +131,8 @@ internal static class CompositionProfiles
 					indexing.OllamaModel,
 					indexing.OllamaModelVersionId,
 					indexing.OllamaEmbeddingDimension,
-					TimeSpan.FromSeconds(indexing.OllamaTimeoutSeconds)),
+					TimeSpan.FromSeconds(indexing.OllamaTimeoutSeconds),
+					indexing.AllowRemoteEmbeddingEndpoint),
 				CreateVectorStoreWriter: static () => new SqliteVecVectorStoreWriter(),
 				CreateVectorStoreReader: static () => new SqliteVecVectorStoreReader(),
 				CreateRetrievalQuery: static (vectorizer, reader, indexState)

@@ -225,6 +225,33 @@ public sealed class OllamaEmbeddingVectorizerTests
 		generator.Calls.Should().Be(3);
 	}
 
+	/// <summary>
+	/// The probe bounds itself, and not by the configured deadline. That deadline is sized for a window of
+	/// the slowest chunks a folder holds — 600 s by default since 2026-09-24 — and the probe embeds two
+	/// words, so sharing it would mean a server that accepts a connection and then says nothing takes three
+	/// attempts of ten minutes to be reported while the index reads <c>Building</c>. Raising the configured
+	/// deadline is only safe because of this, which is why it is pinned here: give the call ten minutes and
+	/// the probe still gives up on its own bound.
+	/// </summary>
+	[Fact]
+	public async Task The_Probe_Gives_Up_On_Its_Own_Bound_However_Long_The_Call_Deadline_Is()
+	{
+		FakeEmbeddingGenerator generator = new(Dimension) { HangUntilCancelled = true };
+		using OllamaEmbeddingVectorizer vectorizer = new(
+			generator, Model, ModelVersionId, Dimension,
+			timeout: TimeSpan.FromMinutes(10),
+			probeDeadline: TimeSpan.FromMilliseconds(80));
+
+		Stopwatch elapsed = Stopwatch.StartNew();
+		Func<Task> check = async () => await vectorizer.CheckAsync();
+
+		(await check.Should().ThrowAsync<InvalidOperationException>())
+			.Which.Message.Should().Contain("two-word probe");
+
+		generator.Calls.Should().Be(3, "each attempt is bounded, and all three are spent before it is called unusable");
+		elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(30), "the call's own ten-minute deadline is not what ended it");
+	}
+
 	[Fact]
 	public void A_Deadline_Of_Zero_Is_Refused_At_Construction()
 	{
@@ -282,7 +309,8 @@ public sealed class OllamaEmbeddingVectorizerTests
 			}
 		});
 
-		using OllamaEmbeddingVectorizer vectorizer = new($"http://127.0.0.1:{port}/v1", Model, ModelVersionId, Dimension, Deadline);
+		using OllamaEmbeddingVectorizer vectorizer = new(
+			$"http://127.0.0.1:{port}/v1", Model, ModelVersionId, Dimension, Deadline, allowRemoteEndpoint: false);
 		Func<Task> embed = async () => await vectorizer.VectorizeAsync(["text"], EmbeddingKind.Document);
 
 		(await embed.Should().ThrowAsync<Exception>()).Which.Should().NotBeOfType<TimeoutException>("a dropped connection is a failure, not a deadline");
