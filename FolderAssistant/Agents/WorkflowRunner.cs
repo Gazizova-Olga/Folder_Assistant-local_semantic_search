@@ -67,10 +67,25 @@ internal sealed class WorkflowRunner : IChatClient
 	{
 		await foreach (AgentResponseUpdate update in this._execution.RunStreamingAsync(conversationId, messages, cancellationToken).ConfigureAwait(false))
 		{
-			ChatResponseUpdate chat = update.AsChatResponseUpdate();
-			chat.ConversationId = conversationId;
+			// Stamped on a copy, never on the update itself. The object the framework hands over is one it and
+			// the tool-calling loop are still accumulating, and a conversation id written into it is read back
+			// as a server-managed conversation: the loop then sends a tool result without the call it answers,
+			// and the next turn of the conversation carries nothing of this one. Found on the first real
+			// question, when every streamed conversation forgot every earlier turn.
+			ChatResponseUpdate produced = update.AsChatResponseUpdate();
 
-			yield return chat;
+			yield return new ChatResponseUpdate(produced.Role, produced.Contents)
+			{
+				ConversationId = conversationId,
+				ResponseId = produced.ResponseId,
+				MessageId = produced.MessageId,
+				AuthorName = produced.AuthorName,
+				CreatedAt = produced.CreatedAt,
+				ModelId = produced.ModelId,
+				FinishReason = produced.FinishReason,
+				AdditionalProperties = produced.AdditionalProperties,
+				RawRepresentation = produced.RawRepresentation,
+			};
 		}
 	}
 }

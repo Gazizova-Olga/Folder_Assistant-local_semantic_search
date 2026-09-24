@@ -478,9 +478,12 @@ before the exception type; a stream the caller stops reading is `Cancelled`, not
 still-building refusal is `NotReady` and stays out of the failure rate; the latency stops before the
 session save; `errorCode` is a log field and never a metric tag. `WorkflowRunner` is the roster as an
 `IChatClient`, the one thing every front end talks to: it reads the conversation id from the caller's
-options and nothing else, and names the conversation on every response and update. The function that
-builds a chat client for a provider is registered as its own service, which is the one seam a host
-test replaces to run a turn without a model.
+options and nothing else, and names the conversation on every response and update — **on a copy of
+each streamed update, never on the framework's own object**. Stamped in place, the id was read back as
+a server-managed conversation: the loop sent a tool result without its call and every streamed
+conversation forgot every earlier turn, which is how the first real question (2026-09-24) found it. The
+function that builds a chat client for a provider is registered as its own service, which is the one
+seam a host test replaces to run a turn without a model.
 
 The **console** (`ConsoleChatService`, `ConsoleChatLoop`, `SPEC-100`) is the first front end: a hosted
 service beside the web host reading standard input a line at a time, each non-blank line one turn's

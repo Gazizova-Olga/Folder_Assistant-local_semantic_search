@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution, the runner and the console written and implemented; durable session persistence and the HTTP surface not |
-| Version | 0.7.0 |
+| Version | 0.7.1 |
 | Owner | Agents |
 | Last updated | 2026-09-24 |
 
@@ -293,6 +293,14 @@ streamed update carries the conversation's id so the caller can name it on the n
 of a call are the turn's new ones; the earlier turns are the session's. It owns nothing, so disposing
 it ends nothing.
 
+**The conversation id is stamped on a copy of each streamed update, never on the update itself.** The
+object the framework hands over is one it and the tool-calling loop are still accumulating, and a
+conversation id written into it is read back as a server-managed conversation: the loop then sends a
+tool result without the call it answers, and the next turn of the conversation carries nothing of this
+one. Found on the first real question (2026-09-24), when every streamed conversation forgot every
+earlier turn and the model was re-asked with a bare tool result. A whole response is stamped after the
+run has ended and is unaffected.
+
 ### The console
 
 **The console is the first front end: a hosted service beside the web host, reading standard input a
@@ -565,7 +573,10 @@ internal sealed class AgentHandle : IDisposable
   conversation.
 - **The runner** — a call naming no conversation starts one and says which, two such calls start two;
   a named conversation is the one the turn runs in; every streamed update carries it; it answers
-  `GetService` for itself and for nothing keyed.
+  `GetService` for itself and for nothing keyed. **Over the real execution and a real agent with one
+  tool**: a streamed turn's loop sends the tool result with the question and the call, with no
+  conversation id handed down, and the next streamed turn is sent the whole first turn and then the new
+  question — the test the runner stamping the framework's own update fails, on the loop's second call.
 - **Host** — with the client function replaced by a scripted model, the runner resolves from the real
   root, the coordinator calls the real `ReadFile` over the analyzed folder and is handed the file's
   text, the conversation's next turn is sent the first, and the turn is a tagged series at
@@ -611,6 +622,10 @@ conversation, which the console cannot cause.
 
 ## Changelog
 
+- **0.7.1** (2026-09-24) — the runner stamps the conversation id on a copy of each streamed update,
+  never on the framework's own object: stamped in place, the id was read back as a server-managed
+  conversation, a tool result went back without its call and every streamed conversation forgot every
+  earlier turn. Found on the first real question; the test that catches it added.
 - **0.7.0** (2026-09-24) — the console, the first front end: a hosted service beside the web host
   running each typed line as one turn through the runner; `exit` stops the host; a redirected standard
   input starts no loop and a closed one stops nothing; the runner resolved on the first question so a
