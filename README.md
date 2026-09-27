@@ -119,7 +119,10 @@ colour-coded. The third state, built but not yet reachable, held most of the age
 
 **Not built**
 
-- The HTTP surface, the conversation database.
+- The HTTP surface, and the two writers of the conversation database: the framework’s history
+  provider over SQLite, which keeps a conversation’s messages, and the session store beside it. The
+  database itself — its own file next to the index, with the whole schema a turn will need — is created
+  before the server listens, and nothing writes to it yet.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits, ask
 it questions at the console and read the telemetry**. A conversation lasts as long as the process,
@@ -167,7 +170,9 @@ flowchart TB
         conn["FolderDatabaseConnection<br/>foreign_keys, busy_timeout, no shared cache, no pool"]
         blob["Blob vector store<br/>chunk_vector"]
         vec["sqlite-vec store<br/>vec0 per model"]
-        convdb["conversations.db<br/>bootstrapper, ConversationStore"]
+        convboot["ConversationDatabaseBootstrapper<br/>conversations.db, WAL, never the index file"]
+        convhist["SqliteChatHistoryProvider<br/>the framework's history seam; serialized messages as rows"]
+        convsess["SqliteAgentSessionStore<br/>what is left of a session, per agent and conversation"]
     end
 
     subgraph retrieval["Retrieval — SPEC-110"]
@@ -201,9 +206,8 @@ flowchart TB
         console["Console loop<br/>beside the host; exit stops both; redirected or closed stdin does not"]
     end
 
-    subgraph surface["Conversation and HTTP — Phase C, SPEC-170 to write"]
+    subgraph surface["Conversation and HTTP — Phase C, SPEC-170"]
         direction LR
-        turns["TurnRecordingAgent<br/>message capture over the roster"]
         history["GET/DELETE /api/history"]
         status["GET /api/index/status<br/>read-only, bounded failed sample"]
         responses["OpenAI Responses endpoints + DevUI<br/>SQLite conversation storage, loopback only"]
@@ -231,9 +235,12 @@ flowchart TB
     readt & textsearch & about & searchidx & mutate --> facade --> roster --> runner
     provider --> roster
     runner --> batching --> hold
-    runner --> console & turns & responses
-    turns --> convdb
-    history & status --> convdb
+    runner --> console & responses
+    roster -.->|"ChatHistoryProvider on each agent"| convhist
+    runner -.-> convsess
+    history --> convhist
+    status --> store
+    convhist & convsess -.->|"schema nothing writes yet"| convboot
 
     classDef live fill:#1b5e20,stroke:#a5d6a7,color:#ffffff
     classDef defect fill:#8d6e00,stroke:#ffe082,color:#ffffff
@@ -241,9 +248,9 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
-    class convdb,turns,history,status,responses planned
+    class convhist,convsess,history,status,responses planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

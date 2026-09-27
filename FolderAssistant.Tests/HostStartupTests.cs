@@ -76,6 +76,24 @@ public sealed class HostStartupTests
 	}
 
 	/// <summary>
+	/// The conversation database is bootstrapped on the same terms and as a separate file (SPEC-170).
+	/// It is ordered before the server listens so that the store which will replace the in-process
+	/// session store finds its schema there, rather than creating it on the request path.
+	/// </summary>
+	[Fact]
+	public async Task The_Conversation_Database_Is_A_Second_File_Bootstrapped_Before_Any_Request_Is_Served()
+	{
+		using TempFolder folder = new();
+		using HostFixture host = new(folder);
+
+		HttpResponseMessage response = await host.CreateClient().GetAsync("/");
+
+		response.StatusCode.Should().Be(HttpStatusCode.OK);
+		File.Exists(folder.Combine(".folderassistant", "conversations.db")).Should().BeTrue();
+		File.Exists(folder.Combine(".folderassistant", "manifest.db")).Should().BeTrue();
+	}
+
+	/// <summary>
 	/// <summary>
 	/// With indexing off, nothing will ever build an index, so retrieval must not sit waiting for
 	/// one. Whether indexing runs at all is decided when the hosted-service factory executes — which

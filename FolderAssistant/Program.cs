@@ -145,6 +145,24 @@ internal sealed class Program
 			return database;
 		});
 
+		// The conversation database, beside the index and never the same file: an index rebuild drops the
+		// index schema, and the recovery for a corrupt index is deleting the metadata folder, which in one
+		// file would take every conversation with it (SPEC-170). Nothing reads it yet — the session store
+		// is still the in-process one — but it is created on every start, so the store that replaces it
+		// finds its schema there rather than making it on the request path.
+		builder.Services.AddSingleton(sp =>
+		{
+			AgentConfig config = sp.GetRequiredService<AgentConfig>();
+
+			ConversationDatabaseBootstrapResult conversations = new ConversationDatabaseBootstrapper()
+				.EnsureInitialized(config.ResolveAnalyzedFolderPath(), config.Persistence);
+
+			Console.WriteLine(
+				$"Conversation database: {(conversations.Created ? "created" : "reused")} at {conversations.DatabasePath}");
+
+			return conversations;
+		});
+
 		// The store the indexing front end writes its file records and deliveries through. It is the
 		// application's, over the same folder database as the chunks and vectors, so that recording a
 		// change and queuing its delivery are one write.
@@ -391,12 +409,23 @@ internal sealed class Program
 	{
 		[SuppressMessage("Major Code Smell", "S1144:Unused private types or members should be removed",
 			Justification = "False positive: the constructor is invoked by the DI container, and that invocation is " +
-				"the mechanism ordering the database bootstrap before the server accepts a request (SPEC-130), " +
-				"the roster's validation before a turn can run (SPEC-100), and the embedding endpoint's check " +
-				"before anything embeds (SPEC-162). It looks unused precisely because nothing calls it explicitly.")]
-		public StartupDependencies(DatabaseBootstrapResult database, Roster roster, IVectorizer vectorizer)
+				"the mechanism ordering the database bootstrap before the server accepts a request (SPEC-130, " +
+				"SPEC-170), the roster's validation before a turn can run (SPEC-100), and the embedding endpoint's " +
+				"check before anything embeds (SPEC-162). It looks unused precisely because nothing calls it " +
+				"explicitly.")]
+		public StartupDependencies(
+			DatabaseBootstrapResult database,
+			ConversationDatabaseBootstrapResult conversations,
+			Roster roster,
+			IVectorizer vectorizer)
 		{
 			_ = database;
+
+			// Ordered here for the same reason as the index database: a store creating its own schema on
+			// first use would pay a round trip on the request path and would need a write-capable
+			// connection to read history.
+			_ = conversations;
+
 			_ = roster;
 
 			// Building the vectorizer is what runs EmbeddingEndpointGuard, so a configuration that would

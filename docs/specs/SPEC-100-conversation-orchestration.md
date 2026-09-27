@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution, the runner and the console written and implemented; durable session persistence and the HTTP surface not |
-| Version | 0.9.0 |
+| Version | 0.9.1 |
 | Owner | Agents |
 | Last updated | 2026-09-27 |
 
@@ -33,9 +33,10 @@ Built: the composition root, the agent factory that makes one agent from a role,
 facade that hand the tool holders' methods to it, the roster — which agents exist, what each may call
 and delegate to, and which one every turn enters — the turn itself, behind the interface every front
 end talks to, and the console, the first front end, so the running application runs a turn for every
-line typed at it. Not built: the HTTP surface; and durable session persistence
-([SPEC-130](SPEC-130-persistence.md)'s conversation database), so a conversation lives as long as the
-process.
+line typed at it. Not built: the HTTP surface; and durable session persistence — the conversation
+database exists and is bootstrapped before the server listens
+([SPEC-170](SPEC-170-conversation-persistence.md)), and nothing reads or writes it yet, so a
+conversation still lives as long as the process.
 
 ### Configuration is bound lazily
 
@@ -288,8 +289,9 @@ only sometimes would be a second thing to reason about.
 - **The session is stored serialized, keyed by agent *and* conversation** (`IAgentSessionStore`). Two
   agents serving one conversation hold two sessions, and a key of the conversation alone would have
   each overwrite the other's. The store today is `InMemoryAgentSessionStore`: sessions live as long as
-  the process and nothing bounds their number. The conversation database replaces it behind the same
-  seam.
+  the process and nothing bounds their number. The conversation database
+  ([SPEC-170](SPEC-170-conversation-persistence.md)) exists to replace it behind this same seam, and its
+  `session_state` table is keyed the same way for the same reason; the store that writes it is not built.
 - **A failed turn saves nothing.** The store holds the serialized form, not the live object, so a
   turn that fails — or is cancelled, or abandoned — leaves the conversation exactly as its last good
   turn left it.
@@ -678,6 +680,9 @@ conversation, which the console cannot cause.
 
 ## Changelog
 
+- **0.9.1** (2026-09-27) — status only: the conversation database exists and is bootstrapped before the
+  server listens (SPEC-170), and the session store seam is unchanged and still in-process. Nothing here
+  behaves differently.
 - **0.9.0** (2026-09-27) — the single agent the root configuration yields holds the read and search
   tools and no mutation: nothing bounds a mutation once a model holds the tool, so the ability to change
   the folder is granted by asking, never by leaving the configuration alone. One named read-only list

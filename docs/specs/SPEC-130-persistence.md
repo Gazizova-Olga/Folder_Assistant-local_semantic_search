@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.16.0 |
+| Version | 0.17.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-27 |
 
@@ -24,7 +24,10 @@ concurrent readers and writers correct.
 **Out of scope**
 
 - What is embedded and how ([SPEC-160](SPEC-160-embedding-module.md)).
-- Conversation content ([SPEC-100](SPEC-100-conversation-orchestration.md)).
+- Conversation content, and the database it lives in
+  ([SPEC-170](SPEC-170-conversation-persistence.md)). It is a second file in the same metadata folder,
+  under the same connection rules and owned by its own bootstrapper; the reasons it is not this one are
+  that spec’s.
 
 ## Implementation status
 

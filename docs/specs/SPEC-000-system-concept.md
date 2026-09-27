@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — the principles below describe the tree as it is; the module specs own behaviour |
-| Version | 0.7.0 |
+| Version | 0.8.0 |
 | Owner | — |
 | Last updated | 2026-09-24 |
 
@@ -40,6 +40,7 @@ module specifications below it do not each restate them.
 | [SPEC-161](SPEC-161-embedding-programmable.md) | Embedding: in-process implementations |
 | [SPEC-162](SPEC-162-embedding-ollama-local.md) | Embedding: local Ollama |
 | [SPEC-163](SPEC-163-embedding-online.md) | Embedding: hosted API |
+| [SPEC-170](SPEC-170-conversation-persistence.md) | Conversation persistence |
 | [SPEC-900](SPEC-900-versioning-and-migration.md) | Versioning and migration |
 | [SPEC-910](SPEC-910-observability-and-slos.md) | Observability and service levels |
 | [SPEC-920](SPEC-920-security-and-compliance.md) | Security and compliance |

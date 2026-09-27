@@ -71,6 +71,13 @@ internal record PersistenceConfig
 
 	/// <summary>SQLite database file name used for manifest and vector tables.</summary>
 	public String DatabaseFileName { get; init; } = "manifest.db";
+
+	/// <summary>
+	/// SQLite database file name used for conversations and agent sessions. A second file beside the
+	/// index, never the same one: an index rebuild drops and repopulates the index schema, and a
+	/// conversation cannot be rebuilt from the folder (SPEC-170).
+	/// </summary>
+	public String ConversationDatabaseFileName { get; init; } = "conversations.db";
 }
 
 /// <summary>Configuration for the AI provider used to service chat requests.</summary>

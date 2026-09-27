@@ -44,7 +44,9 @@ flowchart TB
         conn["FolderDatabaseConnection<br/>foreign_keys, busy_timeout, no shared cache, no pool"]
         blob["Blob vector store<br/>chunk_vector"]
         vec["sqlite-vec store<br/>vec0 per model"]
-        convdb["conversations.db<br/>bootstrapper, ConversationStore"]
+        convboot["ConversationDatabaseBootstrapper<br/>conversations.db, WAL, never the index file"]
+        convhist["SqliteChatHistoryProvider<br/>the framework's history seam; serialized messages as rows"]
+        convsess["SqliteAgentSessionStore<br/>what is left of a session, per agent and conversation"]
     end
 
     subgraph retrieval["Retrieval — SPEC-110"]
@@ -78,9 +80,8 @@ flowchart TB
         console["Console loop<br/>beside the host; exit stops both; redirected or closed stdin does not"]
     end
 
-    subgraph surface["Conversation and HTTP — Phase C, SPEC-170 to write"]
+    subgraph surface["Conversation and HTTP — Phase C, SPEC-170"]
         direction LR
-        turns["TurnRecordingAgent<br/>message capture over the roster"]
         history["GET/DELETE /api/history"]
         status["GET /api/index/status<br/>read-only, bounded failed sample"]
         responses["OpenAI Responses endpoints + DevUI<br/>SQLite conversation storage, loopback only"]
@@ -108,9 +109,12 @@ flowchart TB
     readt & textsearch & about & searchidx & mutate --> facade --> roster --> runner
     provider --> roster
     runner --> batching --> hold
-    runner --> console & turns & responses
-    turns --> convdb
-    history & status --> convdb
+    runner --> console & responses
+    roster -.->|"ChatHistoryProvider on each agent"| convhist
+    runner -.-> convsess
+    history --> convhist
+    status --> store
+    convhist & convsess -.->|"schema nothing writes yet"| convboot
 
     classDef live fill:#1b5e20,stroke:#a5d6a7,color:#ffffff
     classDef defect fill:#8d6e00,stroke:#ffe082,color:#ffffff
@@ -118,9 +122,9 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
-    class convdb,turns,history,status,responses planned
+    class convhist,convsess,history,status,responses planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -184,6 +188,14 @@ composition without a caller.
 | The outbox is pruned at the drain's quiet moment, before the checkpoint so the space it frees is what the checkpoint reclaims: delivered rows older than `DeliveredRetention` (a day; zero keeps everything) go, **failed rows never do** — a failed row is the record that a file is not in the index, and a search quietly not finding it is its only other symptom. Advisory like the checkpoint. The window runs from `created_utc`, the only time the table records, and the page says so; SPEC-121 0.21.0, SPEC-130 0.15.0 | `store`, `indexer` | **Landed** 2026-09-27 |
 | Two places acted on what an earlier read said without checking the folder still agreed, both producing a result indistinguishable from a right one. `ReplaceLines` is positional and its line numbers are a model round-trip old at least — two and another agent under a delegating roster — so it now requires the version the read handed back and refuses when the file has changed, and every writing tool returns the version it wrote so a run of edits still costs one read. `FindFilesAbout` answered purely from the index and so named files already deleted, scored; it drops them and says how many. The intra-call rewrite race stays accepted, and the spec says why a version does not close it; SPEC-101 0.9.0 | `mutate`, `about` | **Landed** 2026-09-27 |
 
+## Phase C ledger — conversation persistence and the HTTP surface
+
+| Item | Block | State |
+|---|---|---|
+| **C5** — provenance framing. Landed 2026-09-27 out of order, because it depended on nothing else in this phase; its row is in the Phase B ledger above, beside the commits it shipped with | `facade` | **Landed** 2026-09-27 |
+| **C2/C3 reshaped before either was built**: a conversation's messages are written by the framework's own `ChatHistoryProvider` seam rather than by a delegating agent of ours projecting turns into rows. The default provider already keeps history inside the session, so our own projection would have been a *second* copy — the messages the model is given, and the messages a person is shown — diverging with nothing failing. What it costs is that the store is on the prompt path, which is why a row holds the serialized `ChatMessage` and the display form is derived on read; SPEC-170 0.2.0 | `convhist` | **Decided** 2026-09-27 |
+| **C1** — the conversation database: its own file beside the index (`conversations.db`), the whole schema owned by one bootstrapper and no store running DDL, WAL set once at creation, ordered before the server listens by the same startup filter as the index bootstrap; `conversation.next_seq` as the sequence allocator with `MAX(seq) + 1` refused by the schema, a message holding the framework's serialized `ChatMessage` and naming the agent that produced it, `session_state` keyed by agent and conversation, and a cascade from a conversation to both. Configuration naming one file for both databases is refused at startup, and the split is asserted as the property it exists for: a conversation survives the index being deleted and rebuilt. Live without a caller on purpose; SPEC-170 0.1.0 written with it, SPEC-130 0.17.0, SPEC-100 0.9.1, SPEC-000 0.8.0 | `convboot` | **Landed** 2026-09-27 |
+
 ## The gap, stated plainly
 
 The indexing side is whole and live: a whole-folder pass at start, then the file-indexing front end
@@ -200,7 +212,13 @@ Provenance framing left the grey on 2026-09-27: a result carrying anything out o
 the model inside an envelope saying it is content and not an instruction, applied in the facade by
 group so no tool can be added that returns folder content unframed.
 
-What remains is grey, and it is Phase C: the HTTP surface and DevUI, the conversation database that
-lets a conversation outlive the process, and the history and status endpoints. Beside them stand two
-measurements the plan names before any default moves — the roster's cost against the single agent, and
-the score-gap fraction from the benchmark — and the tuning they decide.
+The conversation database followed on 2026-09-27, one commit ahead of anything that reads it: its own
+file beside the index, its whole schema owned by one bootstrapper and created before the server listens,
+and configuration naming one file for both databases refused at startup. It is the one block here that is
+live without a caller, deliberately — a store that had to create its schema on first use would do it on
+the request path.
+
+What remains is grey, and it is the rest of Phase C: the history provider that writes a conversation's
+messages, the session store beside it, the HTTP surface and DevUI, and the history and status endpoints.
+Beside them stand two measurements the plan names before any default moves — the roster's cost against
+the single agent, and the score-gap fraction from the benchmark — and the tuning they decide.
