@@ -31,6 +31,19 @@ public sealed record OutboxDispatcherOptions
 
     /// <summary>How long an empty outbox is left before it is looked at again.</summary>
     public TimeSpan PollInterval { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// How long the record of a succeeded delivery is kept before a quiet moment discards it. Failed
+    /// operations are never discarded — they are the record that a file is not in the index — so this bounds
+    /// only the part of the queue that says work arrived.
+    ///
+    /// <para>
+    /// A day, because the window is for a person: long enough that whoever is looking into what a burst did
+    /// still has the rows, short enough that a folder edited for years does not carry one row per edit for
+    /// all of them. <see cref="TimeSpan.Zero"/> turns pruning off and keeps everything.
+    /// </para>
+    /// </summary>
+    public TimeSpan DeliveredRetention { get; init; } = TimeSpan.FromDays(1);
 }
 
 /// <summary>
@@ -194,6 +207,10 @@ public sealed class OutboxDispatcher
                     // operation it would block readers again and again for the same space; on every idle poll
                     // it would run forever against a folder nobody is touching.
                     deliveredSinceQuiet = false;
+
+                    // Prune before the checkpoint, so the rows this drops are space the checkpoint then
+                    // reclaims rather than space the next burst has to wait for.
+                    await PruneQuietlyAsync(cancellationToken).ConfigureAwait(false);
                     await CheckpointQuietlyAsync(cancellationToken).ConfigureAwait(false);
                 }
 
@@ -206,6 +223,39 @@ public sealed class OutboxDispatcher
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Stopping. Anything claimed and not resolved is requeued on the next start.
+        }
+    }
+
+    /// <summary>
+    /// Dropping the record of deliveries that succeeded, at the one moment it is free: nothing is delivering,
+    /// and the rows a burst just retired are the ones worth dropping. Off when the retention window is zero.
+    /// Like the checkpoint, it delivers nothing, so a store that cannot prune must not end the loop.
+    /// </summary>
+    private async Task PruneQuietlyAsync(CancellationToken cancellationToken)
+    {
+        if (_options.DeliveredRetention <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            int pruned = await _store.PruneDeliveredAsync(_options.DeliveredRetention, _time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
+            if (pruned > 0)
+            {
+                _logger.LogDebug("Pruned {Pruned} delivered operations from the outbox.", pruned);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Costs disk until the next quiet moment and nothing else: every row it would have dropped is one
+            // whose work already arrived. Debug for the checkpoint's reason — a queue quietly growing for the
+            // life of a folder has no other symptom.
+            _logger.LogDebug(ex, "Could not prune delivered operations from the outbox; delivery is unaffected.");
         }
     }
 

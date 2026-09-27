@@ -103,6 +103,27 @@ public interface IOutboxStore
     Task MarkAbandonedAsync(long opId, int attempts, string error, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Invited to discard the record of deliveries that succeeded and are older than <paramref name="retention"/>,
+    /// returning how many it discarded. Called at the same quiet moment as <see cref="CheckpointAsync"/> and
+    /// before it, so the space a prune frees is what the checkpoint then reclaims.
+    ///
+    /// <para>
+    /// <strong>Only operations that succeeded.</strong> A delivery abandoned after its attempt limit is the
+    /// record that a file is not in the index, and its one other symptom is a search that quietly does not
+    /// find it — so a failed row is kept however old it is, and it is kept whether or not anyone is looking.
+    /// The retention window exists because a row that just succeeded is still worth reading while someone is
+    /// working out what a burst did.
+    /// </para>
+    ///
+    /// <para>
+    /// Advisory, like the checkpoint: a store that keeps nothing to prune does nothing, and one that cannot
+    /// prune right now may fail without consequence — an outbox carrying rows it no longer needs costs disk,
+    /// never correctness.
+    /// </para>
+    /// </summary>
+    Task<int> PruneDeliveredAsync(TimeSpan retention, DateTimeOffset now, CancellationToken cancellationToken) => Task.FromResult(0);
+
+    /// <summary>
     /// Invited to reclaim what a burst of deliveries left behind — for a database under a write-ahead log,
     /// to fold the log back in. Called only when a drain that delivered work finds the outbox empty, never
     /// per operation and never while idle. Advisory: a store with no such concept does nothing, and one that

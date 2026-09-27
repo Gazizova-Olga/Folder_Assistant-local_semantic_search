@@ -560,6 +560,86 @@ public sealed class OutboxDispatcherTests
 			"nothing that was queued failed to arrive; only the disk reclaim did");
 	}
 
+	/// <summary>
+	/// The prune rides the quiet moment, not the delivery: once when a burst ends, before the checkpoint so
+	/// the space it frees is what the checkpoint reclaims, and never on an idle poll afterwards.
+	/// </summary>
+	[Fact]
+	public async Task A_Burst_Prunes_Once_When_It_Ends_Before_The_Checkpoint_And_Not_While_Idle()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new();
+		long[] ops = [.. Enumerable.Range(0, 5).Select(i => outbox.Enqueue($"file{i}.md", DeliveryKind.Delete))];
+
+		await RunWhile(Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast with { BatchSize = 1 }), async () =>
+		{
+			await Until(() => ops.All(op => outbox.StateOf(op) == OpState.Done) && outbox.PruneCalls > 0);
+
+			// Twenty idle polls' worth of nothing to do.
+			await Task.Delay(200);
+		});
+
+		outbox.PruneCalls.Should().Be(1);
+		outbox.QuietCalls.Should().Equal("prune", "checkpoint");
+		outbox.Prunes.Should().ContainSingle().Which.Retention.Should().Be(TimeSpan.FromDays(1), "the option's default");
+	}
+
+	[Fact]
+	public async Task A_Dispatcher_That_Never_Delivered_Never_Prunes()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new();
+
+		await RunWhile(Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast), () => Task.Delay(200));
+
+		outbox.ClaimCalls.Should().BeGreaterThan(1, "it polled");
+		outbox.PruneCalls.Should().Be(0);
+	}
+
+	/// <summary>A retention of zero is how an operator keeps the whole record: the store is never asked.</summary>
+	[Fact]
+	public async Task A_Zero_Retention_Prunes_Nothing_And_Still_Checkpoints()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new();
+		outbox.Enqueue("first.md", DeliveryKind.Delete);
+
+		await RunWhile(
+			Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast with { DeliveredRetention = TimeSpan.Zero }),
+			() => Until(() => outbox.CheckpointCalls == 1));
+
+		outbox.PruneCalls.Should().Be(0);
+		outbox.CheckpointCalls.Should().Be(1);
+	}
+
+	/// <summary>
+	/// A prune that could not run has cost disk and nothing else — every row it would have dropped is one
+	/// whose work arrived — so the loop every queued file depends on goes on, and the checkpoint behind it
+	/// still happens.
+	/// </summary>
+	[Fact]
+	public async Task A_Prune_That_Could_Not_Run_Does_Not_End_The_Run_Or_Stop_The_Checkpoint()
+	{
+		using TempFolder folder = new();
+		InMemoryOutbox outbox = new() { PrunesFail = true };
+		outbox.Enqueue("first.md", DeliveryKind.Delete);
+		CapturingLogger<OutboxDispatcher> log = new();
+
+		await RunWhile(Dispatcher(folder, outbox, new ScriptedVectorizer(), Fast, logger: log), async () =>
+		{
+			await Until(() => outbox.PruneCalls == 1);
+
+			outbox.Enqueue("second.md", DeliveryKind.Delete);
+			await Until(() => outbox.PruneCalls == 2);
+		});
+
+		outbox.CheckpointCalls.Should().Be(2, "the checkpoint follows a prune that failed");
+		log.At(LogLevel.Debug).Should().NotBeEmpty();
+		log.Lines.Should().OnlyContain(
+			line => line.Level == LogLevel.Debug,
+			"nothing that was queued failed to arrive; only the disk reclaim did");
+	}
+
 	private static readonly OutboxDispatcherOptions Fast = new() { PollInterval = TimeSpan.FromMilliseconds(10) };
 
 	private static OutboxDispatcher Dispatcher(
@@ -644,13 +724,42 @@ public sealed class OutboxDispatcherTests
 
 		public bool CheckpointsFail { get; init; }
 
+		public bool PrunesFail { get; init; }
+
 		public int CheckpointCalls => Volatile.Read(ref _checkpointCalls);
 
+		public int PruneCalls => Volatile.Read(ref _pruneCalls);
+
+		/// <summary>The retention each prune was asked for, and the moment it was asked at.</summary>
+		public List<(TimeSpan Retention, DateTimeOffset Now)> Prunes { get; } = [];
+
+		/// <summary>Pruning happens at the quiet moment; the checkpoint follows it, and the order is asserted.</summary>
+		public List<string> QuietCalls { get; } = [];
+
 		private int _checkpointCalls;
+		private int _pruneCalls;
+
+		public Task<int> PruneDeliveredAsync(TimeSpan retention, DateTimeOffset now, CancellationToken cancellationToken)
+		{
+			Interlocked.Increment(ref _pruneCalls);
+			lock (_gate)
+			{
+				Prunes.Add((retention, now));
+				QuietCalls.Add("prune");
+			}
+
+			return PrunesFail
+				? Task.FromException<int>(new IOException("database is locked"))
+				: Task.FromResult(1);
+		}
 
 		public Task CheckpointAsync(CancellationToken cancellationToken)
 		{
 			Interlocked.Increment(ref _checkpointCalls);
+			lock (_gate)
+			{
+				QuietCalls.Add("checkpoint");
+			}
 
 			return CheckpointsFail
 				? Task.FromException(new IOException("database is locked"))

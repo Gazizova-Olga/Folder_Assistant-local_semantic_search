@@ -380,6 +380,32 @@ internal sealed class FolderIndexStore : IIndexStore, IOutboxStore
 		CancellationToken cancellationToken)
 		=> this.SetOpStatus(opId, Failed, attempts, error);
 
+	/// <summary>
+	/// Discards the rows of deliveries that succeeded and were queued longer ago than
+	/// <paramref name="retention"/>. Nothing else: a <see cref="Failed"/> row is the record that a file
+	/// is not in the index and is kept however old it is, and a <see cref="Pending"/> or
+	/// <see cref="InFlight"/> row is work.
+	///
+	/// <para>
+	/// The window is measured from <c>created_utc</c> — when the operation was <em>queued</em> — because
+	/// that is the only time the table records; there is no completion column. The consequence is worth
+	/// stating rather than hiding: an operation that spent a day being retried and then succeeded is
+	/// eligible immediately, which is the row someone would most want to read. Making the window mean
+	/// "since delivered" costs a column and a migration, and is worth it only if anyone is reading these
+	/// rows for diagnosis in practice.
+	/// </para>
+	/// </summary>
+	public Task<Int32> PruneDeliveredAsync(TimeSpan retention, DateTimeOffset now, CancellationToken cancellationToken)
+	{
+		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(this._databasePath);
+		using SqliteCommand command = connection.CreateCommand();
+
+		command.CommandText = $"DELETE FROM outbox WHERE status = {Done} AND created_utc < $before;";
+		command.Parameters.AddWithValue("$before", Timestamp(now - retention));
+
+		return Task.FromResult(command.ExecuteNonQuery());
+	}
+
 	public Task CheckpointAsync(CancellationToken cancellationToken)
 	{
 		FolderDatabaseMaintenance.Checkpoint(this._databasePath);

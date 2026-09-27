@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.20.1 |
+| Version | 0.21.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-23 |
+| Last updated | 2026-09-27 |
 
 ## Purpose
 
@@ -391,6 +391,27 @@ take it right now may fail without consequence — a checkpoint reclaims disk an
 must not end the loop. What a checkpoint is for, and what it was measured to reclaim, is in
 [SPEC-130](SPEC-130-persistence.md).
 
+**At that same moment, and before the checkpoint, the dispatcher invites the store to discard the record
+of deliveries that succeeded.** Without it the outbox grows one row per change for the life of the
+folder: a queue that only ever accumulates is not a queue, and every scan of it gets slower while
+everything it holds is work that arrived. The rules are the checkpoint's, with two of its own:
+
+- **Only operations that succeeded.** A delivery abandoned after `MaxAttempts` is the record that a file
+  is *not* in the index, and the only other symptom is a search that quietly does not find it, so a
+  failed row is kept however old it is. Pending and in-flight rows are work.
+- **Older than a retention window**, `DeliveredRetention`, one day by default and `TimeSpan.Zero` to keep
+  everything. The window is for a person: whoever is working out what a burst did still has the rows.
+  Measured from when the operation was **queued**, because that is the only time the table records — so
+  an operation that spent a day being retried and then succeeded is eligible at once, which is the row
+  someone would most want to read. Making the window mean *since delivered* costs a column and a
+  migration ([SPEC-130](SPEC-130-persistence.md)) and is worth it only if these rows turn out to be read
+  for diagnosis in practice.
+- **Before the checkpoint**, so the space a prune frees is what the checkpoint then reclaims rather than
+  space the next burst waits for.
+- **Advisory, like the checkpoint.** An outbox carrying rows it no longer needs costs disk, never
+  correctness, so a prune that fails is logged at debug and the loop goes on — and the checkpoint behind
+  it still happens.
+
 ## Writing a file's record: own your columns
 
 Nothing in this library writes back a record it read. A pass states conclusions — added, modified,
@@ -580,7 +601,7 @@ find a file.
   It is recorded, not altered.
 - **Level follows what an operator can act on**, not how alarming the exception looks. A file locked
   during a reconcile pass, a hash that lost to a live writer, a delivery that will be tried again, and
-  a write-ahead-log checkpoint that could not be taken are **debug** — they are the ordinary
+  a write-ahead-log checkpoint or an outbox prune that could not be run are **debug** — they are the ordinary
   consequence of indexing a folder somebody is using, and at any louder level an afternoon of editing
   would bury everything else. A reconcile pass that failed, a change the pipeline dropped, a file
   given up on after its attempt limit, and a drain of the outbox that failed are **warning**. A
@@ -633,7 +654,13 @@ four slots available, and two files are shown to run at once by having each deli
 has started — run one at a time, the first would time out. The checkpoint rule is asserted by counting
 invitations across a real run: one for a burst, none for a dispatcher that never delivered, one more for
 each later burst, none while the store is failing every drain, and deliveries continuing past a
-checkpoint that throws.
+checkpoint that throws. The prune is counted the same way, and the **order** with it: one prune per burst,
+the prune before the checkpoint, none for a dispatcher that never delivered, none at all at a retention of
+zero, and a prune that throws followed by its checkpoint with nothing logged above debug. What a prune
+drops is asserted against the real store instead, which is where it can be: an old delivered row goes, a
+recent one stays, a failed one stays however old, and pending or in-flight work is not a candidate.
+Pruning failures as well as deliveries fails that one test — the row whose absence is a file silently
+missing from every search.
 
 What each loop survives is asserted through a logger that records instead of writing, because the
 survival has no other observable: a pass that failed and a pass with nothing to do leave the same

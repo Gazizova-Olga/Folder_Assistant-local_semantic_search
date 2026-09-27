@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.14.0 |
+| Version | 0.15.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-16 |
+| Last updated | 2026-09-27 |
 
 ## Purpose
 
@@ -150,9 +150,11 @@ from `chunk_manifest` is what enforces it: chunks for an id no row carries are r
   copy of about everything it had written — and **23,798 KB beside 23 MB** under `sqlite-vec`.
   A truncating checkpoint now runs when a whole-folder pass finishes; after it, the same
   measurement reads **0 KB** for both, in two runs. The outbox dispatcher invites one at the
-  other quiet moment — a drain going quiet after delivering work (`SPEC-121`) — which the store
-  takes once one implements the invitation; none does yet, so that half is a contract, not a
-  measurement. Checkpointing anywhere else is **ruled out**: per write it blocks readers
+  other quiet moment — a drain going quiet after delivering work (`SPEC-121`) — and
+  `FolderIndexStore` takes it, through the same statement; that half has no figure of its own,
+  because the burst it follows is one changed file at a time rather than a corpus. Immediately
+  before it the dispatcher asks the same store to drop the rows of deliveries that succeeded, so
+  the checkpoint reclaims that space in the same pass. Checkpointing anywhere else is **ruled out**: per write it blocks readers
   again and again to reclaim the same space, and on an idle poll it would run forever against
   a folder nobody is touching. It is also **advisory** — a checkpoint SQLite cannot take right
   now (a reader still on an older snapshot) reports busy rather than failing, costs disk only,
@@ -274,6 +276,18 @@ would believe it.
 **The outbox is keyed on the path, not on a file record.** An operation has to outlive the thing it
 describes: a deletion is deliverable precisely when the record it came from is gone. Ordering is by
 the row id, which is what lets one file's operations run in the order they were queued.
+
+**Rows for deliveries that succeeded are discarded; rows for deliveries given up on are kept.** The
+dispatcher asks for the prune at the same quiet moment as the checkpoint and before it, and the store's
+statement is one `DELETE` of delivered rows older than the window
+([SPEC-121](SPEC-121-file-indexing-front-end.md) holds the rules and the reasons). Two properties belong
+to this spec:
+
+- **The window is measured from `created_utc`**, because it is the only time the table records. There is
+  no completion column, and adding one is a schema version — worth spending only if these rows turn out
+  to be read for diagnosis, which is not yet known.
+- **A failed row is index state, not queue bookkeeping.** It is the one record that a file the folder
+  holds is not in the index, so nothing ages it out and nothing depends on anyone having read it.
 
 **Schema version 3** stores vectors as packed little-endian `float32` in `chunk_vector.vector`,
 replacing `vector_json TEXT`. **This one is the first real migration**, because an idempotent

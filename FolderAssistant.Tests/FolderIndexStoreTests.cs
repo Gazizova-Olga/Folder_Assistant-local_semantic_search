@@ -314,6 +314,40 @@ public sealed class FolderIndexStoreTests
 		await apply.Should().ThrowAsync<ArgumentException>();
 	}
 
+	/// <summary>
+	/// What a prune drops and what it must not. A delivered row past the window goes; a delivered row
+	/// inside it stays, which is what the window is for; and a row given up on stays however old it is,
+	/// because it is the record that a file is not in the index and a search quietly not finding that file
+	/// is its only other symptom. Work — pending or in flight — is not a candidate at all.
+	/// </summary>
+	[Fact]
+	public async Task A_Prune_Drops_Old_Delivered_Operations_And_Keeps_Failures_Pending_Work_And_Recent_Ones()
+	{
+		using TempFolder folder = new();
+		FolderIndexStore store = StoreIn(folder);
+		DateTimeOffset now = DateTimeOffset.UtcNow;
+
+		await store.ApplyAsync([Added("old-done.md", "h1"), Added("old-failed.md", "h2"), Added("waiting.md", "h3")]);
+		IReadOnlyList<OutboxOp> claimed = await store.ClaimDueAsync(10, now.AddMinutes(1), default);
+		await store.MarkDoneAsync(claimed.Single(op => op.RelativePath == "old-done.md").Id, default);
+		await store.MarkAbandonedAsync(claimed.Single(op => op.RelativePath == "old-failed.md").Id, 10, "model not found", default);
+
+		// The third stays in flight; a fourth is queued now, so it is inside any window.
+		await store.ApplyAsync([Added("new-done.md", "h4")]);
+		OutboxOp fresh = (await store.ClaimDueAsync(10, now.AddMinutes(1), default)).Single(op => op.RelativePath == "new-done.md");
+		await store.MarkDoneAsync(fresh.Id, default);
+
+		// A window that has already passed for everything queued in this test.
+		Int32 pruned = await store.PruneDeliveredAsync(TimeSpan.FromDays(1), now.AddDays(2), default);
+		Int32 again = await store.PruneDeliveredAsync(TimeSpan.FromDays(365), now, default);
+
+		pruned.Should().Be(2, "both delivered rows are past a day");
+		again.Should().Be(0, "nothing is older than a year, and the rest are not delivered");
+		Scalar(folder, "SELECT COUNT(*) FROM outbox").Should().Be(2L);
+		Scalar(folder, "SELECT file_path FROM outbox WHERE status = 3").Should().Be("old-failed.md");
+		Scalar(folder, "SELECT file_path FROM outbox WHERE status = 1").Should().Be("waiting.md");
+	}
+
 	private static ReconciledChange Added(String path, String hash, Int64 size = 12)
 		=> new(path, FileDelta.Added, new FileRecord(path, hash, size, Created));
 

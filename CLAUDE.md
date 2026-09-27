@@ -586,6 +586,15 @@ Rules that bite:
   quiet moments — a whole-folder pass finishing, and the outbox drain going quiet after
   delivering work — and never per write or on an idle poll. Advisory: one that cannot be taken
   costs disk, never correctness.
+- **The outbox keeps what arrived only briefly, and what did not for good.** At the drain's quiet
+  moment, immediately before the checkpoint so the space is reclaimed in the same pass, rows for
+  deliveries that *succeeded* and are older than `DeliveredRetention` (a day; zero keeps
+  everything) are deleted. A **failed** row is never aged out: it is the record that a file the
+  folder holds is not in the index, and a search quietly not finding that file is its only other
+  symptom. Advisory like the checkpoint — a queue that accumulates costs disk, never correctness.
+  The window runs from when the operation was *queued*, the only time the table records, so a
+  delivery retried for a day and then delivered is eligible at once; meaning *since delivered*
+  costs a column and a schema version (`SPEC-130`).
 - Vectors are keyed `(chunk_id, model_version_id)` so multiple embedding models can coexist
   during a migration; exactly one model is active for write. Switching profiles changes the
   active model version; existing vectors are not invalidated, they stop being the active ones.
