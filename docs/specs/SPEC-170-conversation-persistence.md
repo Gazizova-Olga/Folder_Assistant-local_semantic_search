@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| Status | Draft — the database and its bootstrap written and implemented; the history provider and the session store are not built |
-| Version | 0.2.0 |
+| Status | Draft — implemented: the database, the history provider and the session store. The HTTP surface that reads history is not built |
+| Version | 0.3.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-27 |
 
@@ -30,12 +30,13 @@ serialized agent session each turn continues from.
 
 ## Implementation status
 
-**The database exists and is created on every start.** One bootstrapper owns its whole schema, the
-composition root resolves it before the server listens, and nothing else writes DDL. **Nothing reads or
-writes it yet**: sessions still live in `InMemoryAgentSessionStore` for the life of the process
-([SPEC-100](SPEC-100-conversation-orchestration.md)), history still lives inside the session for the
-same span, and no message row is recorded anywhere. The schema is created whole regardless, for the
-reason the index database's is — see *The schema is created whole*.
+**Live.** The database is created before the server listens, by one bootstrapper that owns its whole
+schema; `ConversationStore` is its only writer, serving two seams over one connection policy — the
+messages, through `SqliteChatHistoryProvider` on every agent, and the sessions, behind the
+`IAgentSessionStore` the turn already used ([SPEC-100](SPEC-100-conversation-orchestration.md)). A
+conversation survives a restart, which is asserted as that: a second store and provider over the same
+file continue a conversation the first one wrote. **Not built**: the HTTP surface that would let anyone
+read a conversation back, and any pruning of one.
 
 ## Requirements
 
@@ -106,8 +107,22 @@ never stored.
 contract says as much, and directs per-session state into the `AgentSession`'s state bag. What this
 provider needs is the conversation it is writing for, which is this application's identifier and not the
 framework's: the invocation context carries the agent and the session, and a chat-completions service has
-no conversation id of its own. The turn is what knows it, so the turn is what puts it where the provider
-can read it.
+no conversation id of its own. So **the turn names the conversation on the session** before it runs, under
+one key, and the provider reads it from there. A run with no conversation named — a delegation, which the
+registry runs with no session at all — **reads nothing and writes nothing**, which is what keeps a
+delegate's request out of the conversation that asked for it.
+
+**Two properties of the seam were measured against the framework rather than read from its**
+**documentation**, because the documentation states the first of them two ways:
+
+- **What is handed back for storage is the caller's new messages only** — not the history the provider
+  supplied moments earlier. So a turn appends its request and response messages and each message is
+  stored once. Had it been the accumulated set, the naive write would have re-stored the whole
+  conversation every turn and grown it quadratically, with nothing failing.
+- **With a provider set, the session carries no messages.** The framework's default provider keeps them
+  in the session's state bag; ours keeps them in rows, and what the session then carries is the
+  conversation's name and whatever else a session holds. That is the *one copy* claim, and it is asserted
+  by serializing a session after a turn and finding the question absent from it.
 
 ### Data model
 
@@ -151,6 +166,12 @@ cannot be deserialized — a framework upgrade that no longer reads what the las
 every later turn of its conversation. The messages are unaffected, so what is lost is the rest of the
 session and not the conversation.
 
+**An unreadable message row fails the turn, and that asymmetry is the point.** Skipping it would hand the
+model a conversation with a hole in it, which it would answer as though the missing turn never happened —
+the silently plausible wrong answer this system exists to refuse. The failure names the conversation and
+says the conversation can be deleted to start again, because that is the one action available. Losing a
+session blob costs memory; losing a message changes what was said.
+
 ### Error model
 
 - An invalid path or configuration is an argument error, thrown before anything is opened.
@@ -190,6 +211,12 @@ pointed at one file through different configuration.
 
 ## Open questions
 
+- **Nothing resumes a stored conversation yet, and that is the visible half of what is missing.** The
+  console names a new conversation on its first turn of every run ([SPEC-100](SPEC-100-conversation-orchestration.md)),
+  so what is written is never read back by the application that wrote it — the rows are there, and only a
+  SQLite client can see them. Resuming is the HTTP surface’s to offer, and a front end that resumed the most
+  recent conversation by default would be a decision about what an operator expects, not a missing wire.
+
 - **Whether a conversation is ever pruned.** Nothing ages a conversation out today, and an operator's
   only control is deleting the file. A retention rule needs to know what a conversation costs in
   practice before it can choose a bound, and the index's outbox pruning is the shape to copy when it
@@ -208,6 +235,15 @@ pointed at one file through different configuration.
 
 ## Changelog
 
+- **0.3.0** (2026-09-27) — built: `ConversationStore` as the database's one writer over two seams, the
+  `SqliteChatHistoryProvider` on every agent, and the session store replacing the in-process one behind the
+  seam the turn already used. A conversation now survives a restart. Two properties of the framework's seam
+  were measured rather than assumed — that storage is handed the caller's new messages only, so nothing is
+  stored twice, and that a session with a provider set carries no messages, so the rows are the only copy.
+  The turn names the conversation on the session, since the provider serves every session and can hold none
+  of its own; a run with no conversation named keeps no history, which is what a delegation is. An
+  unreadable message row fails the turn while an unreadable session blob starts a fresh session, and the
+  asymmetry is written down: losing a blob costs memory, losing a message changes what was said.
 - **0.2.0** (2026-09-27) — the framework's `ChatHistoryProvider` is what writes a conversation's messages,
   decided before anything was built on the alternative: a projection of our own would have been a second copy
   of one conversation, diverging from what the model was actually given with nothing failing. So a row holds

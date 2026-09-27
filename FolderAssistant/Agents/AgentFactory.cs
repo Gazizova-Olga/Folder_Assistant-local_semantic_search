@@ -35,7 +35,7 @@ internal static class AgentFactory
 	/// The handle owns the client, so disposing the handle ends the client. Two tools with one name are
 	/// refused: a model told of both could not say which it meant.
 	/// </summary>
-	public static AgentHandle Create(AgentConfig config, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null)
+	public static AgentHandle Create(AgentConfig config, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null, ChatHistoryProvider? history = null)
 	{
 		ArgumentNullException.ThrowIfNull(config);
 
@@ -45,14 +45,15 @@ internal static class AgentFactory
 			config.SystemPrompt,
 			client,
 			tools,
-			loggerFactory);
+			loggerFactory,
+			history: history);
 	}
 
 	/// <summary>
 	/// The same, for a role the roster defines rather than the root configuration. With <paramref name="indexer"/>,
 	/// the agent holds the index's batch for every run (<see cref="BatchHoldingAgent"/>); without one it runs bare.
 	/// </summary>
-	public static AgentHandle Create(String name, String description, String? systemPrompt, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null, IIndexChangeNotifier? indexer = null)
+	public static AgentHandle Create(String name, String description, String? systemPrompt, IChatClient client, IReadOnlyList<AITool> tools, ILoggerFactory? loggerFactory = null, IIndexChangeNotifier? indexer = null, ChatHistoryProvider? history = null)
 	{
 		ArgumentException.ThrowIfNullOrWhiteSpace(name);
 		ArgumentException.ThrowIfNullOrWhiteSpace(description);
@@ -68,10 +69,14 @@ internal static class AgentFactory
 			throw new InvalidOperationException($"Two tools share one name: {String.Join(", ", duplicates)}. A model cannot tell them apart.");
 		}
 
+		// Without a provider the agent keeps its history inside the session, which is the framework's
+		// default and lasts as long as the process holds that session. With one, the history is that
+		// provider's to keep, and the session carries what is left (SPEC-170).
 		ChatClientAgentOptions options = new()
 		{
 			Name = name,
 			Description = description,
+			ChatHistoryProvider = history,
 			ChatOptions = new ChatOptions
 			{
 				Instructions = Instructions(systemPrompt, name, description),

@@ -41,9 +41,8 @@ block its caller:
   file-level search (`SearchTools`), each file holder over its own containment guard
   (`WorkspacePathGuard`) — and the passage search runs retrieval (`IRetrievalQuery`, two backends),
   the passage builder, the screen and the reducer. Every vector written is one a question can read.
-- **Not built** — the HTTP surface, and both writers of the conversation database: the framework's
-  history provider over SQLite, and the session store beside it. The database itself is created on every
-  start and nothing reads or writes it yet. The parts of the architecture below that describe them are
+- **Not built** — the HTTP surface. It is the only thing in Phase C left: a conversation is kept, and the
+  console is the only way to hold one. The parts of the architecture below that describe the surface are
   intent.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
@@ -568,7 +567,7 @@ the host fixture redirects them by default so no test reads the test process's o
 Turns run one at a time here; what two concurrent turns of one conversation should do is the HTTP
 surface's to decide.
 
-### Persistence — index database live, conversation database created and unread
+### Persistence — both databases live
 
 Two SQLite databases in the folder's metadata directory (`.folderassistant/`), and the split is
 deliberate:
@@ -576,19 +575,32 @@ deliberate:
 - **the index** (`manifest.db`) — files, chunks, vectors, the outbox, the embedding model
   registry, the fit artifact;
 - **conversation state** (`conversations.db`, `SPEC-170`) — `conversation`, `message` and
-  `session_state`. The database, its whole schema and its WAL mode exist and are bootstrapped before
-  the server listens, by their own bootstrapper beside the index’s; **nothing writes to it yet**, so
-  sessions and history still live in memory for the life of the process. Configuration naming one file
-  for both databases is refused at startup, because that is the one way the split below can be defeated.
+  `session_state`, bootstrapped before the server listens by their own bootstrapper beside the index’s.
+  `ConversationStore` is its one writer and serves two seams, the way `FolderIndexStore` does over the
+  index. Configuration naming one file for both databases is refused at startup, because that is the one
+  way the split below can be defeated.
 
 **The messages are the framework's, written through the framework's own seam.** A conversation's history
-is stored by a `ChatHistoryProvider` set on each agent, not by a projection of ours over the turn: the
-default provider already keeps history inside the session, so our own copy would have been a second one —
-what the model is given, and what a person is shown, free to diverge with nothing failing. The cost is
-that this store sits on the prompt path, so a `message` row holds the **serialized `ChatMessage`** rather
-than display text — a tool call and its result are messages too — and the display form is derived when it
-is read and never stored. `message.seq` comes from `conversation.next_seq`, advanced by as many numbers as
-the write holds; `MAX(seq) + 1` would have two concurrent turns claim one position.
+is stored by a `ChatHistoryProvider` (`SqliteChatHistoryProvider`) set on each agent, not by a projection
+of ours over the turn: the default provider already keeps history inside the session, so our own copy
+would have been a second one — what the model is given, and what a person is shown, free to diverge with
+nothing failing. **Measured, not assumed:** storage is handed the caller's new messages only, so a turn's
+append stores nothing twice; and with a provider set the session carries no messages, so the rows are the
+only copy.
+
+The cost is that this store sits **on the prompt path**, so a `message` row holds the **serialized
+`ChatMessage`** rather than display text — a tool call and its result are messages too — and the display
+form is derived when it is read and never stored. `message.seq` comes from `conversation.next_seq`,
+advanced by as many numbers as the write holds; `MAX(seq) + 1` would have two concurrent turns claim one
+position. **An unreadable message row fails the turn**, while an unreadable session blob starts a fresh
+session: skipping a message hands the model a conversation with a hole in it, answered as though the
+missing turn never happened, whereas losing a blob costs memory rather than truth.
+
+**The turn names the conversation on the session**, in its state bag, because the provider serves every
+agent and every session and so can hold no conversation of its own — the framework hands it the agent and
+the session and nothing else, and a chat-completions service has no conversation id. A run with no
+conversation named reads nothing and writes nothing, which is what a delegation is: the registry runs a
+delegate with no session, and its request is not part of the caller's conversation.
 
 An index rebuild drops and repopulates the index schema, and conversation history has to
 survive that. They also have opposite access patterns: the index has one writer and many

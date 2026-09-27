@@ -254,6 +254,18 @@ internal sealed class Program
 			return provider => ProviderClientFactory.Create(provider, config.ConnectionTimeout);
 		});
 
+		// The conversation database's one store: the messages a conversation is made of, and the sessions
+		// beside them. It serves the history provider below and the session seam the turn already used.
+		builder.Services.AddSingleton(sp =>
+			new ConversationStore(sp.GetRequiredService<ConversationDatabaseBootstrapResult>().DatabasePath));
+
+		// The framework's history seam over that store, one instance for every agent. Without it an agent
+		// keeps its history inside its session, which is the framework's default and lasts exactly as long
+		// as the process holds the session (SPEC-170).
+		builder.Services.AddSingleton(sp => new SqliteChatHistoryProvider(
+			sp.GetRequiredService<ConversationStore>(),
+			sp.GetService<ILogger<SqliteChatHistoryProvider>>()));
+
 		// The agents themselves, one handle per roster entry over its own client, each holding the running
 		// front end's batch for the whole of every run so a multi-step edit costs the index one pass. Nothing
 		// here connects, and a configuration that cannot name a provider at all fails when the registry is
@@ -263,19 +275,20 @@ internal sealed class Program
 			sp.GetRequiredService<AgentToolCatalog>(),
 			sp.GetRequiredService<Func<ProviderConfig, IChatClient>>(),
 			sp.GetService<ILoggerFactory>(),
-			sp.GetRequiredService<IIndexChangeNotifier>()));
+			sp.GetRequiredService<IIndexChangeNotifier>(),
+			sp.GetRequiredService<SqliteChatHistoryProvider>()));
 
 		builder.Services.AddSingleton(sp => new StaticWorkflowRoute(
 			sp.GetRequiredService<Roster>(),
 			sp.GetRequiredService<AgentRegistry>()));
 
 		// The turn: the coordinator's session loaded, the agent run, the session saved, and the turn's
-		// telemetry recorded inside the execution. Sessions live for the life of the process; the
-		// conversation database is what replaces this store. The runner is what every front end talks to:
-		// the console below today, an HTTP surface when it exists.
+		// telemetry recorded inside the execution. Sessions are in the conversation database, so a
+		// conversation outlives the process. The runner is what every front end talks to: the console below
+		// today, an HTTP surface when it exists.
 		builder.Services.AddSingleton<ITurnTelemetry, LoggerTurnTelemetry>();
 		builder.Services.AddSingleton(new ProviderErrorDescriber(TimeProvider.System));
-		builder.Services.AddSingleton<IAgentSessionStore, InMemoryAgentSessionStore>();
+		builder.Services.AddSingleton<IAgentSessionStore>(sp => sp.GetRequiredService<ConversationStore>());
 		builder.Services.AddSingleton<IAgentExecution, MicrosoftAgentExecution>();
 		builder.Services.AddSingleton<WorkflowRunner>();
 

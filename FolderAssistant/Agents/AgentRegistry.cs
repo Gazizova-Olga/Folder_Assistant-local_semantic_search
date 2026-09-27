@@ -36,7 +36,8 @@ internal sealed partial class AgentRegistry : IDisposable
 	/// <param name="clients">Builds a chat client for an agent's effective provider.</param>
 	/// <param name="loggerFactory">Optional; the delegation facades and the agents log through it.</param>
 	/// <param name="indexer">Optional; with it every agent holds the index's batch for the whole of each run.</param>
-	public AgentRegistry(Roster roster, AgentToolCatalog catalog, Func<ProviderConfig, IChatClient> clients, ILoggerFactory? loggerFactory = null, IIndexChangeNotifier? indexer = null)
+	/// <param name="history">Optional; with it every agent keeps its conversation's messages there instead of in its session.</param>
+	public AgentRegistry(Roster roster, AgentToolCatalog catalog, Func<ProviderConfig, IChatClient> clients, ILoggerFactory? loggerFactory = null, IIndexChangeNotifier? indexer = null, ChatHistoryProvider? history = null)
 	{
 		ArgumentNullException.ThrowIfNull(roster);
 		ArgumentNullException.ThrowIfNull(catalog);
@@ -53,6 +54,8 @@ internal sealed partial class AgentRegistry : IDisposable
 					.. definition.Delegates.Select(target => new ToolFacade(this.DelegationTo(roster[target]), ToolGroup.Delegation, logger)),
 				];
 
+				// Every agent gets the same provider instance: it holds no session state of its own, and which
+				// conversation a run belongs to comes from the session it is handed (SPEC-170).
 				AgentHandle handle = AgentFactory.Create(
 					definition.Name,
 					definition.Description,
@@ -60,7 +63,8 @@ internal sealed partial class AgentRegistry : IDisposable
 					clients(definition.Provider),
 					tools,
 					loggerFactory,
-					indexer);
+					indexer,
+					history);
 
 				this._handles.Add(definition.Name, handle);
 				this._inOrder.Add(handle);

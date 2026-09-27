@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution, the runner and the console written and implemented; durable session persistence and the HTTP surface not |
-| Version | 0.9.1 |
+| Version | 0.10.0 |
 | Owner | Agents |
 | Last updated | 2026-09-27 |
 
@@ -33,10 +33,9 @@ Built: the composition root, the agent factory that makes one agent from a role,
 facade that hand the tool holders' methods to it, the roster — which agents exist, what each may call
 and delegate to, and which one every turn enters — the turn itself, behind the interface every front
 end talks to, and the console, the first front end, so the running application runs a turn for every
-line typed at it. Not built: the HTTP surface; and durable session persistence — the conversation
-database exists and is bootstrapped before the server listens
-([SPEC-170](SPEC-170-conversation-persistence.md)), and nothing reads or writes it yet, so a
-conversation still lives as long as the process.
+line typed at it, and a conversation outlives the process: its messages and the coordinator's session are
+in the conversation database ([SPEC-170](SPEC-170-conversation-persistence.md)). Not built: the HTTP
+surface, which is what would let anyone read a conversation back.
 
 ### Configuration is bound lazily
 
@@ -288,10 +287,15 @@ only sometimes would be a second thing to reason about.
 
 - **The session is stored serialized, keyed by agent *and* conversation** (`IAgentSessionStore`). Two
   agents serving one conversation hold two sessions, and a key of the conversation alone would have
-  each overwrite the other's. The store today is `InMemoryAgentSessionStore`: sessions live as long as
-  the process and nothing bounds their number. The conversation database
-  ([SPEC-170](SPEC-170-conversation-persistence.md)) exists to replace it behind this same seam, and its
-  `session_state` table is keyed the same way for the same reason; the store that writes it is not built.
+  each overwrite the other's. The store is `ConversationStore` over the conversation database
+  ([SPEC-170](SPEC-170-conversation-persistence.md)), whose `session_state` table is keyed the same way for
+  the same reason, so a session survives the process. Nothing bounds how many are kept.
+- **The turn names the conversation on the session it is about to run**, in the session's state bag, under
+  one key. It is the only thing that knows: the history provider that keeps a conversation's messages
+  serves every agent and every session and so can hold no conversation of its own, and the framework hands
+  it the agent and the session and nothing else. A run with no conversation named keeps no history, which
+  is what a delegation is — the registry runs a delegate with no session, and its request is not part of
+  the caller's conversation.
 - **A failed turn saves nothing.** The store holds the serialized form, not the live object, so a
   turn that fails — or is cancelled, or abandoned — leaves the conversation exactly as its last good
   turn left it.
@@ -680,6 +684,10 @@ conversation, which the console cannot cause.
 
 ## Changelog
 
+- **0.10.0** (2026-09-27) — a conversation outlives the process: the session store behind the existing seam
+  is the conversation database's (SPEC-170), and the turn names the conversation on the session it runs, so
+  the history provider that serves every agent can tell which conversation a run belongs to. A run with no
+  conversation named keeps no history, which is what a delegation already was.
 - **0.9.1** (2026-09-27) — status only: the conversation database exists and is bootstrapped before the
   server listens (SPEC-170), and the session store seam is unchanged and still in-process. Nothing here
   behaves differently.

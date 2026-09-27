@@ -214,7 +214,28 @@ internal sealed class MicrosoftAgentExecution : IAgentExecution
 		}
 	}
 
+	/// <summary>
+	/// The coordinator's session for this conversation, with the conversation named on it.
+	///
+	/// <para>
+	/// The name is what a history provider has to go on. One provider instance serves every agent and every
+	/// session, so it cannot hold a conversation of its own, and the framework hands it only the agent and
+	/// the session; a chat-completions service has no conversation identifier to offer. So the turn — the
+	/// one thing that knows which conversation it is — writes it into the session's state bag, which is
+	/// where the framework says session-scoped state belongs (<c>SPEC-170</c>). Stamped on a fresh session
+	/// and on a restored one alike, because a restored one may predate this rule.
+	/// </para>
+	/// </summary>
 	private async Task<AgentSession> LoadSessionAsync(AgentHandle handle, String conversationId, CancellationToken cancellationToken)
+	{
+		AgentSession session = await this.RestoreOrCreateAsync(handle, conversationId, cancellationToken).ConfigureAwait(false);
+
+		SqliteChatHistoryProvider.Remember(session, conversationId);
+
+		return session;
+	}
+
+	private async Task<AgentSession> RestoreOrCreateAsync(AgentHandle handle, String conversationId, CancellationToken cancellationToken)
 	{
 		JsonElement? saved = await this._sessions.LoadAsync(handle.Name, conversationId, cancellationToken).ConfigureAwait(false);
 		if (saved is null)
@@ -230,7 +251,8 @@ internal sealed class MicrosoftAgentExecution : IAgentExecution
 		{
 			// A session that cannot be read starts the conversation's memory again rather than ending every
 			// later turn of it: the blob is the framework's format, and a framework upgrade may not read
-			// what the last one wrote.
+			// what the last one wrote. With a history provider writing the messages, what is lost here is
+			// the rest of the session and not the conversation, which is what makes this affordable.
 			this._logger.LogWarning(
 				exception,
 				"The saved session of agent {Agent} for conversation {ConversationId} could not be read; the turn starts a fresh one.",

@@ -110,11 +110,11 @@ flowchart TB
     provider --> roster
     runner --> batching --> hold
     runner --> console & responses
-    roster -.->|"ChatHistoryProvider on each agent"| convhist
-    runner -.-> convsess
+    roster -->|"ChatHistoryProvider on each agent"| convhist
+    runner --> convsess
     history --> convhist
     status --> store
-    convhist & convsess -.->|"schema nothing writes yet"| convboot
+    convhist & convsess --> convboot
 
     classDef live fill:#1b5e20,stroke:#a5d6a7,color:#ffffff
     classDef defect fill:#8d6e00,stroke:#ffe082,color:#ffffff
@@ -122,9 +122,9 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,conn,blob,vec,rtel,extract live
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,convhist,convsess,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
-    class convhist,convsess,history,status,responses planned
+    class history,status,responses planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -194,6 +194,7 @@ composition without a caller.
 |---|---|---|
 | **C5** — provenance framing. Landed 2026-09-27 out of order, because it depended on nothing else in this phase; its row is in the Phase B ledger above, beside the commits it shipped with | `facade` | **Landed** 2026-09-27 |
 | **C2/C3 reshaped before either was built**: a conversation's messages are written by the framework's own `ChatHistoryProvider` seam rather than by a delegating agent of ours projecting turns into rows. The default provider already keeps history inside the session, so our own projection would have been a *second* copy — the messages the model is given, and the messages a person is shown — diverging with nothing failing. What it costs is that the store is on the prompt path, which is why a row holds the serialized `ChatMessage` and the display form is derived on read; SPEC-170 0.2.0 | `convhist` | **Decided** 2026-09-27 |
+| **C2** — a conversation outlives the process: `ConversationStore` as the database's one writer over two seams, `SqliteChatHistoryProvider` set on every agent the registry builds, and the session store replacing the in-process one behind the seam the turn already used. The turn names the conversation on the session, because the provider serves every session and can hold none of its own; a run with no conversation named — a delegation — keeps no history. Two framework properties measured rather than assumed: storage is handed the caller's new messages only, so nothing is stored twice, and a session with a provider set carries no messages, so the rows are the only copy. An unreadable message row fails the turn while an unreadable session blob starts a fresh one, and the asymmetry is written down; SPEC-170 0.3.0, SPEC-100 0.10.0 | `convhist`, `convsess` | **Landed** 2026-09-27 |
 | **C1** — the conversation database: its own file beside the index (`conversations.db`), the whole schema owned by one bootstrapper and no store running DDL, WAL set once at creation, ordered before the server listens by the same startup filter as the index bootstrap; `conversation.next_seq` as the sequence allocator with `MAX(seq) + 1` refused by the schema, a message holding the framework's serialized `ChatMessage` and naming the agent that produced it, `session_state` keyed by agent and conversation, and a cascade from a conversation to both. Configuration naming one file for both databases is refused at startup, and the split is asserted as the property it exists for: a conversation survives the index being deleted and rebuilt. Live without a caller on purpose; SPEC-170 0.1.0 written with it, SPEC-130 0.17.0, SPEC-100 0.9.1, SPEC-000 0.8.0 | `convboot` | **Landed** 2026-09-27 |
 
 ## The gap, stated plainly
@@ -212,13 +213,14 @@ Provenance framing left the grey on 2026-09-27: a result carrying anything out o
 the model inside an envelope saying it is content and not an instruction, applied in the facade by
 group so no tool can be added that returns folder content unframed.
 
-The conversation database followed on 2026-09-27, one commit ahead of anything that reads it: its own
-file beside the index, its whole schema owned by one bootstrapper and created before the server listens,
-and configuration naming one file for both databases refused at startup. It is the one block here that is
-live without a caller, deliberately — a store that had to create its schema on first use would do it on
-the request path.
+The conversation database followed on 2026-09-27: its own file beside the index, its whole schema owned by
+one bootstrapper and created before the server listens, and configuration naming one file for both
+databases refused at startup. Its writers landed in the next commit, so **a conversation now outlives the
+process** — the messages through the framework's own history seam, the coordinator's session behind the
+seam the turn already used, and the turn naming the conversation on the session so the provider knows
+which one a run belongs to.
 
-What remains is grey, and it is the rest of Phase C: the history provider that writes a conversation's
-messages, the session store beside it, the HTTP surface and DevUI, and the history and status endpoints.
+What remains is grey, and it is the front of Phase C rather than its back: the HTTP surface and DevUI, and
+the history and status endpoints — so a conversation is kept and nothing but the console can read one.
 Beside them stand two measurements the plan names before any default moves — the roster's cost against
 the single agent, and the score-gap fraction from the benchmark — and the tuning they decide.

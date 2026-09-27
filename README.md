@@ -119,10 +119,9 @@ colour-coded. The third state, built but not yet reachable, held most of the age
 
 **Not built**
 
-- The HTTP surface, and the two writers of the conversation database: the framework’s history
-  provider over SQLite, which keeps a conversation’s messages, and the session store beside it. The
-  database itself — its own file next to the index, with the whole schema a turn will need — is created
-  before the server listens, and nothing writes to it yet.
+- The HTTP surface. A conversation is kept now — its messages and the agent's session are written to a
+  second SQLite database beside the index, so it survives a restart — but the console is the only way to
+  hold one, and nothing can read a conversation back.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits, ask
 it questions at the console and read the telemetry**. A conversation lasts as long as the process,
@@ -236,11 +235,11 @@ flowchart TB
     provider --> roster
     runner --> batching --> hold
     runner --> console & responses
-    roster -.->|"ChatHistoryProvider on each agent"| convhist
-    runner -.-> convsess
+    roster -->|"ChatHistoryProvider on each agent"| convhist
+    runner --> convsess
     history --> convhist
     status --> store
-    convhist & convsess -.->|"schema nothing writes yet"| convboot
+    convhist & convsess --> convboot
 
     classDef live fill:#1b5e20,stroke:#a5d6a7,color:#ffffff
     classDef defect fill:#8d6e00,stroke:#ffe082,color:#ffffff
@@ -248,9 +247,9 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,conn,blob,vec,rtel,extract live
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,convhist,convsess,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
-    class convhist,convsess,history,status,responses planned
+    class history,status,responses planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

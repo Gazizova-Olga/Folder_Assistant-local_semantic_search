@@ -280,6 +280,22 @@ public sealed class HostStartupTests
 			.Count(vector => chunkIds.Contains(vector.ChunkId));
 	}
 
+	private static Int64 StoredMessages(String databasePath, String conversationId)
+		=> ConversationScalar(databasePath, "SELECT COUNT(*) FROM message WHERE conversation_id = $conversation;", conversationId);
+
+	private static Int64 StoredSessions(String databasePath, String conversationId)
+		=> ConversationScalar(databasePath, "SELECT COUNT(*) FROM session_state WHERE conversation_id = $conversation;", conversationId);
+
+	private static Int64 ConversationScalar(String databasePath, String sql, String conversationId)
+	{
+		using Microsoft.Data.Sqlite.SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
+		using Microsoft.Data.Sqlite.SqliteCommand command = connection.CreateCommand();
+		command.CommandText = sql;
+		command.Parameters.AddWithValue("$conversation", conversationId);
+
+		return (Int64)command.ExecuteScalar()!;
+	}
+
 	private static async Task WaitFor(Func<Boolean> condition, String what)
 	{
 		DateTime deadline = DateTime.UtcNow.AddSeconds(20);
@@ -472,6 +488,45 @@ public sealed class HostStartupTests
 		toolResult.Should().Contain("alpha beta gamma delta epsilon zeta").And.Contain("notes.md");
 		afterFirstTurn.Should().Be(1);
 		retrievals.Calls.Should().HaveCount(2);
+	}
+
+	/// <summary>
+	/// A conversation reaches the database through the real root, and the turn is what names it.
+	///
+	/// <para>
+	/// The history provider holds no conversation of its own — one instance serves every agent — so it reads
+	/// the conversation from the session's state bag, and only the turn knows what to put there. Nothing else
+	/// covers that stamping: the provider's own tests name the conversation themselves, so they would pass
+	/// with the turn's stamping removed. This one would not (SPEC-170).
+	/// </para>
+	/// </summary>
+	[Fact]
+	public async Task A_Turns_Messages_Reach_The_Conversation_Database_And_The_Next_Turn_Is_Sent_Them()
+	{
+		using TempFolder folder = new();
+		ScriptedChatClient model = new(ScriptedChatClient.Text("a list"), ScriptedChatClient.Text("three items"));
+		using HostFixture host = new(folder, InProcessProfile)
+		{
+			TestServices = services => services.AddSingleton<Func<ProviderConfig, IChatClient>>(_ => _ => model),
+		};
+
+		using HttpClient client = host.CreateClient();
+		await client.GetAsync("/");
+		WorkflowRunner runner = host.Services.GetRequiredService<WorkflowRunner>();
+
+		ChatResponse first = await runner.GetResponseAsync([new ChatMessage(ChatRole.User, "what is in the notes?")]);
+		await runner.GetResponseAsync(
+			[new ChatMessage(ChatRole.User, "how long is it?")],
+			new ChatOptions { ConversationId = first.ConversationId });
+
+		// What the model was sent on the second turn is the first turn's messages, then the new question.
+		model.Calls[1].Messages.Select(static message => message.Text)
+			.Should().Equal("what is in the notes?", "a list", "how long is it?");
+
+		// And they are rows in the conversation database, under the conversation the runner named.
+		String databasePath = folder.Combine(".folderassistant", "conversations.db");
+		StoredMessages(databasePath, first.ConversationId!).Should().Be(4, "two turns, each a question and an answer");
+		StoredSessions(databasePath, first.ConversationId!).Should().Be(1, "one agent served this conversation");
 	}
 
 	/// <summary>
