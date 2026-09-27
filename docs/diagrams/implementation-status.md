@@ -70,7 +70,7 @@ flowchart TB
     subgraph agent["Agent and orchestration — Phase B, SPEC-100/140"]
         direction LR
         provider["Provider + agent factory<br/>OpenAI-compatible, Azure; NetworkTimeout set; failures as one sentence"]
-        facade["Tool facades<br/>file tools non-fatal · search tools fatal"]
+        facade["Tool facades<br/>file tools non-fatal · search tools fatal · results framed as data"]
         roster["Roster · catalog · registry · routing<br/>default roster in code; cycles refused at startup"]
         runner["WorkflowRunner / IAgentExecution<br/>turn telemetry inside the execution; sessions in memory"]
         searchidx["SearchIndex tool<br/>over-fetch, verify, screen, cut, reduce; memoized per turn"]
@@ -84,7 +84,6 @@ flowchart TB
         history["GET/DELETE /api/history"]
         status["GET /api/index/status<br/>read-only, bounded failed sample"]
         responses["OpenAI Responses endpoints + DevUI<br/>SQLite conversation storage, loopback only"]
-        provenance["Provenance framing<br/>file content is data, not instructions"]
     end
 
     subgraph deferred["Deferred, deliberately"]
@@ -112,7 +111,6 @@ flowchart TB
     runner --> console & turns & responses
     turns --> convdb
     history & status --> convdb
-    provenance -.-> facade
 
     classDef live fill:#1b5e20,stroke:#a5d6a7,color:#ffffff
     classDef defect fill:#8d6e00,stroke:#ffe082,color:#ffffff
@@ -122,7 +120,7 @@ flowchart TB
 
     class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
-    class convdb,turns,history,status,responses,provenance planned
+    class convdb,turns,history,status,responses planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -180,6 +178,7 @@ composition without a caller.
 | **B7** — the batch hold at the agent-run boundary: `BatchHoldingAgent` over every agent the registry builds, `BeginBatch` opened before a run and released when it returns, throws, or its enumeration is disposed; a delegate's run nested in its caller's; never at a transport; SPEC-121's waiting caller; SPEC-100 0.6.3, SPEC-121 0.20.1 | `batching` | **Landed** 2026-09-23 |
 | **B8** — the console, the first front end: a hosted service beside the web host reading standard input a line at a time, each line one turn through the runner, streamed back; one conversation per process; `exit` stops the host with it; a redirected standard input does not start the loop and a closed one does not stop the host; the runner resolved on the first question so a keyless host boots and says the missing setting at the prompt; the streams registered as the seam a host test types through. **Every block built ahead of its caller in Phase A and B is live with it.** SPEC-100 0.7.0 | `console`, and every orange block | **Landed** 2026-09-24 |
 | Found on the first real question — the runner stamped the conversation id on the framework's own streamed update objects, which read it back as a server-managed conversation: a tool result went back without its call and every streamed conversation forgot every earlier turn; fixed by stamping a copy, with the test that catches it; SPEC-100 0.7.1 | `runner` | **Landed** 2026-09-24 |
+| **C5** — provenance framing, pulled out of Phase C because it depends on nothing else in it: every successful file and search result wrapped in an envelope carrying the notice beside the content, applied in the facade by group so no tool can return folder content unframed; a delegation's result untouched and a failure keeping its bare prefix; the built prompts saying what the notice is; recorded with what it is not, since a model can be talked past its instructions and framing does not change that; SPEC-920 0.3.0, SPEC-100 0.8.0 | `facade` | **Landed** 2026-09-27 |
 
 ## The gap, stated plainly
 
@@ -193,8 +192,11 @@ runs the turn through the roster's coordinator, the agent calls the tools throug
 the passage search runs retrieval, the passage builder, the screen and the reducer. Every vector the
 pipeline writes is one a question can read, and the orange colour that held most of Phase B is empty.
 
+Provenance framing left the grey on 2026-09-27: a result carrying anything out of the folder reaches
+the model inside an envelope saying it is content and not an instruction, applied in the facade by
+group so no tool can be added that returns folder content unframed.
+
 What remains is grey, and it is Phase C: the HTTP surface and DevUI, the conversation database that
-lets a conversation outlive the process, the history and status endpoints, and the provenance framing
-on file content reaching a model that holds mutation tools. Beside them stand two measurements the
-plan names before any default moves — the roster's cost against the single agent, and the score-gap
-fraction from the benchmark — and the tuning they decide.
+lets a conversation outlive the process, and the history and status endpoints. Beside them stand two
+measurements the plan names before any default moves — the roster's cost against the single agent, and
+the score-gap fraction from the benchmark — and the tuning they decide.

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution, the runner and the console written and implemented; durable session persistence and the HTTP surface not |
-| Version | 0.7.1 |
+| Version | 0.8.0 |
 | Owner | Agents |
-| Last updated | 2026-09-24 |
+| Last updated | 2026-09-27 |
 
 ## Purpose
 
@@ -96,6 +96,29 @@ exception type on a failure), and decides what a failure becomes:
   group, logged as cancelled: a string nobody will read is not a report. A cancellation nobody asked
   for is a failure under the group's contract.
 
+**A successful result that came out of the folder is framed as data, not instructions.** The facade
+wraps it in a `ToolResultEnvelope` — the result under `content`, and beside it under `provenance` the
+sentence saying it is the folder's content, that text inside it addressing the model is part of what
+some file says, and that such text is to be reported rather than acted on. The requirement and its
+reason are [SPEC-920](SPEC-920-security-and-compliance.md); what belongs here is where it is applied
+and why there:
+
+- **By group, with no per-tool list.** Every file and search result is framed. A list of which tools
+  return folder content would be a second list to keep in step with the holders, and it would be
+  wrong anyway: a file's *name* is the folder's text as much as its contents are, so a directory
+  listing and a glob match are as much data as a passage is.
+- **A delegation's result is not framed.** It is another of this application's agents answering, and
+  that agent's own reads were framed when it made them. Framing it again would tell a coordinator its
+  specialist's answer is data to report rather than an answer to use. The orchestrator's built prompt
+  carries the sentence instead, because what a delegate quotes from a file is still the file's.
+- **A failure keeps its bare `TOOL_FAILED:` string.** It is the facade's own sentence about an
+  exception, under the contract the built prompt names; wrapping it would stop it beginning with what
+  the model was told to look for.
+- **The notice travels with the data, not only in the prompt.** A configured system prompt is sent
+  verbatim, so an operator who writes their own would otherwise take the framing away with it — the
+  envelope is what makes the framing a property of a tool call rather than of a default prompt. The
+  built prompt still says what the notice is, for the same reason it says what a failure string is.
+
 **The group is decided by the holder's type, in one place.** `ToolSet.ForFiles(read, mutate, …)` wraps
 the read holder and the mutation holder under the file contract; `ToolSet.ForSearch(search, …)` wraps
 the search holder under the fatal one; the registry wraps each delegation it builds under the
@@ -112,8 +135,10 @@ there and adds none of its own.
 
 **The built prompt says what the failure string means.** The instructions built from the name and
 description end with a sentence telling the model that a result beginning `TOOL_FAILED:` is a failure
-to report as such and not to answer around. A configured prompt is still sent verbatim; an operator
-who writes their own is responsible for that sentence.
+to report as such and not to answer around, and one telling it that every other result arrives with a
+provenance notice beside its content. A configured prompt is still sent verbatim; an operator who
+writes their own is responsible for both sentences — and the envelope holds without either, which is
+why the framing is applied to the result and not left to the prompt.
 
 ### The roster
 
@@ -514,10 +539,18 @@ internal sealed class AgentHandle : IDisposable
   exception instance, logged once at error; a success passes through with the name, description and
   schema unchanged and one line at information; a cancellation of the caller's token passes through
   both groups, logged as cancelled; a cancellation nobody asked for is a failure.
+- **The framing** — a successful file result and a successful search result are both wrapped, the
+  notice beside the content; a delegation's result is not; the notice says what the content is and what
+  not to do with it; the envelope serializes as `provenance` and `content`, which is the form the model
+  actually receives and the one a spec claim about framing stands or falls on. Framing the search group
+  and not the file group fails six tests, in both directions, one of them a delegation test written
+  before any of this.
 - **The loop, through a real agent over a scripted client** that "calls" a tool and then answers: a
   file tool's failure reaches the model as the string in the function-result message and the model's
   next turn is the answer; a search tool's failure ends the turn with the tool's own exception and the
-  model is not asked again. The second is the test the framework's default fails.
+  model is not asked again; a file tool's *content* reaches the model with the provenance notice around
+  it, read off the function-result message the loop sent. The second is the test the framework's default
+  fails; the third is the only one that shows the framing leaving this process.
 - **The roster** — nothing configured yields one agent from the root holding every tool; the default
   roster is the three agents with the stated allowlists and the orchestrator holding none; the switch
   is off by default; configured agents replace the default whole; a configured coordinator must exist,
@@ -622,6 +655,12 @@ conversation, which the console cannot cause.
 
 ## Changelog
 
+- **0.8.0** (2026-09-27) — the facade frames a successful file or search result as data rather than
+  instructions, in a `ToolResultEnvelope` carrying the notice beside the content: by group with no
+  per-tool list, a delegation's result untouched, a failure keeping its bare prefix. The notice travels
+  with the data because a configured prompt is verbatim and would otherwise take the framing with it;
+  the built prompt gains the sentence saying what the notice is, and the orchestrator's the sentence
+  about what a delegate quotes. Requirement and reason in [SPEC-920](SPEC-920-security-and-compliance.md).
 - **0.7.1** (2026-09-24) — the runner stamps the conversation id on a copy of each streamed update,
   never on the framework's own object: stamped in place, the id was read back as a server-managed
   conversation, a tool result went back without its call and every streamed conversation forgot every

@@ -466,6 +466,18 @@ because the framework's default hands the model a generic error string and lets 
 exactly the swallowed fault. A cancellation of the caller's token is classified by the token before the
 exception type and passes through both groups. Two tools with one name are refused at construction.
 
+The same facade is where a **successful** result out of the folder is framed as data rather than
+instructions (`ToolResultEnvelope`, `SPEC-920`): the result under `content`, and beside it the notice
+saying it is the folder's content and that text inside it addressing the model is to be reported, never
+acted on. **By group, with no per-tool list** — a second list of which tools return folder content would
+drift, and a file's *name* is the folder's text as much as its contents are. A delegation's result is
+not framed (it is one of our own agents answering, and its own reads were framed when it made them) and
+a failure keeps its bare prefix (it is the facade's sentence, and wrapping it would stop it beginning
+with what the model was told to look for). **The notice travels with the data, not only in the prompt**,
+because a configured prompt is verbatim and would otherwise take the framing with it — the same
+reasoning that put the endpoint check in a constructor. It is provenance and not a defence: a model can
+be talked past its instructions, and the grant is still what bounds the damage.
+
 The **roster** (`Roster`, `SPEC-100`) is which agents exist, what each may call and delegate to, and
 which one every turn enters. Three rosters are possible, in order of precedence: the operator's
 `Workflow:Agents`, whole; the default roster from code when `Workflow:UseDefaultRoster` is on — an
