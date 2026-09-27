@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — the composition root, the agent factory, the tool reflection and facade, the roster, the catalog, the registry, the route, the turn execution, the runner and the console written and implemented; durable session persistence and the HTTP surface not |
-| Version | 0.8.0 |
+| Version | 0.9.0 |
 | Owner | Agents |
 | Last updated | 2026-09-27 |
 
@@ -156,7 +156,22 @@ are possible, and they take precedence in this order:
    `mutator` holding `ReadFile`, `Retrieve`, `Create`, `Update`, `ReplaceLines` and `Delete`. The split
    is the point: which agent can change the folder is one line here.
 3. **One agent from the root configuration** otherwise — `AgentName`, `AgentDescription` and
-   `SystemPrompt` with the factory's defaults — holding every tool the catalog has.
+   `SystemPrompt` with the factory's defaults — holding `InspectDirectory`, `ReadFile`, `Retrieve`,
+   `FindFiles`, `SearchText`, `SearchIndex` and `FindFilesAbout`: every tool that reads or searches the
+   folder, and none that changes it.
+
+**No roster grants a mutation tool unless it was asked for.** Nothing bounds a mutation once the model
+holds the tool — there is no approval gate ([SPEC-920](SPEC-920-security-and-compliance.md)) — so the
+ability to change the folder is something an operator names, in `Workflow:Agents` or by turning the
+default roster on. The absence of configuration must not confer it: whoever is running with no roster
+at all is whoever has not read this yet.
+
+**The read-only grant is one list, named in code**, shared by the reader in the default roster and the
+single agent in the root one, so "which tools cannot change the folder" has a single answer rather than
+two that drift. It is a named allowlist like any other and validated against the catalog, so a tool
+renamed out from under it stops the host naming it rather than silently narrowing the grant; a test
+holds the list to the read and search holders' reflected methods **in both directions**, because a list
+checked one way still passes while a new mutation tool is quietly granted.
 
 **The default roster lives in code, never in `appsettings.json`.** Configuration arrays merge by
 index, so a roster shipped in that file would be merged *into* an operator's own entries rather than
@@ -167,6 +182,11 @@ through it costs at least two model round-trips and the specialist sees no histo
 coordinator should hold the read tools itself, or the single agent stays the default and the roster
 the opt-in, is decided with numbers once a turn can be run (plan §5.2 item 6); until then the switch
 exists and its default is the unmeasured side's opposite.
+
+**That measurement is not what decides the mutation grant, and the two were once confused.** The
+round-trip cost is a property of *delegation*; the grant is a property of *which names an agent holds*.
+A single agent holding the read-only list costs exactly what a single agent holding everything cost, so
+the safer default was taken without waiting for the number.
 
 **An entry inherits the root provider for every field it does not declare, and never its role.**
 `Provider` on an entry is a set of nullable overrides — type, endpoint, key, deployment, temperature,
@@ -551,7 +571,10 @@ internal sealed class AgentHandle : IDisposable
   model is not asked again; a file tool's *content* reaches the model with the provenance notice around
   it, read off the function-result message the loop sent. The second is the test the framework's default
   fails; the third is the only one that shows the framing leaving this process.
-- **The roster** — nothing configured yields one agent from the root holding every tool; the default
+- **The roster** — nothing configured yields one agent from the root holding the read and search tools
+  and no mutation, asserted against the read, search and mutation holders' own reflected names in both
+  directions and again through the real host; a mutation tool is granted under `Workflow:Agents` and
+  under `UseDefaultRoster` and under neither absent; the default
   roster is the three agents with the stated allowlists and the orchestrator holding none; the switch
   is off by default; configured agents replace the default whole; a configured coordinator must exist,
   a roster of one routes to it, several without one are refused; a repeated name, a blank name and a
@@ -655,6 +678,12 @@ conversation, which the console cannot cause.
 
 ## Changelog
 
+- **0.9.0** (2026-09-27) — the single agent the root configuration yields holds the read and search
+  tools and no mutation: nothing bounds a mutation once a model holds the tool, so the ability to change
+  the folder is granted by asking, never by leaving the configuration alone. One named read-only list
+  shared with the default roster's reader, validated against the catalog like any other allowlist and
+  held to the holders' reflected names in both directions. Recorded that the roster measurement decides
+  delegation's cost and not the grant — a single agent holding fewer names costs what it always did.
 - **0.8.0** (2026-09-27) — the facade frames a successful file or search result as data rather than
   instructions, in a `ToolResultEnvelope` carrying the notice beside the content: by group with no
   per-tool list, a delegation's result untouched, a failure keeping its bare prefix. The notice travels

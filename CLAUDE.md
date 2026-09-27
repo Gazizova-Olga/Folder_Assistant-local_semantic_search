@@ -400,7 +400,8 @@ File tools are split into two holders — **read** (`InspectDirectory`, `ReadFil
 **search** holder (`FindFilesAbout`) beside them under the fatal contract. The split is
 the contract, not file layout: it is what lets a roster grant an agent the ability to read
 the folder without the ability to change it, so "which agent can destroy data" is answerable
-by reading one line of configuration. There is no shell-execution tool.
+by reading one line of configuration — and the shipped default answers *none of them*. There is no
+shell-execution tool.
 
 Every caller-supplied path resolves through a containment guard (`WorkspacePathGuard`, `SPEC-101`
 — one instance per file holder) that refuses anything outside the workspace root. The textual rule
@@ -483,11 +484,19 @@ which one every turn enters. Three rosters are possible, in order of precedence:
 `Workflow:Agents`, whole; the default roster from code when `Workflow:UseDefaultRoster` is on — an
 `orchestrator` with no tools delegating to a `reader` holding every read and search tool and a
 `mutator` holding the four mutations plus `ReadFile` and `Retrieve`; otherwise one agent from the root
-configuration holding every tool. **The default roster lives in code, never in `appsettings.json`**:
-configuration arrays merge by index, so a shipped roster would be merged *into* an operator's entries
-rather than replaced by them. **`UseDefaultRoster` is off until the roster's cost against the single
-agent is measured** (plan §5.2 item 6): a read question through it costs two model round-trips and the
-specialist sees no history. An entry inherits the root provider for every field it does not declare
+configuration holding the read and search tools. **No roster grants a mutation tool unless it was asked
+for** (`SPEC-920`): nothing bounds a mutation once the model holds the tool — there is no approval gate —
+so the ability to change the folder is named in `Workflow:Agents` or by turning the default roster on,
+never conferred by the absence of configuration. The read-only grant is **one list** (`Roster.ReadOnlyTools`),
+shared by the reader and the single agent, validated against the catalog like any other allowlist and held
+to the read and search holders' reflected names **in both directions** — a list checked one way still
+passes while a new mutation tool is quietly granted. **The default roster lives in code, never in
+`appsettings.json`**: configuration arrays merge by index, so a shipped roster would be merged *into* an
+operator's entries rather than replaced by them. **`UseDefaultRoster` is off until the roster's cost
+against the single agent is measured** (plan §5.2 item 6): a read question through it costs two model
+round-trips and the specialist sees no history. That measurement is about **delegation**, not the grant,
+and the two were once run together: a single agent holding fewer names costs what it always did, so the
+safer default did not wait for the number. An entry inherits the root provider for every field it does not declare
 and never its role. The roster is **validated whole at startup**, through the same startup filter as
 the database bootstrap, because nothing bounds delegation at runtime: a repeated name, an unknown tool
 or delegate, a self-delegation, a delegation cycle, a coordinator that does not exist, or several

@@ -18,9 +18,16 @@ internal sealed record AgentDefinition(
 /// <para>
 /// Three rosters are possible, in this order of precedence. Agents the operator configured are the
 /// roster, whole; the default roster from code, when asked for; otherwise one agent, synthesized from
-/// the root configuration, holding every tool. The default lives here rather than in
+/// the root configuration, holding the read and search tools. The default lives here rather than in
 /// <c>appsettings.json</c> because configuration arrays merge by index: a shipped roster would be merged
 /// <em>into</em> an operator's entries, never replaced by them.
+/// </para>
+///
+/// <para>
+/// <strong>No roster grants a mutation tool unless it was asked for.</strong> Nothing bounds a mutation
+/// once the model has the tool — there is no approval gate — so the ability to change the folder is
+/// something an operator names, in <c>Workflow:Agents</c> or by turning the default roster on, rather
+/// than something the absence of configuration confers.
 /// </para>
 /// </summary>
 internal sealed class Roster
@@ -29,7 +36,13 @@ internal sealed class Roster
 	internal const String ReaderName = "reader";
 	internal const String MutatorName = "mutator";
 
-	private static readonly String[] ReaderTools = ["InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "SearchIndex", "FindFilesAbout"];
+	/// <summary>
+	/// The read-only grant: every tool that reads or searches the folder and none that changes it. It is
+	/// the reader's allowlist in the default roster and the single agent's in the root one — one list, so
+	/// that "which tools cannot change the folder" has a single answer rather than two that drift apart.
+	/// </summary>
+	internal static readonly String[] ReadOnlyTools = ["InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "SearchIndex", "FindFilesAbout"];
+
 	private static readonly String[] MutatorTools = ["ReadFile", "Retrieve", "Create", "Update", "ReplaceLines", "Delete"];
 
 	private readonly Dictionary<String, AgentDefinition> _byName;
@@ -70,7 +83,7 @@ internal sealed class Roster
 		}
 		else
 		{
-			agents = [Single(config, toolNames)];
+			agents = [Single(config)];
 		}
 
 		Validate(agents, toolNames);
@@ -102,7 +115,7 @@ internal sealed class Roster
 			ReaderName,
 			"reads and searches the folder: lists directories, reads files, finds files by name or by what they are about, and searches their text",
 			null,
-			ReaderTools,
+			ReadOnlyTools,
 			[],
 			provider),
 		new(
@@ -114,11 +127,19 @@ internal sealed class Roster
 			provider),
 	];
 
-	private static AgentDefinition Single(AgentConfig config, IReadOnlyCollection<String> toolNames) => new(
+	/// <summary>
+	/// The one agent the root configuration yields, holding <see cref="ReadOnlyTools"/> and nothing that
+	/// changes the folder. The grant is the whole safety posture — there is no approval gate — so the
+	/// configuration that names no roster at all cannot be the one that hands a model <c>Delete</c>: a
+	/// reader trying the first question on their own notes is exactly who has not read the roster
+	/// documentation yet. Mutations are granted by asking for them, through <c>Workflow:Agents</c> or
+	/// <c>Workflow:UseDefaultRoster</c>.
+	/// </summary>
+	private static AgentDefinition Single(AgentConfig config) => new(
 		String.IsNullOrWhiteSpace(config.AgentName) ? AgentFactory.DefaultName : config.AgentName,
 		String.IsNullOrWhiteSpace(config.AgentDescription) ? AgentFactory.DefaultDescription : config.AgentDescription,
 		config.SystemPrompt,
-		[.. toolNames],
+		ReadOnlyTools,
 		[],
 		config.Provider);
 

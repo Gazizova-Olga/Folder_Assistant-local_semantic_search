@@ -461,6 +461,11 @@ public sealed class HostStartupTests
 	/// both to the front end while one hold is open, and the hold is released when the turn ends — so the
 	/// index sees the edit as one batch and not one pass per step. The notifier is replaced to observe it;
 	/// everything else is the application's.
+	///
+	/// <para>
+	/// The mutation is granted through a configured roster, because the shipped default grants none — which
+	/// makes this also the one host test that runs a turn through an operator's own `Workflow:Agents`.
+	/// </para>
 	/// </summary>
 	[Fact]
 	public async Task A_Turn_Holds_The_Index_Batch_Around_Every_File_It_Changes()
@@ -471,7 +476,12 @@ public sealed class HostStartupTests
 			ScriptedChatClient.Call("Create", new() { ["path"] = "a.md", ["content"] = "alpha" }),
 			ScriptedChatClient.Call("Create", new() { ["path"] = "b.md", ["content"] = "beta" }),
 			ScriptedChatClient.Text("Both written."));
-		using HostFixture host = new(folder, ($"{AgentConfig.SectionName}:Indexing:Enabled", "false"))
+		using HostFixture host = new(
+			folder,
+			($"{AgentConfig.SectionName}:Indexing:Enabled", "false"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:0:Name", "writer"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:0:Description", "writes files in the folder"),
+			($"{AgentConfig.SectionName}:Workflow:Agents:0:Tools:0", "Create"))
 		{
 			TestServices = services =>
 			{
@@ -560,8 +570,11 @@ public sealed class HostStartupTests
 		handle.Name.Should().Be("Archivist");
 		handle.Agent.Name.Should().Be("Archivist");
 		IReadOnlyList<AITool> tools = handle.Tools;
+
+		// The shipped default, through the real host: the read and search tools, and not one mutation.
 		tools.Select(tool => tool.Name).Should().BeEquivalentTo(
-			"InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "Create", "Update", "ReplaceLines", "Delete", "SearchIndex", "FindFilesAbout");
+			"InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "SearchIndex", "FindFilesAbout");
+		tools.Select(tool => tool.Name).Should().NotIntersectWith(["Create", "Update", "ReplaceLines", "Delete"]);
 		tools.OfType<ToolFacade>().Where(tool => tool.Group == ToolGroup.Search).Select(tool => tool.Name).Should().Equal("SearchIndex", "FindFilesAbout");
 		tools.OfType<ToolFacade>().Should().HaveCount(tools.Count);
 		keylessResolve.Should().Throw<InvalidOperationException>().WithMessage("*Provider:ApiKey*");

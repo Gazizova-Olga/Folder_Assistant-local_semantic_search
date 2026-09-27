@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft — the posture below is what the tree does; the items marked *not built* say so |
-| Version | 0.3.0 |
+| Version | 0.4.0 |
 | Owner | — |
 | Last updated | 2026-09-27 |
 
@@ -62,28 +62,35 @@ Everything else is held to the opposite rule:
 ### What the agent can do to the folder, and what bounds it
 
 This is the part an operator is accepting, so it is stated plainly rather than implied by a tool
-list. **In the shipped default configuration — no `Workflow:Agents`, `UseDefaultRoster` off — one
-agent holds every tool, mutations included: `Create`, `Update`, `ReplaceLines` and `Delete`.** A
-model answering a question can therefore write to and delete files in the analyzed folder.
+list. **In the shipped default configuration — no `Workflow:Agents`, `UseDefaultRoster` off — one agent
+holds the seven tools that read and search the folder and not one that changes it.** A model answering a
+question can read any file under the root and cannot create, overwrite or delete one.
 
-What bounds it:
+**The ability to change the folder is granted by asking for it**, in `Workflow:Agents` or by turning the
+default roster on. The absence of configuration does not confer it, and that is deliberate: nothing
+bounds a mutation once the model holds the tool — see *no approval gate* below — so the one control
+there is may not be handed over by default to whoever has not read this page. It is also the asymmetry
+of the two mistakes: a read-only agent that cannot do what was wanted says so in a sentence, and a
+`Delete` nobody expected is not undoable.
+
+What bounds a grant, once given:
 
 - **The containment guard** (`SPEC-101`). Every caller-supplied path resolves through a guard that
   refuses anything outside the workspace root, including a symbolic link or junction at any
   segment, a hard-link name outside the root, and a `subst` drive standing for one. The metadata
   folder is refused for every operation, reads included. There is no shell-execution tool, and no
   tool takes a path outside the root.
-- **The roster is the grant** (`SPEC-100`). Tools are granted by name per agent, so an operator who
-  does not want a model able to change data configures a roster whose agents hold read and search
-  tools only — `Workflow:UseDefaultRoster=true` is one such split (reader, mutator, orchestrator),
-  and an explicit `Workflow:Agents` is the general form. Which agent can destroy data is answerable
-  from one line of configuration, which is the whole reason the holders are split.
+- **The roster is the grant** (`SPEC-100`). Tools are granted by name per agent, so which agent can
+  destroy data is answerable from one line of configuration — the whole reason the holders are split.
+  `Workflow:UseDefaultRoster=true` is one shape (orchestrator, reader, mutator), an explicit
+  `Workflow:Agents` the general one, and the read-only single agent the shipped default.
 - **Nothing else.** In particular there is **no approval gate**: a mutation the model decides on is
   a mutation that happens. Human-in-the-loop approval is deliberately deferred (development plan,
   *Deferred*), and until it exists the grant above is the control.
 
-**The recommendation this spec makes:** run the read-only roster against a folder you would mind
-losing, and keep backups regardless — the same posture as any tool that writes files without asking.
+**The recommendation this spec makes:** against a folder you would mind losing, leave the default grant
+alone, and keep backups regardless once you have widened it — the same posture as any tool that writes
+files without asking.
 
 ### Indexed content reaching the model — the injection surface, and what framing does about it
 
@@ -110,9 +117,10 @@ goes at the narrowest point every path passes, not in the configuration a user c
 told what it is reading. It is **not** a defence against prompt injection — a model can be talked past
 its instructions, and no framing changes that. It raises the cost of an attack and removes the case
 where the model had no way to know the text was not the user's; it does not make an untrusted folder
-safe. What bounds the damage is still the grant and the containment guard above. **A folder whose
-contents you do not trust should be indexed by an agent that cannot write** — which the shipped default
-is not, so configure the roster for it.
+safe. What bounds the damage is still the grant and the containment guard above, and the shipped default
+grant holding no mutation is what keeps the worst case at "the model read a file that lied to it".
+**A folder whose contents you do not trust should be indexed by an agent that cannot write** — which is
+what a fresh clone gives you, and what widening the grant gives up.
 
 ### Credentials
 
@@ -153,9 +161,11 @@ the requirement.
 
 - Whether the index database should be encrypted at rest. It holds no document text, which is the
   argument for not bothering; it holds paths and derived vectors, which is the argument against.
-- Whether a read-only roster should be the shipped default rather than the single all-tool agent.
-  It is the safer default and costs a round-trip per read question (`SPEC-100`); the measurement
-  that would decide it is the one the development plan holds open.
+- ~~Whether a read-only roster should be the shipped default rather than the single all-tool agent.~~
+  **Decided 2026-09-27**, and by separating the two things it ran together: the grant is which names an
+  agent holds, the round-trip cost is a property of delegation. The single agent stays, holding the
+  read-only list, so the safer default cost nothing and the roster's own measurement (`SPEC-100`) is
+  still open on its own terms.
 
 ## References
 
@@ -167,6 +177,11 @@ the requirement.
 
 ## Changelog
 
+- **0.4.0** (2026-09-27) — the shipped default grant holds no mutation tool: the ability to change the
+  folder is granted in `Workflow:Agents` or by the default roster, never by leaving the configuration
+  alone, because nothing bounds a mutation once the model holds the tool and the two mistakes are not
+  symmetric. Closes the open question by separating the grant from delegation's round-trip cost — the
+  single agent stays, holding the read-only list, so the safer default cost nothing.
 - **0.3.0** (2026-09-27) — provenance framing built: every successful file and search result reaches
   the model inside an envelope saying it is the folder's content and not an instruction, applied in the
   tool facade by group so no tool can return folder content unframed

@@ -201,7 +201,11 @@ public sealed class MicrosoftAgentExecutionTests
 
 		public Fixture(IChatClient client, IAgentSessionStore? sessions = null)
 		{
-			Roster roster = Roster.Build(new AgentConfig { AgentName = "solo" }, []);
+			// An agent holding no tools, said through the entry form: the root configuration's grant is
+			// the read-only tool list, and naming a tool this empty catalog lacks is refused at startup.
+			Roster roster = Roster.Build(
+				new AgentConfig { Workflow = new WorkflowConfig { Agents = [new AgentEntryConfig { Name = "solo", Description = "answers" }] } },
+				[]);
 			this._registry = new AgentRegistry(roster, new AgentToolCatalog([]), _ => client);
 			this.Sessions = sessions ?? new InMemoryAgentSessionStore();
 			this.Execution = new MicrosoftAgentExecution(new StaticWorkflowRoute(roster, this._registry), this.Sessions, this.Telemetry, new ProviderErrorDescriber(), new TypedLogger(this.Logger));

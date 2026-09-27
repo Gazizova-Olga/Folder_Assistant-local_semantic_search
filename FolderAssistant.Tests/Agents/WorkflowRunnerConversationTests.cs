@@ -25,7 +25,12 @@ public sealed class WorkflowRunnerConversationTests
 			ScriptedChatClient.Text("done"),
 			ScriptedChatClient.Text("later"));
 		AITool echo = AIFunctionFactory.Create((String text) => "echo:" + text, "Echo");
-		Roster roster = Roster.Build(new AgentConfig { AgentName = "solo" }, ["Echo"]);
+		// The entry form, not the root one: the root configuration's grant is the real read-only tool
+		// list, which this stub catalog does not hold, and a grant naming a tool the catalog lacks is
+		// refused at startup on purpose.
+		Roster roster = Roster.Build(
+			new AgentConfig { Workflow = new WorkflowConfig { Agents = [new AgentEntryConfig { Name = "solo", Description = "echoes", Tools = ["Echo"] }] } },
+			["Echo"]);
 		using AgentRegistry registry = new(roster, new AgentToolCatalog([echo]), _ => client);
 		MicrosoftAgentExecution execution = new(new StaticWorkflowRoute(roster, registry), new InMemoryAgentSessionStore(), new RecordingTurnTelemetry(), new ProviderErrorDescriber());
 		using WorkflowRunner runner = new(execution);

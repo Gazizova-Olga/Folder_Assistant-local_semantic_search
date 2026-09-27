@@ -1,5 +1,10 @@
 using FluentAssertions;
 using FolderAssistant.Agents;
+using FolderAssistant.Extraction;
+using FolderAssistant.Retrieval;
+using FolderAssistant.Tests.Tools;
+using FolderAssistant.Tools;
+using Moq;
 
 namespace FolderAssistant.Tests.Agents;
 
@@ -19,7 +24,7 @@ public sealed class RosterTests
 		=> new() { Workflow = new WorkflowConfig { Agents = [.. agents] } };
 
 	[Fact]
-	public void With_Nothing_Configured_One_Agent_From_The_Root_Holds_Every_Tool()
+	public void With_Nothing_Configured_One_Agent_From_The_Root_Holds_The_Read_And_Search_Tools()
 	{
 		AgentConfig config = new() { AgentName = "Archivist", AgentDescription = "keeps the notes", SystemPrompt = "Mine." };
 
@@ -29,9 +34,48 @@ public sealed class RosterTests
 		roster.Coordinator.Should().Be("Archivist");
 		roster["Archivist"].Description.Should().Be("keeps the notes");
 		roster["Archivist"].SystemPrompt.Should().Be("Mine.");
-		roster["Archivist"].Tools.Should().Equal(Tools);
+		roster["Archivist"].Tools.Should().Equal("InspectDirectory", "ReadFile", "Retrieve", "FindFiles", "SearchText", "SearchIndex", "FindFilesAbout");
 		roster["Archivist"].Delegates.Should().BeEmpty();
 		Roster.Build(new AgentConfig(), Tools).Coordinator.Should().Be(AgentFactory.DefaultName);
+	}
+
+	/// <summary>
+	/// The grant is the whole safety posture — there is no approval gate — so the configuration that
+	/// names no roster is the one that must not confer a mutation. Asserted against the real holders and
+	/// **in both directions**: every read and search tool granted, every mutation tool withheld. A
+	/// hand-written list checked one way passes while a new mutation tool is quietly granted.
+	/// </summary>
+	[Fact]
+	public void The_Default_Grant_Holds_Every_Read_And_Search_Tool_And_No_Mutation_Tool()
+	{
+		using TempFolder root = new();
+		ReadTools read = new(new WorkspacePathGuard(root.Path, ".folderassistant"), TextExtractorRegistry.Default, 1024);
+		MutationTools mutate = new(new WorkspacePathGuard(root.Path, ".folderassistant"), new RecordingNotifier());
+		SearchTools search = new(Mock.Of<IRetrievalQuery>(), "db", new PassageBuilder(root.Path, TextExtractorRegistry.Default), new TokenBudgetContextReducer());
+		String[] readable = [.. ToolReflection.Reflect(read).Concat(ToolReflection.Reflect(search)).Select(static tool => tool.Name)];
+		String[] mutating = [.. ToolReflection.Reflect(mutate).Select(static tool => tool.Name)];
+
+		IReadOnlyList<String> granted = Roster.Build(new AgentConfig(), [.. readable, .. mutating]).Agents.Single().Tools;
+
+		granted.Should().BeEquivalentTo(readable);
+		granted.Should().NotIntersectWith(mutating);
+		Roster.ReadOnlyTools.Should().BeEquivalentTo(readable);
+	}
+
+	/// <summary>
+	/// The ability to change the folder is something an operator names. Both ways of asking for it grant
+	/// it; the absence of configuration grants none of it.
+	/// </summary>
+	[Fact]
+	public void A_Mutation_Tool_Is_Granted_Only_Where_It_Was_Asked_For()
+	{
+		AgentConfig none = new();
+		AgentConfig viaRoster = new() { Workflow = new WorkflowConfig { UseDefaultRoster = true, Coordinator = Roster.OrchestratorName } };
+		AgentConfig viaEntries = new() { Workflow = new WorkflowConfig { Agents = [Entry("solo", ["ReadFile", "Delete"])] } };
+
+		Roster.Build(none, Tools).Agents.SelectMany(agent => agent.Tools).Should().NotContain("Delete");
+		Roster.Build(viaRoster, Tools).Agents.SelectMany(agent => agent.Tools).Should().Contain("Delete");
+		Roster.Build(viaEntries, Tools).Agents.SelectMany(agent => agent.Tools).Should().Contain("Delete");
 	}
 
 	[Fact]
