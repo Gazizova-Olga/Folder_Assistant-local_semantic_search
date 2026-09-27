@@ -2,6 +2,11 @@
 notes/
 *.local.md
 
+# Wiki pages, staged here and published by pushing them to the wiki's own git repository.
+# Never tracked here: two copies of one page in two repositories is the drift this project's
+# documentation rules exist to prevent. See notes/WIKI.md.
+wiki/
+
 # Local developer overrides: may hold a real API key or PAT.
 appsettings.Development.json
 appsettings.*.local.json

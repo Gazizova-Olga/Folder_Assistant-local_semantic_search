@@ -13,6 +13,10 @@ public sealed class MutationToolsTests
 {
 	private const String Metadata = ".folderassistant";
 
+	/// <summary>The file's version as a read would hand it to a caller.</summary>
+	private static String Version(TempFolder root, String relativePath)
+		=> TextFile.VersionOf(root.Combine(relativePath));
+
 	private static (MutationTools Tools, RecordingNotifier Notifier) Tools(TempFolder root)
 	{
 		RecordingNotifier notifier = new();
@@ -149,9 +153,11 @@ public sealed class MutationToolsTests
 		await File.WriteAllTextAsync(root.Combine("f.txt"), "a\nb\nc\nd\n");
 		(MutationTools tools, RecordingNotifier notifier) = Tools(root);
 
-		LinesReplaced replaced = await tools.ReplaceLines("f.txt", 2, 3, "B\nC2\nC3");
+		LinesReplaced replaced = await tools.ReplaceLines("f.txt", 2, 3, "B\nC2\nC3", Version(root, "f.txt"));
 
-		replaced.Should().Be(new LinesReplaced("f.txt", 2, 3, 5, null));
+		// The version the result carries is the file as it now is, which is what lets a run of edits
+		// follow one read.
+		replaced.Should().Be(new LinesReplaced("f.txt", 2, 3, 5, Version(root, "f.txt"), null));
 		(await File.ReadAllTextAsync(root.Combine("f.txt"))).Should().Be("a\nB\nC2\nC3\nd\n");
 		notifier.Reports.Should().Equal((FileChangeKind.Modified, root.Combine("f.txt")));
 	}
@@ -163,7 +169,7 @@ public sealed class MutationToolsTests
 		await File.WriteAllTextAsync(root.Combine("crlf.txt"), "a\r\nb\r\nc");
 		(MutationTools tools, _) = Tools(root);
 
-		await tools.ReplaceLines("crlf.txt", 2, 2, "B");
+		await tools.ReplaceLines("crlf.txt", 2, 2, "B", Version(root, "crlf.txt"));
 
 		(await File.ReadAllTextAsync(root.Combine("crlf.txt"))).Should().Be("a\r\nB\r\nc");
 	}
@@ -175,7 +181,7 @@ public sealed class MutationToolsTests
 		await File.WriteAllTextAsync(root.Combine("f.txt"), "a\nb\nc");
 		(MutationTools tools, _) = Tools(root);
 
-		await tools.ReplaceLines("f.txt", 3, 3, "C");
+		await tools.ReplaceLines("f.txt", 3, 3, "C", Version(root, "f.txt"));
 
 		(await File.ReadAllTextAsync(root.Combine("f.txt"))).Should().Be("a\nb\nC");
 	}
@@ -187,7 +193,7 @@ public sealed class MutationToolsTests
 		await File.WriteAllTextAsync(root.Combine("f.txt"), "a\nb\nc\nd");
 		(MutationTools tools, _) = Tools(root);
 
-		LinesReplaced replaced = await tools.ReplaceLines("f.txt", 2, 3, "");
+		LinesReplaced replaced = await tools.ReplaceLines("f.txt", 2, 3, "", Version(root, "f.txt"));
 
 		replaced.LinesRemoved.Should().Be(2);
 		replaced.LinesInserted.Should().Be(0);
@@ -202,7 +208,7 @@ public sealed class MutationToolsTests
 		await File.WriteAllTextAsync(root.Combine("one.txt"), "only");
 		(MutationTools tools, _) = Tools(root);
 
-		await tools.ReplaceLines("one.txt", 1, 1, "new");
+		await tools.ReplaceLines("one.txt", 1, 1, "new", Version(root, "one.txt"));
 
 		(await File.ReadAllTextAsync(root.Combine("one.txt"))).Should().Be("new");
 	}
@@ -215,10 +221,10 @@ public sealed class MutationToolsTests
 		await File.WriteAllTextAsync(root.Combine("empty.txt"), "");
 		(MutationTools tools, RecordingNotifier notifier) = Tools(root);
 
-		Func<Task> past = () => tools.ReplaceLines("f.txt", 2, 3, "x");
-		Func<Task> emptyFile = () => tools.ReplaceLines("empty.txt", 1, 1, "x");
-		Func<Task> zero = () => tools.ReplaceLines("f.txt", 0, 1, "x");
-		Func<Task> inverted = () => tools.ReplaceLines("f.txt", 2, 1, "x");
+		Func<Task> past = () => tools.ReplaceLines("f.txt", 2, 3, "x", Version(root, "f.txt"));
+		Func<Task> emptyFile = () => tools.ReplaceLines("empty.txt", 1, 1, "x", Version(root, "empty.txt"));
+		Func<Task> zero = () => tools.ReplaceLines("f.txt", 0, 1, "x", Version(root, "f.txt"));
+		Func<Task> inverted = () => tools.ReplaceLines("f.txt", 2, 1, "x", Version(root, "f.txt"));
 
 		await past.Should().ThrowAsync<ArgumentOutOfRangeException>();
 		await emptyFile.Should().ThrowAsync<ArgumentOutOfRangeException>();
@@ -226,6 +232,102 @@ public sealed class MutationToolsTests
 		await inverted.Should().ThrowAsync<ArgumentOutOfRangeException>();
 		(await File.ReadAllTextAsync(root.Combine("f.txt"))).Should().Be("a\nb");
 		notifier.Reports.Should().BeEmpty();
+	}
+
+	/// <summary>
+	/// The defect this check exists for: line numbers mean nothing without the content they were counted
+	/// from. The model reads, the file moves on, and a positional edit then replaces the wrong lines and
+	/// reports the right number of them — a wrong result that looks exactly like a right one.
+	/// </summary>
+	[Fact]
+	public async Task ReplaceLines_Refuses_When_The_File_Changed_Since_It_Was_Read()
+	{
+		using TempFolder root = new();
+		await File.WriteAllTextAsync(root.Combine("f.txt"), "a\nb\nc\nd\n");
+		(MutationTools tools, RecordingNotifier notifier) = Tools(root);
+		String read = Version(root, "f.txt");
+
+		// Somebody else writes between the read and the edit; every line has moved down by one.
+		await File.WriteAllTextAsync(root.Combine("f.txt"), "NEW\na\nb\nc\nd\n");
+
+		Func<Task> stale = () => tools.ReplaceLines("f.txt", 2, 3, "X", read);
+
+		(await stale.Should().ThrowAsync<InvalidOperationException>())
+			.WithMessage("*has changed since it was read*")
+			.WithMessage("*nothing was changed*");
+		(await File.ReadAllTextAsync(root.Combine("f.txt"))).Should().Be("NEW\na\nb\nc\nd\n");
+		notifier.Reports.Should().BeEmpty("a refused edit is not a change to report");
+	}
+
+	/// <summary>A version that never described this file is refused the same way; the tool takes no word for it.</summary>
+	[Fact]
+	public async Task ReplaceLines_Refuses_A_Version_That_Is_Not_The_Files()
+	{
+		using TempFolder root = new();
+		await File.WriteAllTextAsync(root.Combine("f.txt"), "a\nb\n");
+		(MutationTools tools, _) = Tools(root);
+
+		Func<Task> invented = () => tools.ReplaceLines("f.txt", 1, 1, "X", "0123456789abcdef");
+		Func<Task> blank = () => tools.ReplaceLines("f.txt", 1, 1, "X", "   ");
+
+		await invented.Should().ThrowAsync<InvalidOperationException>();
+		await blank.Should().ThrowAsync<ArgumentException>();
+		(await File.ReadAllTextAsync(root.Combine("f.txt"))).Should().Be("a\nb\n");
+	}
+
+	/// <summary>
+	/// What makes the check bearable: the result carries the version the file now has, so a run of edits
+	/// costs one read. Without it, an agent's second edit to a file would be refused because of its own
+	/// first — the multi-step edit the index's batch hold exists to make cheap.
+	/// </summary>
+	[Fact]
+	public async Task A_Run_Of_Edits_Chains_On_The_Returned_Version_And_Needs_One_Read()
+	{
+		using TempFolder root = new();
+		await File.WriteAllTextAsync(root.Combine("f.txt"), "a\nb\nc\n");
+		(MutationTools tools, _) = Tools(root);
+
+		LinesReplaced first = await tools.ReplaceLines("f.txt", 1, 1, "A", Version(root, "f.txt"));
+		LinesReplaced second = await tools.ReplaceLines("f.txt", 2, 2, "B", first.Version);
+		LinesReplaced third = await tools.ReplaceLines("f.txt", 3, 3, "C", second.Version);
+
+		(await File.ReadAllTextAsync(root.Combine("f.txt"))).Should().Be("A\nB\nC\n");
+		third.Version.Should().Be(Version(root, "f.txt"));
+	}
+
+	/// <summary>
+	/// The other two writers hand back a version as well, so an edit can follow a create or an update
+	/// without a read in between. A caller that has just written the file knows what it wrote.
+	/// </summary>
+	[Fact]
+	public async Task Create_And_Update_Hand_Back_The_Version_They_Wrote()
+	{
+		using TempFolder root = new();
+		(MutationTools tools, _) = Tools(root);
+
+		FileCreated created = await tools.Create("n.txt", "one\ntwo\n");
+		created.Version.Should().Be(Version(root, "n.txt"));
+
+		FileUpdated updated = await tools.Update("n.txt", "two", "TWO");
+		updated.Version.Should().Be(Version(root, "n.txt"));
+
+		LinesReplaced replaced = await tools.ReplaceLines("n.txt", 1, 1, "ONE", updated.Version);
+		replaced.Version.Should().Be(Version(root, "n.txt"));
+		(await File.ReadAllTextAsync(root.Combine("n.txt"))).Should().Be("ONE\nTWO\n");
+	}
+
+	/// <summary>
+	/// The version is of the bytes, as the indexer hashes a file — so a byte-order mark is content here
+	/// as it is there. Two files differing only by a mark are two different versions.
+	/// </summary>
+	[Fact]
+	public async Task The_Version_Is_Of_The_Bytes_So_A_Byte_Order_Mark_Counts()
+	{
+		using TempFolder root = new();
+		await File.WriteAllBytesAsync(root.Combine("plain.txt"), "hello"u8.ToArray());
+		await File.WriteAllBytesAsync(root.Combine("bom.txt"), [0xEF, 0xBB, 0xBF, .. "hello"u8]);
+
+		Version(root, "bom.txt").Should().NotBe(Version(root, "plain.txt"));
 	}
 
 	// --- Delete -------------------------------------------------------------------------------------

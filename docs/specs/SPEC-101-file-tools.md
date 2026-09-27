@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — containment, the read tools, the text search, the passage search, the file-level semantic search and the mutation tools written and implemented; the facade over them is SPEC-100's and is built |
-| Version | 0.8.1 |
+| Version | 0.9.0 |
 | Owner | Tools |
-| Last updated | 2026-09-24 |
+| Last updated | 2026-09-27 |
 
 ## Purpose
 
@@ -331,9 +331,22 @@ passages into files.
   and observing it is not a licence to answer. An empty query throws.
 - Paths are shown as the read tools show them: relative to the root, platform separator.
 
-Not applied here, deliberately: the verification, the low-confidence screen, the cutoff and the reducer.
-All belong to `SearchIndex`, which returns text and has a budget to spend; this tool returns names and
-scores, and the score is there so a caller can see a weak best match for what it is.
+- **A file the folder no longer holds is not listed**, and the note says how many were dropped. A
+  deleted file keeps its chunks and vectors until its removal is delivered
+  ([SPEC-121](SPEC-121-file-indexing-front-end.md)), so between the two the index can still rank it —
+  and naming it is not a weak ranking, it is an assertion about the folder that is false, made by a tool
+  whose own description tells the caller to read what it names. The check is `PassageBuilder.Holds`,
+  which owns the join from a stored path to a file on disk; a second copy of that join would be a second
+  way to be wrong about which file a hit means.
+
+Not applied here, deliberately: the passage verification, the low-confidence screen, the cutoff and the
+reducer. All belong to `SearchIndex`, which returns text and has a budget to spend; this tool returns
+names and scores, and the score is there so a caller can see a weak best match for what it is. **A file
+edited since it was indexed is still listed, with its old score** — that is what answering from an index
+means, and confirming it would cost a read and a hash for every passage in the pool to refine a ranking
+rather than to withhold a wrong quotation. The existence check above is not that: it asks only whether
+the file is there, which is one stat per listed file and is the difference between a stale answer and a
+false one.
 
 ## The mutation tools
 
@@ -389,14 +402,36 @@ rejects advances the first and not the second; had it moved both, the text betwe
 silently and the count would still be right. An empty `find` throws; an empty `replace` removes the
 occurrences.
 
-### `ReplaceLines(path, startLine, endLine, text)`
+### `ReplaceLines(path, startLine, endLine, text, version)`
 
 Replaces an inclusive 1-based range, numbered as `ReadFile` numbers lines, with the text verbatim. The
 range runs from the first character of `startLine` past the terminator of `endLine`; the text takes its
 place, and gains the file's own terminator when the range had one and the text ends in none, so what
 follows stays on its own line. Empty text removes the lines, terminator included. The last line of a
 file with no terminator is replaced without adding one. A range past the end throws naming the file's
-line count; `startLine` below 1, or `endLine` below `startLine`, throws. The offset arithmetic is
+line count; `startLine` below 1, or `endLine` below `startLine`, throws.
+
+**The edit is refused unless the caller proves the file is the one it read.** `version` is required, and
+it is the value `ReadFile`, `Retrieve` or an earlier edit handed back; the tool re-reads the file, takes
+its version, and throws naming both when they differ, having changed nothing. Line numbers are meaningless
+without the content they were counted from, and the read that produced them is a model round-trip old at
+least — two, and another agent, under a delegating roster — in a folder its owner is also editing. Applied
+to a file that moved on, a positional edit replaces the wrong lines and reports the right *number* of them:
+the silently plausible wrong result this system exists to refuse, in the one holder that destroys data and
+behind no approval gate.
+
+- **The version is of the file's bytes**, SHA-256 as the indexer hashes a file, so a byte-order mark is
+  content here as it is there. Sixteen hex characters of it: 64 bits is far past what an accidental
+  collision needs — this tells an edited file from an unedited one and is no defence against a constructed
+  match — and short enough for a model to copy from a read into an edit without transcribing it wrongly.
+- **The reading tool hashes and decodes one read.** Hashing one read and decoding another would hand out a
+  version describing content nobody was shown, which is worse than handing out none.
+- **Every writing tool returns the version it wrote**, so a run of edits costs one read. Without that, an
+  agent's second edit to a file would be refused because of its own first — exactly the multi-step edit
+  the index's batch hold exists to make cheap ([SPEC-121](SPEC-121-file-indexing-front-end.md)).
+- **`Update` takes no version and needs none.** Its literal `find` already fails loudly on a stale
+  assumption: text that is no longer there does not match, and the tool throws rather than guessing. The
+  gap was specific to the tool that addresses a file by position. The offset arithmetic is
 `LineRangeLocator`, tested on its own for `\n`, `\r\n`, a lone `\r`, no trailing newline, an empty file
 and a single line, because a replacement one character off still produces a file that reads plausibly.
 The result says how many lines were removed, how many inserted, and how many the file has now.
@@ -492,12 +527,12 @@ internal sealed class MutationTools
 	Task<FileUpdated> Update(String path, String find, String replace, Boolean ignoreCase = false,
 		Boolean wholeWord = false, CancellationToken cancellationToken = default);
 	Task<LinesReplaced> ReplaceLines(String path, Int32 startLine, Int32 endLine, String text,
-		CancellationToken cancellationToken = default);
+		String version, CancellationToken cancellationToken = default);
 	Task<FileDeleted> Delete(String path, CancellationToken cancellationToken = default);
 }
 
-internal sealed record FileCreated(String Path, Int64 Bytes, String? Note);
-internal sealed record FileUpdated(String Path, Int32 Replacements, String? Note);
+internal sealed record FileCreated(String Path, Int64 Bytes, String Version, String? Note);
+internal sealed record FileUpdated(String Path, Int32 Replacements, String Version, String? Note);
 internal sealed record LinesReplaced(String Path, Int32 LinesRemoved, Int32 LinesInserted, Int32 TotalLines, String? Note);
 internal sealed record FileDeleted(String Path, Int32 FilesDeleted, String? Note);
 
@@ -548,10 +583,15 @@ The mutation bounds, as constants on `MutationTools`: `RetryAttempts` 6, `RetryF
   it would read that file. A rewrite does not reach the outside name: the rename replaces the
   directory entry inside the root and the other name keeps the old content, and a delete unlinks the
   inside name only. Recorded rather than closed.
-- **A rewrite races an external writer.** `Update` and `ReplaceLines` read the file, compute, and
-  rename over it; an external write that lands between the read and the rename is overwritten, and
-  the tool cannot tell. The window is one call wide, and the loser is a writer with access to the
-  folder already — the same actor the containment guard does not protect against.
+- **A rewrite races an external writer, inside its own call.** `Update` and `ReplaceLines` read the
+  file, compute, and rename over it; an external write that lands between that read and the rename is
+  overwritten, and the tool cannot tell. The window is one call wide, and the loser is a writer with
+  access to the folder already — the same actor the containment guard does not protect against. This
+  window is accepted and is **not** the one a version closes: the version is checked against the same
+  read the rewrite is computed from, so it cannot narrow the gap between them.
+- **The wider window is closed.** Between the read that produced a line range and the edit that uses
+  it there is at least a model round-trip, and two plus a different agent under a delegating roster,
+  in a folder somebody is editing. `ReplaceLines` refuses there; see its section above.
 - **A directory delete that fails part-way is partly done.** The retries finish it in the ordinary
   case; past them the exception surfaces with some files gone and none of them reported, and the
   index finds them at its next reconcile.
@@ -700,6 +740,8 @@ and the reports made — never through an index that would still look right afte
   flag test); the retry attempts set to one fails exactly the two held-reader tests; `\r\n` unpaired
   in the locator fails four (two count rows, the CRLF span row and the tool's line-ending test); the
   appended terminator dropped fails exactly the two `ReplaceLines` tests that keep a following line;
+  the version check deleted fails exactly the two staleness tests, and the existence check deleted the
+  two that name a file the folder no longer holds;
   the link refusal turned into a count fails exactly the link test. Two first attempts only failed to
   compile under the zero-warning gate and were discarded as non-evidence.
 
@@ -719,6 +761,12 @@ and the reports made — never through an index that would still look right afte
 
 ## Changelog
 
+- **0.9.0** (2026-09-27) — two places that acted on what an earlier read said without checking the
+  folder still agreed. `ReplaceLines` now requires the `version` the read handed back and refuses when
+  the file has changed since, and every writing tool returns the version it wrote so a run of edits costs
+  one read; the intra-call race below stays accepted and is a different window. `FindFilesAbout` drops a
+  ranked file the folder no longer holds and says how many, which is one stat per listed file, not the
+  passage verification it still deliberately does not do.
 - **0.8.1** (2026-09-24) — status only: SPEC-100's console runs the turn that reaches every tool here.
 - **0.8.0** (2026-09-23) — the passage search, `SearchIndex`: over-fetch, verification through the passage
   builder with stale and unavailable passages withheld and said, the low-confidence screen, the relative

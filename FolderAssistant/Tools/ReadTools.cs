@@ -18,10 +18,10 @@ internal sealed record NumberedLine(Int32 Number, String Text);
 /// A line range of a file. <paramref name="TotalLines"/> is the file's, whatever the range;
 /// <paramref name="Truncated"/> is set only when a bound cut the requested range short.
 /// </summary>
-internal sealed record FileLines(String Path, IReadOnlyList<NumberedLine> Lines, Int32 TotalLines, Boolean Truncated, String? Note);
+internal sealed record FileLines(String Path, IReadOnlyList<NumberedLine> Lines, Int32 TotalLines, String Version, Boolean Truncated, String? Note);
 
 /// <summary>A whole file, or as much of it as the bound allows; <paramref name="TotalBytes"/> is the size on disk.</summary>
-internal sealed record FileText(String Path, String Text, Int64 TotalBytes, Boolean Truncated, String? Note);
+internal sealed record FileText(String Path, String Text, Int64 TotalBytes, String Version, Boolean Truncated, String? Note);
 
 /// <summary>The relative paths a glob matched, in walk order.</summary>
 internal sealed record FileMatches(String Pattern, IReadOnlyList<String> Paths, Boolean Truncated, String? Note);
@@ -152,7 +152,7 @@ internal sealed class ReadTools
 		return new DirectoryListing(Shown(resolved), entries, truncated, Join(notes));
 	}
 
-	[Description("Reads a numbered range of lines from a text file in the workspace. Lines are 1-based. Bounded; the note says where to continue.")]
+	[Description("Reads a numbered range of lines from a text file in the workspace. Lines are 1-based. Bounded; the note says where to continue. The result carries a version of the file, which ReplaceLines requires, so read before you edit by line number.")]
 	public FileLines ReadFile(
 		[Description("A path relative to the workspace root.")] String path,
 		[Description("The first line to return, 1-based. Defaults to 1.")] Int32 startLine = 1,
@@ -167,6 +167,12 @@ internal sealed class ReadTools
 		GuardedPath resolved = this._guard.Resolve(path);
 		FileInfo file = ExistingTextFile(resolved);
 
+		// One read, hashed and decoded. The file was read whole before this change too — every line is
+		// counted, so the loop always reached the end — and holding it costs what TextFile.MaxBytes
+		// bounds. Two reads would be cheaper and would let the version describe content nobody saw.
+		Byte[] bytes = File.ReadAllBytes(file.FullName);
+		String version = TextFile.Version(bytes);
+
 		Int32 requestedEnd = endLine ?? Int32.MaxValue;
 		Int32 boundedEnd = startLine > Int32.MaxValue - MaxLinesPerRead + 1
 			? Int32.MaxValue
@@ -178,7 +184,7 @@ internal sealed class ReadTools
 		Boolean cutByLines = false;
 		Boolean cutByChars = false;
 
-		using (StreamReader reader = OpenText(file))
+		using (StreamReader reader = TextFile.OpenText(bytes))
 		{
 			String? text;
 			while ((text = reader.ReadLine()) is not null)
@@ -230,20 +236,23 @@ internal sealed class ReadTools
 			notes.Add($"the file ends at line {total}");
 		}
 
-		return new FileLines(Shown(resolved), lines, total, truncated, Join(notes));
+		return new FileLines(Shown(resolved), lines, total, version, truncated, Join(notes));
 	}
 
-	[Description("Reads a whole text file from the workspace, up to a bound. Prefer ReadFile with a line range for anything large.")]
+	[Description("Reads a whole text file from the workspace, up to a bound. Prefer ReadFile with a line range for anything large. The result carries a version of the file, which ReplaceLines requires.")]
 	public FileText Retrieve(
 		[Description("A path relative to the workspace root.")] String path)
 	{
 		GuardedPath resolved = this._guard.Resolve(path);
 		FileInfo file = ExistingTextFile(resolved);
 
+		Byte[] bytes = File.ReadAllBytes(file.FullName);
+		String version = TextFile.Version(bytes);
+
 		Char[] buffer = new Char[MaxRetrieveChars];
 		Int32 read;
 		Boolean truncated;
-		using (StreamReader reader = OpenText(file))
+		using (StreamReader reader = TextFile.OpenText(bytes))
 		{
 			read = reader.ReadBlock(buffer, 0, buffer.Length);
 			truncated = reader.Peek() >= 0;
@@ -253,7 +262,7 @@ internal sealed class ReadTools
 			? $"cut at {MaxRetrieveChars:N0} characters of a {file.Length:N0}-byte file; use ReadFile with a line range for the rest"
 			: null;
 
-		return new FileText(Shown(resolved), new String(buffer, 0, read), file.Length, truncated, note);
+		return new FileText(Shown(resolved), new String(buffer, 0, read), file.Length, version, truncated, note);
 	}
 
 	[Description("Finds files in the workspace by glob. '*' matches within a name, '?' one character, '**' any directories. A pattern without '/' matches the file name at any depth.")]
@@ -437,7 +446,7 @@ internal sealed class ReadTools
 
 		private void SearchLines(FileInfo file, String shownPath)
 		{
-			using StreamReader reader = OpenText(file);
+			using StreamReader reader = TextFile.OpenText(file);
 			String? text;
 			Int32 number = 0;
 			while ((text = reader.ReadLine()) is not null)
@@ -560,9 +569,6 @@ internal sealed class ReadTools
 
 	private static FileInfo ExistingTextFile(GuardedPath resolved)
 		=> TextFile.Existing(resolved, Shown(resolved));
-
-	private static StreamReader OpenText(FileInfo file)
-		=> TextFile.OpenText(file);
 
 	private static String Shown(GuardedPath resolved)
 		=> resolved.RelativePath.Length == 0 ? "." : resolved.RelativePath;

@@ -5,13 +5,13 @@ using FolderAssistant.Indexing.Watching;
 namespace FolderAssistant.Tools;
 
 /// <summary>A file the tool created; <paramref name="Bytes"/> is what was written.</summary>
-internal sealed record FileCreated(String Path, Int64 Bytes, String? Note);
+internal sealed record FileCreated(String Path, Int64 Bytes, String Version, String? Note);
 
 /// <summary>A file the tool rewrote; <paramref name="Replacements"/> is how many occurrences were replaced.</summary>
-internal sealed record FileUpdated(String Path, Int32 Replacements, String? Note);
+internal sealed record FileUpdated(String Path, Int32 Replacements, String Version, String? Note);
 
 /// <summary>A line range the tool replaced, and the file's line count afterwards.</summary>
-internal sealed record LinesReplaced(String Path, Int32 LinesRemoved, Int32 LinesInserted, Int32 TotalLines, String? Note);
+internal sealed record LinesReplaced(String Path, Int32 LinesRemoved, Int32 LinesInserted, Int32 TotalLines, String Version, String? Note);
 
 /// <summary>What the tool deleted: one file, or every file under a directory.</summary>
 internal sealed record FileDeleted(String Path, Int32 FilesDeleted, String? Note);
@@ -88,7 +88,7 @@ internal sealed class MutationTools
 
 		String? report = await Report(this._notifier.NotifyCreatedAsync, resolved.FullPath, cancellationToken).ConfigureAwait(false);
 
-		return new FileCreated(shown, bytes.Length, Join(resolved.Note, report));
+		return new FileCreated(shown, bytes.Length, TextFile.Version(bytes), Join(resolved.Note, report));
 	}
 
 	[Description("Replaces every occurrence of a literal string in a text file in the workspace. Fails if the string does not occur, so nothing is changed silently.")]
@@ -105,7 +105,7 @@ internal sealed class MutationTools
 
 		GuardedPath resolved = this._guard.Resolve(path);
 		String shown = Shown(resolved);
-		(String text, Boolean hadBom) = ReadText(resolved, shown);
+		(String text, Boolean hadBom, _) = ReadText(resolved, shown);
 
 		String rewritten = TextReplacer.Replace(text, find, replace, ignoreCase, wholeWord, out Int32 count);
 		if (count == 0)
@@ -113,28 +113,43 @@ internal sealed class MutationTools
 			throw new InvalidOperationException($"'{find}' does not occur in '{shown}'; nothing was changed.");
 		}
 
-		await WriteAtomically(resolved.FullPath, Encode(rewritten, hadBom), cancellationToken).ConfigureAwait(false);
+		Byte[] written = Encode(rewritten, hadBom);
+		await WriteAtomically(resolved.FullPath, written, cancellationToken).ConfigureAwait(false);
 
 		String? report = await Report(this._notifier.NotifyChangedAsync, resolved.FullPath, cancellationToken).ConfigureAwait(false);
 
-		return new FileUpdated(shown, count, Join(resolved.Note, report));
+		return new FileUpdated(shown, count, TextFile.Version(written), Join(resolved.Note, report));
 	}
 
-	[Description("Replaces an inclusive range of lines in a text file in the workspace with new text, verbatim. Lines are 1-based, as ReadFile numbers them. Empty text removes the lines.")]
+	[Description("Replaces an inclusive range of lines in a text file in the workspace with new text, verbatim. Lines are 1-based, as ReadFile numbers them. Empty text removes the lines. Requires the version from the read the line numbers came from, and refuses when the file has changed since; the result carries the new version, so a run of edits needs one read.")]
 	public async Task<LinesReplaced> ReplaceLines(
 		[Description("A path relative to the workspace root.")] String path,
 		[Description("The first line to replace, 1-based.")] Int32 startLine,
 		[Description("The last line to replace, inclusive.")] Int32 endLine,
 		[Description("The text that takes the range's place; may hold several lines, or none.")] String text,
+		[Description("The version from the ReadFile, Retrieve or earlier edit these line numbers came from. Read the file again if you do not have it.")] String version,
 		CancellationToken cancellationToken = default)
 	{
 		ArgumentOutOfRangeException.ThrowIfLessThan(startLine, 1);
 		ArgumentOutOfRangeException.ThrowIfLessThan(endLine, startLine);
 		ArgumentNullException.ThrowIfNull(text);
+		ArgumentException.ThrowIfNullOrWhiteSpace(version);
 
 		GuardedPath resolved = this._guard.Resolve(path);
 		String shown = Shown(resolved);
-		(String original, Boolean hadBom) = ReadText(resolved, shown);
+		(String original, Boolean hadBom, String current) = ReadText(resolved, shown);
+
+		// The one check that makes a positional edit safe. Line numbers mean nothing without the content
+		// they were counted from, and the read that produced them is a round-trip old at least — two, and
+		// another agent, under a delegating roster. An edit applied to a file that moved on in between
+		// replaces the wrong lines and reports the right number of them, which is the silent wrong result
+		// this tree exists to refuse. Update needs no such check: its literal find fails loudly instead.
+		if (!String.Equals(current, version, StringComparison.OrdinalIgnoreCase))
+		{
+			throw new InvalidOperationException(
+				$"'{shown}' has changed since it was read: it is now version {current}, not {version}. "
+				+ "Read it again and replace the lines the new content shows; nothing was changed.");
+		}
 
 		LineSpan span = LineRangeLocator.Locate(original, startLine, endLine);
 
@@ -147,7 +162,8 @@ internal sealed class MutationTools
 		}
 
 		String rewritten = String.Concat(original.AsSpan(0, span.Start), inserted, original.AsSpan(span.End));
-		await WriteAtomically(resolved.FullPath, Encode(rewritten, hadBom), cancellationToken).ConfigureAwait(false);
+		Byte[] written = Encode(rewritten, hadBom);
+		await WriteAtomically(resolved.FullPath, written, cancellationToken).ConfigureAwait(false);
 
 		String? report = await Report(this._notifier.NotifyChangedAsync, resolved.FullPath, cancellationToken).ConfigureAwait(false);
 
@@ -156,6 +172,7 @@ internal sealed class MutationTools
 			endLine - startLine + 1,
 			LineRangeLocator.CountLines(text),
 			LineRangeLocator.CountLines(rewritten),
+			TextFile.Version(written),
 			Join(resolved.Note, report));
 	}
 
@@ -206,13 +223,18 @@ internal sealed class MutationTools
 	/// The text of an existing text file and whether it carried a byte-order mark, so that a rewrite
 	/// keeps the mark it found. Opened share-read, once, with no retry.
 	/// </summary>
-	private static (String Text, Boolean HadBom) ReadText(GuardedPath resolved, String shown)
+	private static (String Text, Boolean HadBom, String Version) ReadText(GuardedPath resolved, String shown)
 	{
 		FileInfo file = TextFile.Existing(resolved, shown);
 		Byte[] bytes = File.ReadAllBytes(file.FullName);
 		Boolean hadBom = bytes.AsSpan().StartsWith(Bom);
 
-		return (Utf8WithoutBom.GetString(bytes, hadBom ? Bom.Length : 0, bytes.Length - (hadBom ? Bom.Length : 0)), hadBom);
+		// The version is of the bytes this call read, so a staleness check and the rewrite that follows
+		// it cannot be looking at two different files.
+		return (
+			Utf8WithoutBom.GetString(bytes, hadBom ? Bom.Length : 0, bytes.Length - (hadBom ? Bom.Length : 0)),
+			hadBom,
+			TextFile.Version(bytes));
 	}
 
 	private static Byte[] Encode(String text, Boolean withBom)
@@ -238,7 +260,19 @@ internal sealed class MutationTools
 		}
 		catch
 		{
-			File.Delete(temporary);
+			// The cleanup must not become the reported failure. A delete that throws here — a scanner
+			// holding the temporary file is the ordinary way — would propagate in place of the rename's
+			// own exception, and the caller would be told about the tidying instead of about what went
+			// wrong. The leftover is a .tmp the front end never reports.
+			try
+			{
+				File.Delete(temporary);
+			}
+			catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+			{
+				// Left behind deliberately: the original failure is the one worth raising.
+			}
+
 			throw;
 		}
 	}

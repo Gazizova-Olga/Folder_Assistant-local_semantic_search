@@ -366,6 +366,12 @@ decorator, served by the same backend and refused by the same readiness guard as
 it over-fetches passages and folds them into files, and adds no ranking of its own. It is its own
 holder because its failure contract differs: a search failure is fatal, a file failure is a string,
 and the holder is what a facade tells the two apart by. `IndexNotReadyException` passes through it.
+**A ranked file the folder no longer holds is dropped, and the note says how many**: a deleted file keeps
+its chunks and vectors until the removal is delivered, so the index can still rank it, and naming it is
+not a weak ranking but an assertion about the folder that is false — from a tool whose description tells
+the model to read what it names. That is one stat per listed file, through `PassageBuilder.Holds` so the
+join from a stored path to disk has one owner; the passage verification stays out, and a file edited
+since indexing keeps its score, which is what answering from an index means.
 
 The read holder (`ReadTools`) exists: `InspectDirectory`, `ReadFile`, `Retrieve`, `FindFiles`,
 `SearchText`, each over the holder's own guard. Every bound is a code constant, every cut is said in
@@ -381,7 +387,14 @@ cursor and the copy cursor apart — a candidate the whole-word rule rejects adv
 not the second, or the text between would be dropped silently with the count still right — and
 throws when the text does not occur, because a change that changed nothing is the silent failure
 this tree exists to refuse. `ReplaceLines` locates an inclusive range through `LineRangeLocator`,
-tested on its own for every line-ending form. A rewrite keeps the byte-order mark and the line
+tested on its own for every line-ending form, and **refuses unless the caller hands back the `version`
+it read** — line numbers mean nothing without the content they were counted from, and that read is a
+model round-trip old at least, two and another agent under a delegating roster, in a folder its owner is
+also editing; applied to a file that moved on it replaces the wrong lines and reports the right *number*
+of them. The version is sixteen hex characters of SHA-256 over the **bytes**, as the indexer hashes a
+file; the reading tool hashes and decodes one read, or it would certify content nobody saw; and every
+writing tool returns the version it wrote, so a run of edits costs one read rather than being refused by
+its own first edit. `Update` needs none: its literal `find` already fails loudly on a stale assumption. A rewrite keeps the byte-order mark and the line
 ending it found. Every completed mutation is reported to the running front end through
 `IIndexChangeNotifier` with its own kind, one report per file, and the report is advisory: one that
 fails is a note on the result, never a failure of a write that happened. Both holders read a file

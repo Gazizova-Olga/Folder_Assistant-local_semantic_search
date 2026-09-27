@@ -124,6 +124,26 @@ internal sealed class PassageBuilder
 	}
 
 	/// <summary>
+	/// Whether the folder still holds the file a hit names, as the index stores its path. Here rather
+	/// than at a caller because this type owns the join from a stored relative path to a file on disk —
+	/// a second copy of that join is a second way to be wrong about which file a hit means.
+	///
+	/// <para>
+	/// This asks only whether the file is there, never whether it still says what was indexed. That
+	/// question is <see cref="Rebuild"/>'s, and answering it costs a read and a hash per passage.
+	/// </para>
+	/// </summary>
+	public Boolean Holds(String relativePath)
+	{
+		ArgumentNullException.ThrowIfNull(relativePath);
+
+		return File.Exists(FullPath(this._rootPath, relativePath));
+	}
+
+	private static String FullPath(String rootPath, String relativePath)
+		=> Path.GetFullPath(Path.Combine(rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+	/// <summary>
 	/// The file as the indexer would read it now: bytes through the registry's extractor for its
 	/// extension, tokenized by the chunker's tokenizer. Null when it cannot be — gone, locked by a writer,
 	/// or a format the registry does not hold. Share-read and no retry, as every reader here: a failing
@@ -131,7 +151,7 @@ internal sealed class PassageBuilder
 	/// </summary>
 	private TokenizedText? Read(String relativePath)
 	{
-		String fullPath = Path.GetFullPath(Path.Combine(this._rootPath, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+		String fullPath = FullPath(this._rootPath, relativePath);
 		ITextExtractor? extractor = this._extractors.Find(Path.GetExtension(fullPath));
 		if (extractor is null)
 		{

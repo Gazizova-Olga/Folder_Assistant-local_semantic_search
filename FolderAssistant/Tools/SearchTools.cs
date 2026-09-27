@@ -217,6 +217,22 @@ internal sealed class SearchTools
 			.OrderByDescending(static file => file.Score)
 			.ThenBy(static file => file.Path, StringComparer.Ordinal)];
 
+		// A file the folder no longer holds must not be named. Its chunks and vectors outlive it by
+		// design — they go when the removal is delivered, not when the file goes — so between a deletion
+		// and its delivery this tool would otherwise answer with a path that is not there, scored, and
+		// the tool tells the caller to read it. That is an assertion about the folder, not a ranking
+		// nicety, so it is checked here rather than left to whoever reads the result.
+		//
+		// This is an existence check and not the passage verification: that belongs to SearchIndex,
+		// which returns text and can withhold it. A file edited since indexing keeps its score here and
+		// is still listed, which is what answering from an index means.
+		Int32 gone = ranked.RemoveAll(file => !this._passages.Holds(file.Path));
+		if (gone > 0)
+		{
+			notes.Add($"{gone} ranked {(gone == 1 ? "file is" : "files are")} no longer in the folder and " +
+				"cannot be listed; the index catches up when their removal is delivered");
+		}
+
 		Boolean truncated = ranked.Count > wanted;
 		if (truncated)
 		{
