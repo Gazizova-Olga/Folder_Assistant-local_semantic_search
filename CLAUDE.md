@@ -270,6 +270,14 @@ Properties worth stating because they are easy to "simplify" away:
   writes chunks and vectors under a row's id, ends a row on a delivered removal, and has no
   statement that could create or update one — a chunk row's foreign key refuses the attempt.
   The delivery used to write the row back, and that was exactly this race.
+- **A row is ended only while it still says the file is gone**, read in the same transaction that
+  ends it. The dispatcher already asks whether a file came back before delivering its removal, and
+  that question cannot cover a return landing after it: the row went anyway, the upsert queued
+  behind the removal found nothing recorded and skipped, and a file on disk was absent from every
+  search until a periodic pass rediscovered it. `BEGIN IMMEDIATE` is what makes the second question
+  hold rather than merely narrow the window — the write lock is held from the first statement, so a
+  revival either precedes the read or waits behind the delete. Both questions are needed: the first
+  makes an overtaken removal cost nothing, the second makes one already being delivered safe.
 - **A scheduled reconcile waits for the hold.** It is the one path that reaches the index
   without going through the debouncer, so a pass landing mid-hold would index a half-finished
   edit and defeat the hold entirely — bounded, because the hold expires whether or not anyone

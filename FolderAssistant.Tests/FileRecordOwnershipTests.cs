@@ -142,6 +142,72 @@ public sealed class FileRecordOwnershipTests
 	}
 
 	/// <summary>
+	/// The file returning <em>after</em> the dispatcher asked whether it was back, and before the row is
+	/// ended, leaves it indexed too. That is the residual window the dispatcher's own question cannot
+	/// close: one store round-trip wide, and closed on the side holding the write.
+	///
+	/// <para>
+	/// Staged by recording the file again from inside the removal's delivery, which is where a real
+	/// return would land — a settled change or a reconciliation pass writing while the delivery is on
+	/// its way to the database. Ended anyway, the row goes and takes the chunks of the file the folder
+	/// now holds, and the upsert queued behind the removal finds nothing recorded and skips.
+	/// </para>
+	/// </summary>
+	[Fact]
+	public async Task A_File_Returning_Inside_Its_Removals_Delivery_Keeps_Its_Row_And_Chunks()
+	{
+		using TempFolder folder = new();
+		String path = folder.Combine("notes.md");
+		String databasePath = Bootstrap(folder);
+
+		Byte[] content = Encoding.UTF8.GetBytes("the tide gauge readings were copied out by hand until the cable came");
+		String hash = Hash(content);
+		await File.WriteAllBytesAsync(path, content);
+
+		FolderIndexStore store = new(databasePath);
+		await store.ApplyAsync([Change("notes.md", FileDelta.Added, hash, content.Length)]);
+		OutboxDrain.Deliver(folder.Path, databasePath, Config).Should().Be(1);
+
+		String fileId = ReadRow(databasePath, "notes.md").FileId;
+		ChunkCount(databasePath, fileId).Should().BePositive("the file was indexed before it was removed");
+
+		// Removed and queued, with nothing recording the return yet: the dispatcher's question will say
+		// the file is gone, which is what makes the delivery proceed as far as the write.
+		File.Delete(path);
+		await store.ApplyAsync([new ReconciledChange("notes.md", FileDelta.Removed, null)]);
+
+		using RagBridgeVectorizationService bridge = new(
+			folder.Path,
+			databasePath,
+			new ProgrammableEmbeddingVectorizer(ModelVersionId, Dimension),
+			new FolderIndexRepository(new SqliteBlobVectorStoreWriter()),
+			new SqliteBlobVectorStoreReader(),
+			TextExtractorRegistry.Default,
+			Config,
+			new PersistenceConfig().MetadataFolderName);
+
+		// The return lands inside the delivery, after the question and before the row is ended.
+		ReturningOnDelete vectorization = new(bridge, async () =>
+		{
+			await File.WriteAllBytesAsync(path, content);
+			await store.ApplyAsync([Change("notes.md", FileDelta.Added, hash, content.Length)]);
+		});
+
+		OutboxDispatcher dispatcher = new(folder.Path, store, vectorization);
+
+		(await dispatcher.DrainOnceAsync(CancellationToken.None)).Should().Be(1, "the removal was delivered");
+
+		Row row = ReadRow(databasePath, "notes.md");
+		row.FileId.Should().Be(fileId, "the row the file took again is the row it had");
+		ChunkCount(databasePath, fileId).Should().BePositive("a removal ends nothing once the file is recorded again");
+
+		// The upsert the return queued has a row to write under, so the file is delivered rather than
+		// waiting for a periodic pass to rediscover it.
+		(await dispatcher.DrainOnceAsync(CancellationToken.None)).Should().Be(1);
+		ReadRow(databasePath, "notes.md").LastSyncedHash.Should().Be(hash);
+	}
+
+	/// <summary>
 	/// The pass records the folder through the store and then says what it embedded; it writes no row
 	/// of its own. The deliveries the record queued find their work done, so a cold start costs one
 	/// embed per file and not two.
@@ -233,6 +299,23 @@ public sealed class FileRecordOwnershipTests
 		command.Parameters.AddWithValue("$fileId", fileId);
 
 		return (Int64)command.ExecuteScalar()!;
+	}
+
+	/// <summary>
+	/// Runs <paramref name="onDelete"/> before passing a removal on, which is how the window between the
+	/// dispatcher's question and the row being ended is staged deterministically.
+	/// </summary>
+	private sealed class ReturningOnDelete(IVectorizationService inner, Func<Task> onDelete) : IVectorizationService
+	{
+		public Task UpsertAsync(String docId, Stream content, FileMetadata metadata, CancellationToken cancellationToken)
+			=> inner.UpsertAsync(docId, content, metadata, cancellationToken);
+
+		public async Task DeleteAsync(String docId, CancellationToken cancellationToken)
+		{
+			await onDelete();
+
+			await inner.DeleteAsync(docId, cancellationToken);
+		}
 	}
 
 	/// <summary>Counts the embed calls it passes through.</summary>

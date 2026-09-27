@@ -311,8 +311,9 @@ public sealed class OutboxDispatcher
     {
         // Recorded again since the removal was queued: the file came back, and the store queued the upsert
         // that re-embeds it behind this operation. The removal has been overtaken and delivers nothing. A
-        // return landing between this read and the embedding side ending the row is not covered here; that
-        // window is one store round-trip, not an embed.
+        // return landing between this read and the embedding side ending the row is covered there rather
+        // than here: the row is ended only while it is still recorded gone, which is a condition only the
+        // side holding the write can hold.
         DeliveryRecord? present = await _store.ReadForDeliveryAsync(op.RelativePath, cancellationToken).ConfigureAwait(false);
 
         if (present is not null)

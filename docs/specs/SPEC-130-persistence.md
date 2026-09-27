@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.15.0 |
+| Version | 0.16.0 |
 | Owner | Persistence |
 | Last updated | 2026-09-27 |
 
@@ -111,6 +111,16 @@ connection in SQLite and what the bootstrap set does not carry.
 the whole-folder pass and the per-file delivery — writes chunks and vectors under a row's id and ends
 a row on a delivered removal, and has no statement that could create or update one. The foreign key
 from `chunk_manifest` is what enforces it: chunks for an id no row carries are refused, not invented.
+
+**Ending a row is conditional on the `status` it still carries.** The delete reads the column in the
+same transaction it deletes from, and ends the row only while it says the file is gone; a row the store
+has made active again belongs to a file that came back, and neither it nor its vectors are touched. The
+transaction is what makes the condition hold rather than merely narrow it — this provider begins one
+with `BEGIN IMMEDIATE`, so the write lock is held from the first statement and a concurrent revival
+either committed before the read or waits behind the delete under `busy_timeout`. A check outside the
+transaction would be the same race with a smaller window ([SPEC-121](SPEC-121-file-indexing-front-end.md),
+delivery). Both status values are constants of the store, read by everything that asks about them, for
+the same reason the delivery mark's condition is one statement: two spellings of one rule drift.
 
 ## Configuration
 

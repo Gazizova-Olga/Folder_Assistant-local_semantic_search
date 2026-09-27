@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.21.0 |
+| Version | 0.22.0 |
 | Owner | Indexing |
 | Last updated | 2026-09-27 |
 
@@ -350,9 +350,15 @@ the dispatcher asks the store whether the file is recorded, and retires the oper
 is. Delivered anyway, the removal ended the row the file had since taken again and took its chunks with
 it; the upsert behind it found nothing recorded and skipped; and the file was absent from every search
 until a periodic pass rediscovered it — plausible during a long startup backlog, and silent throughout.
-A return landing between that question and the embedding side ending the row is not covered: the window
-is one store round-trip rather than an embed, and closing it means the row's end being conditional on the
-row still being marked gone, which is a statement for the side that ends it.
+
+**And the row is ended only while it is still marked gone.** A return landing after the dispatcher's
+question and before the write is a window the question cannot close, one store round-trip wide rather
+than an embed, with exactly the failure above at the end of it. So the side that ends the row asks again,
+in the transaction that ends it: the status it reads is the status the delete acts on, and a return either
+precedes that transaction or waits for it. Asking twice is not a redundancy — the dispatcher's question is
+what makes an overtaken removal cost nothing, and this one is what makes a removal that is already being
+delivered safe. Neither can be dropped in favour of the other, and the condition lives with the write
+because nothing outside a transaction can hold it ([SPEC-130](SPEC-130-persistence.md)).
 
 **Recording a file as delivered is conditional on the content that was delivered.** A delivery is a round
 trip, and the file can be rewritten while it happens. The dispatcher records the hash it read before
@@ -543,8 +549,9 @@ pass embeds against a snapshot of the record and the loops move the record.
 hang from its row, clearing them means clearing vectors first, and only the embedding side can reach
 a native store's vectors. So a removal **marks** the row and queues the delivery; the delivery clears
 the vectors, then the row, whose cascade takes the chunks. The store writes everything the row says
-about a file; the embedding side writes nothing to it and ends it once. The pass deletes nothing for
-the same reason.
+about a file; the embedding side writes nothing to it and ends it once, and only while the row still
+says the file is gone — the condition above, which is the one thing that side reads from the row rather
+than being told. The pass deletes nothing for the same reason.
 
 ## Composition
 
@@ -704,10 +711,15 @@ the embedder's deadline, with `TimeoutException` recorded against it and the fil
 unfitted corpus-fitted embedder ends the same way, with the model named in the error and nothing
 written under the file.
 
-A removal overtaken by the file's return is asserted twice. Against the in-memory outbox: the removal is
-retired without reaching the embedding side, and the upsert queued behind it is delivered. Against the
-real store and bridge: the file's row and chunks are there afterwards with its mark set, which is the
-assertion the defect failed, since the delivered removal ended the row.
+A removal overtaken by the file's return is asserted at each point it can be overtaken at. Against the
+in-memory outbox, with the return recorded before the delivery: the removal is retired without reaching
+the embedding side, and the upsert queued behind it is delivered. Against the real store and bridge, same
+order: the file's row and chunks are there afterwards with its mark set, which is the assertion the
+defect failed, since the delivered removal ended the row. And with the return recorded **from inside the
+delivery** — where a settled change or a reconciliation pass would land it, after the dispatcher's
+question — the row keeps its id and its chunks, and the upsert the return queued delivers behind it. That
+last one is mutation-tested at both levels, by weakening the condition to *any row exists*: it kills the
+delivery test and its unit counterpart, which asserts the vectors are left alone as well as the row.
 
 The ownership of the file table is asserted against a real store and a real dispatcher, in three parts.
 A record that moves on while a delivery holds its embed is not reverted by that delivery, its stale

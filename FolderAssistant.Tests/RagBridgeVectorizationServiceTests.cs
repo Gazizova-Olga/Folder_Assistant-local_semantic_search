@@ -82,6 +82,7 @@ public sealed class RagBridgeVectorizationServiceTests
 		using Bridge bridge = Bridge.For(folder);
 		string docId = await bridge.DeliverAsync(path);
 
+		await bridge.RecordRemovalAsync(path);
 		await bridge.Service.DeleteAsync(docId, CancellationToken.None);
 
 		bridge.FileIds().Should().BeEmpty("a delivered removal is the one write that ends a file's row");
@@ -118,6 +119,7 @@ public sealed class RagBridgeVectorizationServiceTests
 
 		bridge.VectorCount("vec").Should().BeGreaterThan(0, "the delivery has to have stored something to remove");
 
+		await bridge.RecordRemovalAsync(path);
 		await bridge.Service.DeleteAsync(docId, CancellationToken.None);
 
 		bridge.VectorCount("vec").Should().Be(0, "nothing cascades in a virtual table");
@@ -343,6 +345,19 @@ public sealed class RagBridgeVectorizationServiceTests
 			await this.Service.UpsertAsync(docId, content, metadata, CancellationToken.None);
 
 			return docId;
+		}
+
+		/// <summary>
+		/// Records the file as gone, which is the state the front end leaves behind before a removal is
+		/// delivered — and the state the removal is conditional on: the row is ended only while it says
+		/// the file is gone, so a delete delivered against an active row is one whose file came back.
+		/// </summary>
+		public Task RecordRemovalAsync(string absolutePath)
+		{
+			string relativePath = Path.GetRelativePath(this.RootPath, absolutePath).Replace('\\', '/');
+
+			return new FolderIndexStore(this.DatabasePath)
+				.ApplyAsync([new ReconciledChange(relativePath, FileDelta.Removed, null)]);
 		}
 
 		public string[] FileIds()

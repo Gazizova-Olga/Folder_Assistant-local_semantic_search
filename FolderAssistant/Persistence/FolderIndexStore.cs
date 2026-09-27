@@ -49,11 +49,13 @@ internal sealed class FolderIndexStore : IIndexStore, IOutboxStore
 	private const Int32 Failed = 3;
 
 	/// <summary>
-	/// A row whose file is gone keeps its place until its removal has been delivered. The active value
-	/// is visible to the manifest reader, which must ask the same question of the same column.
+	/// A row whose file is gone keeps its place until its removal has been delivered. Both values are
+	/// visible outside this type, which must ask the same question of the same column: the manifest
+	/// reader takes the active rows, and the side that ends a row on a delivered removal ends it only
+	/// while the row still says the file is gone.
 	/// </summary>
 	internal const String Active = "active";
-	private const String Deleted = "deleted";
+	internal const String Deleted = "deleted";
 
 	/// <summary>
 	/// The one statement that writes the delivery mark, conditional on the content it describes. Shared

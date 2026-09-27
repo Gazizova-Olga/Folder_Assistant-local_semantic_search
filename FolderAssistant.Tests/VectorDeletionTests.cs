@@ -19,6 +19,11 @@ namespace FolderAssistant.Tests;
 /// virtual table, a virtual table cannot be a foreign-key target, and such a backend could
 /// therefore never provide the cascade this backend happens to have.
 /// </para>
+///
+/// <para>
+/// The last two are about when that deletion happens at all: the row is ended only while it is still
+/// marked removed, so a file that came back keeps both its row and its vectors.
+/// </para>
 /// </summary>
 public sealed class VectorDeletionTests
 {
@@ -33,12 +38,65 @@ public sealed class VectorDeletionTests
 		String fileId = RecordFile(databasePath, "f1.md");
 		Upsert(repository, databasePath, fileId, "c1");
 
+		// As the front end leaves it when the file goes: the row marked removed, its delivery queued.
+		RecordRemoval(databasePath, "f1.md");
+
 		writer.Deleted.Clear();
 
 		// The delivery of the file's removal: the one write that ends a file's row, after its vectors.
-		repository.DeleteFile(databasePath, fileId);
+		repository.DeleteFile(databasePath, fileId).Should().BeTrue();
 
 		writer.Deleted.Should().Contain("c1");
+	}
+
+	/// <summary>
+	/// A removal delivered after the file came back ends nothing — not the row the file has taken
+	/// again, and not the vectors hanging from it.
+	///
+	/// <para>
+	/// The dispatcher asks whether the file is recorded before delivering a removal, so reaching here
+	/// with an active row means the file returned between that question and this write. Ended anyway,
+	/// the row went and took its chunks, and the upsert queued behind the removal then found nothing
+	/// recorded and skipped: a file on disk, absent from every search until a periodic pass found it.
+	/// </para>
+	/// </summary>
+	[Fact]
+	public void A_Removal_Delivered_After_The_File_Came_Back_Ends_Nothing()
+	{
+		using TempFolder folder = new();
+		RecordingWriter writer = new();
+		String databasePath = BootstrapIn(folder);
+
+		FolderIndexRepository repository = new(writer);
+		String fileId = RecordFile(databasePath, "f1.md");
+		Upsert(repository, databasePath, fileId, "c1");
+
+		RecordRemoval(databasePath, "f1.md");
+
+		// The file comes back before its removal is delivered: the store records it active again.
+		RecordFile(databasePath, "f1.md");
+
+		writer.Deleted.Clear();
+
+		repository.DeleteFile(databasePath, fileId).Should().BeFalse("the row is not the removed one any more");
+
+		writer.Deleted.Should().BeEmpty("the vectors belong to the file the folder holds");
+		ChunkCount(databasePath, fileId).Should().Be(1, "its chunks hang from the row it has now");
+		StatusOf(databasePath, "f1.md").Should().Be("active");
+	}
+
+	/// <summary>A removal for a file no row carries ends nothing and is not an error.</summary>
+	[Fact]
+	public void A_Removal_For_A_File_That_Was_Never_Indexed_Ends_Nothing()
+	{
+		using TempFolder folder = new();
+		RecordingWriter writer = new();
+		String databasePath = BootstrapIn(folder);
+
+		new FolderIndexRepository(writer)
+			.DeleteFile(databasePath, FileIdentity.For("absent.md"))
+			.Should()
+			.BeFalse();
 	}
 
 	[Fact]
@@ -89,6 +147,35 @@ public sealed class VectorDeletionTests
 			.GetResult();
 
 		return FileIdentity.For(relativePath);
+	}
+
+	/// <summary>Marks the row removed and queues its delivery, as the front end does when a file goes.</summary>
+	private static void RecordRemoval(String databasePath, String relativePath)
+		=> new FolderIndexStore(databasePath)
+			.ApplyAsync([new ReconciledChange(relativePath, FileDelta.Removed, null)])
+			.GetAwaiter()
+			.GetResult();
+
+	private static String StatusOf(String databasePath, String relativePath)
+	{
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
+		using SqliteCommand command = connection.CreateCommand();
+
+		command.CommandText = "SELECT status FROM file_manifest WHERE file_path = $path;";
+		command.Parameters.AddWithValue("$path", relativePath);
+
+		return (String?)command.ExecuteScalar() ?? "no row";
+	}
+
+	private static Int64 ChunkCount(String databasePath, String fileId)
+	{
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(databasePath);
+		using SqliteCommand command = connection.CreateCommand();
+
+		command.CommandText = "SELECT COUNT(*) FROM chunk_manifest WHERE file_id = $fileId;";
+		command.Parameters.AddWithValue("$fileId", fileId);
+
+		return (Int64)command.ExecuteScalar()!;
 	}
 
 	private static void Upsert(FolderIndexRepository repository, String databasePath, String fileId, String chunkId)

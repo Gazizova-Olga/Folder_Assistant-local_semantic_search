@@ -34,7 +34,9 @@ internal sealed record IndexWriteSummary(
 /// <para>
 /// The one thing it does to a file row is end it: <see cref="DeleteFile"/> removes the row, and only
 /// as the last step of removing the file's vectors and chunks on a delivered removal, because vectors
-/// must go before the cascade and only this side can reach them.
+/// must go before the cascade and only this side can reach them. Even that is conditional — a row the
+/// store has made active again is a file that came back while its removal waited in the queue, and
+/// ending it would take the chunks of the file the folder now holds.
 /// </para>
 /// </summary>
 internal sealed class FolderIndexRepository
@@ -177,8 +179,21 @@ internal sealed class FolderIndexRepository
 	/// </para>
 	///
 	/// <para>
-	/// A file that was never indexed is not an error. Delivery is at-least-once, so a delete can arrive
-	/// twice, or arrive for a file whose upsert was skipped.
+	/// <strong>The row is ended only while it is still marked removed</strong>, and the condition is
+	/// read inside this transaction rather than trusted from the caller. The dispatcher already asks
+	/// whether the file came back before it delivers a removal, but a return landing after that
+	/// question and before this write would have had its row ended anyway — and then the upsert queued
+	/// behind the removal found nothing recorded and skipped, leaving a file on disk absent from every
+	/// search until a periodic pass rediscovered it. That window is one store round-trip wide, which
+	/// is narrow and not closed by being narrow. Here it closes: the transaction takes the write lock
+	/// at <c>BEGIN</c>, so the status this reads is the status the delete acts on, and a revival either
+	/// precedes it or waits for it (<c>SPEC-121</c>, <c>SPEC-130</c>).
+	/// </para>
+	///
+	/// <para>
+	/// A file that was never indexed is not an error, and neither is one that came back. Delivery is
+	/// at-least-once, so a delete can arrive twice, or arrive for a file whose upsert was skipped.
+	/// Both report <see langword="false"/>: nothing was ended.
 	/// </para>
 	/// </summary>
 	public Boolean DeleteFile(String databasePath, String fileId)
@@ -190,6 +205,13 @@ internal sealed class FolderIndexRepository
 			withVectorExtension: this._vectorStoreWriter.RequiresVectorExtension);
 
 		using SqliteTransaction transaction = connection.BeginTransaction();
+
+		// Before the vectors, not only before the row: a file that is recorded again keeps what was
+		// embedded for it, and the upsert queued behind this removal supersedes those chunks itself.
+		if (!IsStillRemoved(connection, transaction, fileId))
+		{
+			return false;
+		}
 
 		this.DeleteVectorsOf(connection, transaction,
 			"SELECT chunk_id FROM chunk_manifest WHERE file_id = $fileId;",
@@ -285,6 +307,29 @@ internal sealed class FolderIndexRepository
 		}
 
 		this._vectorStoreWriter.DeleteVectors(connection, transaction, chunkIds);
+	}
+
+	/// <summary>
+	/// Whether the row this removal is about is still the removed one.
+	///
+	/// <para>
+	/// The question is asked of the same column the manifest reader reads, and answered by the value
+	/// the store writes when it marks a file gone. A row that is active again is a file that came back
+	/// while its removal sat in the queue; no row at all is a file that was never indexed.
+	/// </para>
+	/// </summary>
+	private static Boolean IsStillRemoved(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		String fileId)
+	{
+		using SqliteCommand command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = "SELECT status FROM file_manifest WHERE file_id = $fileId;";
+		command.Parameters.AddWithValue("$fileId", fileId);
+
+		return command.ExecuteScalar() is String status
+			&& String.Equals(status, FolderIndexStore.Deleted, StringComparison.Ordinal);
 	}
 
 	/// <summary>
