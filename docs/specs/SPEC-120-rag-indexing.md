@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft |
-| Version | 0.19.0 |
+| Version | 0.20.0 |
 | Owner | Indexing |
-| Last updated | 2026-09-23 |
+| Last updated | 2026-09-28 |
 
 ## Purpose
 
@@ -262,6 +262,33 @@ decided when the hosted-service factory executes, which is after the configurati
 ([SPEC-100](SPEC-100-conversation-orchestration.md)).
 
 
+### What a status endpoint reports
+
+`GET /api/index/status` is what a person or a script asks while waiting for a folder to be indexed. It
+carries the readiness above with its cause and the time of the last completed pass, and three counts.
+
+**Still building and the build failed stay apart here too.** That distinction is the reason for
+reporting a status at all: the first is the condition every process passes through and the second is a
+fault someone has to act on. It is the same split the retrieval telemetry files by.
+
+**The counts come from two tables and are deliberately not derived from each other.** Delivered and
+pending are properties of a file's record — the delivery mark against the content hash, over active rows
+only — while failed is a property of the queue, because a file given up on keeps its record and nothing
+in the record says so. A row with no mark at all is pending: nothing has been delivered for it, which is
+the same backlog as a mark that has gone stale.
+
+**Failed counts files, not operations.** One file can fail an upsert and then a delete; reporting two
+would overstate what is missing from the index, and what an operator is watching is how many of their
+files are not there.
+
+**The count is exact and the list of names is a sample, so the truncation flag is not optional.** A
+sample read as the whole is how a folder with four hundred unindexed files looks like one with fifty.
+The sample names each file with its last error and how many attempts it took.
+
+**It reads through a read-only connection.** This is the endpoint that gets polled, and polling must not
+be able to perturb what it reports: a write-capable connection would contend for the write lock the
+indexer needs to make the backlog it is being asked about go down.
+
 ### Keeping up with the folder
 
 After the first pass, the file-indexing front end keeps the index in step with the folder
@@ -440,6 +467,14 @@ same folder indexing differently depending on a number chosen for memory reasons
 time able to tell. Two further tests pin what it is for: chunks from many files are shown to arrive in one
 call rather than one call per file, and a window below one is shown to fall back to a chunk at a time
 rather than throwing, since zero and a negative fail differently without the clamp.
+
+The status endpoint is asserted through the running host, over a real database: a ready index reporting
+what it delivered, a recorded-but-undelivered file counting as pending rather than as indexed or failed,
+a file given up on named with its error and attempts, one file that failed twice counted once, and more
+failures than the sample holds counted exactly while the list is flagged as a sample. Two of those are
+mutation-tested: counting operations instead of files kills the repeat-failure test, and taking the
+sample without the extra row — so nothing ever reports truncation — kills the oversized one. That the
+reader cannot write is asserted directly against its connection.
 
 ## Open questions
 

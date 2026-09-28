@@ -254,6 +254,11 @@ internal sealed class Program
 			return provider => ProviderClientFactory.Create(provider, config.ConnectionTimeout);
 		});
 
+		// Counts the index for the status endpoint, on a read-only connection: the one endpoint that gets
+		// polled must not contend for the write lock the indexer needs to make the backlog go down.
+		builder.Services.AddSingleton(sp =>
+			new IndexStatusReader(sp.GetRequiredService<DatabaseBootstrapResult>().DatabasePath));
+
 		// The conversation database's one store: the messages a conversation is made of, and the sessions
 		// beside them. It serves the history provider below and the session seam the turn already used.
 		builder.Services.AddSingleton(sp =>
@@ -388,7 +393,7 @@ internal sealed class Program
 		// The one value that must be known before the host is built, because Kestrel binds on it and
 		// it cannot be late-bound. It does not change behaviour.
 		Int32 port = builder.Configuration.GetValue<Int32?>($"{AgentConfig.SectionName}:Port") ?? new AgentConfig().Port;
-		builder.WebHost.UseUrls($"http://localhost:{port}");
+		builder.WebHost.UseUrls(ListenUrl(port));
 
 		WebApplication app = builder.Build();
 
@@ -411,12 +416,28 @@ internal sealed class Program
 		// writes, and the only way to see a conversation other than having been at the console for it.
 		app.MapHistory();
 
+		// What the index is doing, for something that polls: still building and the build failed are
+		// different answers, and the failed-file count is exact while the list of them is a sample.
+		app.MapIndexStatus();
+
 		// Prometheus scrapes this directly, on the port the app already serves. A collector in
 		// between would be a second process to run before any of this is visible.
 		app.MapPrometheusScrapingEndpoint();
 
 		app.Run();
 	}
+
+	/// <summary>
+	/// Where the server listens: loopback, and only loopback (<c>SPEC-920</c>).
+	///
+	/// <para>
+	/// There is no authentication, and none is planned while this holds — a single-user process on its own
+	/// machine gains nothing from a password stored beside the data it protects. Binding anywhere else would
+	/// turn the same surface into an unauthenticated service, so if that ever becomes a supported deployment,
+	/// authentication arrives in the same change and not after it.
+	/// </para>
+	/// </summary>
+	internal static String ListenUrl(Int32 port) => $"http://localhost:{port}";
 
 	/// <summary>
 	/// Forces the startup dependencies into existence before the server accepts a request, without

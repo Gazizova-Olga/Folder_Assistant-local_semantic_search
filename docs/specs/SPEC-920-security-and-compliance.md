@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | Status | Draft — the posture below is what the tree does; the items marked *not built* say so |
-| Version | 0.4.0 |
+| Version | 0.5.0 |
 | Owner | — |
-| Last updated | 2026-09-27 |
+| Last updated | 2026-09-28 |
 
 ## Purpose
 
@@ -33,7 +33,10 @@ three things*, and a reader should not have to derive them from the code.
 
 **One person, one folder, one process, on their own machine.** Kestrel binds
 `http://localhost:{port}` and nothing else, so the HTTP surface is reachable only from the
-machine it runs on. **There is no authentication and none is planned while that holds** — a
+machine it runs on. The rule is one function in the composition root (`Program.ListenUrl`) rather than a
+string at the call site, so that what decides it can be asserted: a test holds it to a loopback address
+with no wildcard. That test covers the rule and not the socket — a test host replaces the server — and
+says so, because the change that would do the damage is a wildcard written where the rule is decided. **There is no authentication and none is planned while that holds** — a
 loopback-only single-user process gains nothing from a password it would store beside the data it
 protects. Two consequences follow, and both are load-bearing:
 
@@ -177,6 +180,10 @@ the requirement.
 
 ## Changelog
 
+- **0.5.0** (2026-09-28) — the loopback rule is a named function in the composition root with a test over
+  it, rather than a string at the call site with a claim in this spec. The endpoints that landed with it —
+  reading and clearing a conversation, and the index status — inherit the posture unchanged: no
+  authentication, loopback only, and a note that the second of those is what makes the first acceptable.
 - **0.4.0** (2026-09-27) — the shipped default grant holds no mutation tool: the ability to change the
   folder is granted in `Workflow:Agents` or by the default roster, never by leaving the configuration
   alone, because nothing bounds a mutation once the model holds the tool and the two mistakes are not

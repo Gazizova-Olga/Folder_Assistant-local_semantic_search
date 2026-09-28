@@ -41,12 +41,13 @@ internal sealed class FolderIndexStore : IIndexStore, IOutboxStore
 	/// <summary>
 	/// What a queued delivery's <c>status</c> column holds. The two terminal values are kept apart
 	/// deliberately: a queue full of work given up on must not read like one where everything
-	/// succeeded.
+	/// succeeded — and the failed one is visible outside this type, because what a status endpoint
+	/// reports as a failed file is read from the same column and must mean the same thing.
 	/// </summary>
 	private const Int32 Pending = 0;
 	private const Int32 InFlight = 1;
 	private const Int32 Done = 2;
-	private const Int32 Failed = 3;
+	internal const Int32 Failed = 3;
 
 	/// <summary>
 	/// A row whose file is gone keeps its place until its removal has been delivered. Both values are

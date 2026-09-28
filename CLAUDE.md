@@ -41,9 +41,9 @@ block its caller:
   file-level search (`SearchTools`), each file holder over its own containment guard
   (`WorkspacePathGuard`) — and the passage search runs retrieval (`IRetrievalQuery`, two backends),
   the passage builder, the screen and the reducer. Every vector written is one a question can read.
-- **Not built** — most of the HTTP surface: `GET /api/index/status`, and the OpenAI Responses endpoints
-  with DevUI. What exists is `GET /`, `GET /metrics`, and `GET`/`DELETE /api/history`, which reads and
-  clears a conversation. Nothing *resumes* one: the console names a new conversation every run.
+- **Not built** — the OpenAI Responses endpoints with DevUI, which is the browser UI. What exists is
+  `GET /`, `GET /metrics`, `GET`/`DELETE /api/history` and `GET /api/index/status`. Nothing *resumes* a
+  conversation: the console names a new one every run.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -427,8 +427,17 @@ all of them; there is no undo. A message is **rendered on read and never stored 
 the reader cannot parse is reported as `unreadable` rather than dropped — the turn refuses such a
 conversation, and whoever looks at it is entitled to see which message is the problem.
 
+`GET /api/index/status` is what something polling asks: the readiness with its cause and the last
+completed pass, and three counts on a **read-only connection**, because polling must not contend for the
+write lock the indexer needs to make the backlog go down. Delivered and pending come from the file
+records, failed from the queue, and neither is derived from the other; **failed counts files, not
+operations**, since one file can fail an upsert and then a delete. The count is exact and the names are a
+sample, so `failedFilesTruncated` is not optional.
+
 Kestrel binds `http://localhost:{port}` and nothing else (`SPEC-920`): there is no authentication, and
-binding anywhere else would make it an unauthenticated service.
+binding anywhere else would make it an unauthenticated service. The rule is `Program.ListenUrl`, one
+function with a test over it, rather than a string at the call site — the test covers the rule and not
+the socket, and says so.
 
 `SearchText` reads exactly the files the index does — the extension list asked of the text
 extraction registry, narrowed to the formats that scan as raw lines, and the scanner's size bound
