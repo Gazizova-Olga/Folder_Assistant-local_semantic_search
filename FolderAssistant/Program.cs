@@ -407,6 +407,10 @@ internal sealed class Program
 				config.Indexing.AllowRemoteEmbeddingEndpoint),
 		}));
 
+		// What a conversation was, and clearing one. The first reader of the rows the history provider
+		// writes, and the only way to see a conversation other than having been at the console for it.
+		app.MapHistory();
+
 		// Prometheus scrapes this directly, on the port the app already serves. A collector in
 		// between would be a second process to run before any of this is visible.
 		app.MapPrometheusScrapingEndpoint();

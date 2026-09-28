@@ -82,7 +82,7 @@ flowchart TB
 
     subgraph surface["Conversation and HTTP — Phase C, SPEC-170"]
         direction LR
-        history["GET/DELETE /api/history"]
+        history["GET/DELETE /api/history<br/>list, transcript, delete; every cut said"]
         status["GET /api/index/status<br/>read-only, bounded failed sample"]
         responses["OpenAI Responses endpoints + DevUI<br/>SQLite conversation storage, loopback only"]
     end
@@ -112,7 +112,7 @@ flowchart TB
     runner --> console & responses
     roster -->|"ChatHistoryProvider on each agent"| convhist
     runner --> convsess
-    history --> convhist
+    history --> convsess
     status --> store
     convhist & convsess --> convboot
 
@@ -122,9 +122,9 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,convhist,convsess,conn,blob,vec,rtel,extract live
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,convhist,convsess,history,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
-    class history,status,responses planned
+    class status,responses planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 
@@ -194,6 +194,7 @@ composition without a caller.
 |---|---|---|
 | **C5** — provenance framing. Landed 2026-09-27 out of order, because it depended on nothing else in this phase; its row is in the Phase B ledger above, beside the commits it shipped with | `facade` | **Landed** 2026-09-27 |
 | **C2/C3 reshaped before either was built**: a conversation's messages are written by the framework's own `ChatHistoryProvider` seam rather than by a delegating agent of ours projecting turns into rows. The default provider already keeps history inside the session, so our own projection would have been a *second* copy — the messages the model is given, and the messages a person is shown — diverging with nothing failing. What it costs is that the store is on the prompt path, which is why a row holds the serialized `ChatMessage` and the display form is derived on read; SPEC-170 0.2.0 | `convhist` | **Decided** 2026-09-27 |
+| **C4, first part** — `GET /api/history` lists the conversations and returns one transcript, `DELETE` clears one whole through the cascade. Absent and empty are different answers (`404` against an empty window), a delete naming no conversation is refused rather than read as all of them, and every bound is a constant with its cut in the response: the listing says whether it is all of them, a message says whether its text was cut, and a conversation says how many earlier messages the window left out. The window is the end of the conversation, because that is what a person asks for. A message is rendered on read and never stored in that form, and a row the reader cannot parse is reported as `unreadable` rather than dropped; SPEC-170 0.4.0 | `history` | **Landed** 2026-09-28 |
 | **C2** — a conversation outlives the process: `ConversationStore` as the database's one writer over two seams, `SqliteChatHistoryProvider` set on every agent the registry builds, and the session store replacing the in-process one behind the seam the turn already used. The turn names the conversation on the session, because the provider serves every session and can hold none of its own; a run with no conversation named — a delegation — keeps no history. Two framework properties measured rather than assumed: storage is handed the caller's new messages only, so nothing is stored twice, and a session with a provider set carries no messages, so the rows are the only copy. An unreadable message row fails the turn while an unreadable session blob starts a fresh one, and the asymmetry is written down; SPEC-170 0.3.0, SPEC-100 0.10.0 | `convhist`, `convsess` | **Landed** 2026-09-27 |
 | **C1** — the conversation database: its own file beside the index (`conversations.db`), the whole schema owned by one bootstrapper and no store running DDL, WAL set once at creation, ordered before the server listens by the same startup filter as the index bootstrap; `conversation.next_seq` as the sequence allocator with `MAX(seq) + 1` refused by the schema, a message holding the framework's serialized `ChatMessage` and naming the agent that produced it, `session_state` keyed by agent and conversation, and a cascade from a conversation to both. Configuration naming one file for both databases is refused at startup, and the split is asserted as the property it exists for: a conversation survives the index being deleted and rebuilt. Live without a caller on purpose; SPEC-170 0.1.0 written with it, SPEC-130 0.17.0, SPEC-100 0.9.1, SPEC-000 0.8.0 | `convboot` | **Landed** 2026-09-27 |
 
@@ -220,7 +221,8 @@ process** — the messages through the framework's own history seam, the coordin
 seam the turn already used, and the turn naming the conversation on the session so the provider knows
 which one a run belongs to.
 
-What remains is grey, and it is the front of Phase C rather than its back: the HTTP surface and DevUI, and
-the history and status endpoints — so a conversation is kept and nothing but the console can read one.
-Beside them stand two measurements the plan names before any default moves — the roster's cost against
-the single agent, and the score-gap fraction from the benchmark — and the tuning they decide.
+What remains is grey, and it is the last of Phase C: `GET /api/index/status`, and the OpenAI Responses
+endpoints with DevUI. A conversation is kept and can be read; what nothing yet does is *resume* one, which
+is a decision about what a front end should default to rather than a missing wire. Beside them stand two
+measurements the plan names before any default moves — the roster's cost against the single agent, and the
+score-gap fraction from the benchmark — and the tuning they decide.

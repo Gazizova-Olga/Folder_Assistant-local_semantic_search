@@ -41,9 +41,9 @@ block its caller:
   file-level search (`SearchTools`), each file holder over its own containment guard
   (`WorkspacePathGuard`) — and the passage search runs retrieval (`IRetrievalQuery`, two backends),
   the passage builder, the screen and the reducer. Every vector written is one a question can read.
-- **Not built** — the HTTP surface. It is the only thing in Phase C left: a conversation is kept, and the
-  console is the only way to hold one. The parts of the architecture below that describe the surface are
-  intent.
+- **Not built** — most of the HTTP surface: `GET /api/index/status`, and the OpenAI Responses endpoints
+  with DevUI. What exists is `GET /`, `GET /metrics`, and `GET`/`DELETE /api/history`, which reads and
+  clears a conversation. Nothing *resumes* one: the console names a new conversation every run.
 
 Scope and sequencing are owned by `notes/DEVELOPMENT-PLAN.md`. `notes/` is a **separate private
 repository** cloned inside this one and gitignored here; nothing in it is ever `git add`ed. Read the
@@ -408,6 +408,27 @@ ending it found. Every completed mutation is reported to the running front end t
 `IIndexChangeNotifier` with its own kind, one report per file, and the report is advisory: one that
 fails is a note on the result, never a failure of a write that happened. Both holders read a file
 through one `TextFile` helper, so they cannot mean different things by "a text file".
+
+### Surfaces — the console and three endpoints, live
+
+`GET /` reports the analyzed folder, the active profile with its fallback note, and the embedding-endpoint
+note while a remote one is allowed; `GET /metrics` is the Prometheus scrape. `GET`/`DELETE /api/history`
+(`HistoryEndpoints`, `SPEC-170`) is the only way to see a conversation other than having been at the
+console for it: the list, one transcript, or a delete that takes the messages and every agent's session
+with it.
+
+Its rules are the file tools' rules, for the same reason: **every bound is a code constant and every cut
+is said in the response**. The listing says whether it is all of them, a message says whether its text was
+cut, and a conversation says how many earlier messages the window left out — the window being the *end* of
+the conversation, since where it got to is what a person asks for. **Absent and empty are different**
+**answers**: a conversation nobody started is `404`, because a reader shown an empty transcript for a
+mistyped name would believe the name. **A delete naming no conversation is refused** rather than read as
+all of them; there is no undo. A message is **rendered on read and never stored in that form**, and a row
+the reader cannot parse is reported as `unreadable` rather than dropped — the turn refuses such a
+conversation, and whoever looks at it is entitled to see which message is the problem.
+
+Kestrel binds `http://localhost:{port}` and nothing else (`SPEC-920`): there is no authentication, and
+binding anywhere else would make it an unauthenticated service.
 
 `SearchText` reads exactly the files the index does — the extension list asked of the text
 extraction registry, narrowed to the formats that scan as raw lines, and the scanner's size bound

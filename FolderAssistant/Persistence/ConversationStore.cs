@@ -5,6 +5,28 @@ using Microsoft.Data.Sqlite;
 
 namespace FolderAssistant.Persistence;
 
+/// <summary>One conversation, as a reader of the database sees it from outside.</summary>
+internal sealed record ConversationSummary(
+	String ConversationId,
+	String CreatedUtc,
+	String UpdatedUtc,
+	Int64 Messages);
+
+/// <summary>Conversations, and whether the list is all of them.</summary>
+internal sealed record ConversationPage(IReadOnlyList<ConversationSummary> Conversations, Boolean Truncated);
+
+/// <summary>One stored message, still in the framework's form: interpreting it is the reader's.</summary>
+internal sealed record StoredMessage(Int64 Seq, String AgentName, String MessageJson, String CreatedUtc);
+
+/// <summary>
+/// One conversation and a window onto its messages. <paramref name="OmittedFromStart"/> is how many
+/// earlier messages the window left out, which is zero when it is the whole conversation.
+/// </summary>
+internal sealed record ConversationTranscript(
+	ConversationSummary Conversation,
+	IReadOnlyList<StoredMessage> Messages,
+	Int64 OmittedFromStart);
+
 /// <summary>
 /// The conversation database's writer and reader: the messages a conversation is made of, and the
 /// serialized agent session each turn continues from (<c>SPEC-170</c>).
@@ -145,6 +167,147 @@ internal sealed class ConversationStore : IAgentSessionStore
 		return Task.CompletedTask;
 	}
 
+	/// <summary>
+	/// Every conversation the database holds, most recently touched first, with how many messages each
+	/// carries.
+	///
+	/// <para>
+	/// Bounded by <paramref name="max"/>, and the caller is told whether the bound applied rather than
+	/// left to infer it from a round number.
+	/// </para>
+	/// </summary>
+	public Task<ConversationPage> ListConversationsAsync(Int32 max, CancellationToken cancellationToken = default)
+	{
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(max);
+		cancellationToken.ThrowIfCancellationRequested();
+
+		List<ConversationSummary> conversations = [];
+
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(this._databasePath);
+		using SqliteCommand command = connection.CreateCommand();
+
+		// One more than asked for, which is how the bound is reported without a second count query.
+		command.CommandText = """
+			SELECT c.conversation_id, c.created_utc, c.updated_utc,
+			       (SELECT COUNT(*) FROM message m WHERE m.conversation_id = c.conversation_id)
+			FROM conversation c
+			ORDER BY c.updated_utc DESC, c.conversation_id
+			LIMIT $limit;
+			""";
+		command.Parameters.AddWithValue("$limit", max + 1);
+
+		using SqliteDataReader reader = command.ExecuteReader();
+
+		while (reader.Read())
+		{
+			conversations.Add(new ConversationSummary(
+				reader.GetString(0),
+				reader.GetString(1),
+				reader.GetString(2),
+				reader.GetInt64(3)));
+		}
+
+		Boolean truncated = conversations.Count > max;
+		if (truncated)
+		{
+			conversations.RemoveAt(conversations.Count - 1);
+		}
+
+		return Task.FromResult(new ConversationPage(conversations, truncated));
+	}
+
+	/// <summary>
+	/// One conversation's messages in order, across every agent that served it, or null when there is no
+	/// such conversation.
+	///
+	/// <para>
+	/// Null and empty are kept apart deliberately: a conversation nobody started is not the same as one
+	/// whose turn failed before it stored anything, and a reader shown an empty transcript for a name it
+	/// mistyped would believe the name.
+	/// </para>
+	///
+	/// <para>
+	/// A conversation longer than <paramref name="max"/> yields its <em>most recent</em> messages and says
+	/// how many it left out. Reading a long conversation from its beginning stops at the part nobody is
+	/// looking for; where it got to is what a person asks for, and the count is what keeps the answer
+	/// honest about being a window.
+	/// </para>
+	/// </summary>
+	public Task<ConversationTranscript?> ReadConversationAsync(
+		String conversationId,
+		Int32 max,
+		CancellationToken cancellationToken = default)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
+		ArgumentOutOfRangeException.ThrowIfNegativeOrZero(max);
+		cancellationToken.ThrowIfCancellationRequested();
+
+		using SqliteConnection connection = FolderDatabaseConnection.OpenRead(this._databasePath);
+
+		ConversationSummary? summary = ReadSummary(connection, conversationId);
+		if (summary is null)
+		{
+			return Task.FromResult<ConversationTranscript?>(null);
+		}
+
+		List<StoredMessage> messages = [];
+
+		using (SqliteCommand command = connection.CreateCommand())
+		{
+			// The last $limit by sequence, put back in order below: the window is the end of the
+			// conversation, and SQLite gives it cheaply in reverse.
+			command.CommandText = """
+				SELECT seq, agent_name, message_json, created_utc FROM message
+				WHERE conversation_id = $conversation
+				ORDER BY seq DESC
+				LIMIT $limit;
+				""";
+			command.Parameters.AddWithValue("$conversation", conversationId);
+			command.Parameters.AddWithValue("$limit", max);
+
+			using SqliteDataReader reader = command.ExecuteReader();
+
+			while (reader.Read())
+			{
+				messages.Add(new StoredMessage(
+					reader.GetInt64(0),
+					reader.GetString(1),
+					reader.GetString(2),
+					reader.GetString(3)));
+			}
+		}
+
+		messages.Reverse();
+
+		return Task.FromResult<ConversationTranscript?>(new ConversationTranscript(
+			summary,
+			messages,
+			OmittedFromStart: Math.Max(0, summary.Messages - messages.Count)));
+	}
+
+	/// <summary>
+	/// Removes one conversation whole — its messages and every agent's session with it — and reports
+	/// whether there was one.
+	///
+	/// <para>
+	/// One statement, because the cascade is declared on the rows that hang from a conversation: three
+	/// deletes could half-succeed and leave a session for a conversation that no longer exists.
+	/// </para>
+	/// </summary>
+	public Task<Boolean> DeleteConversationAsync(String conversationId, CancellationToken cancellationToken = default)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(conversationId);
+		cancellationToken.ThrowIfCancellationRequested();
+
+		using SqliteConnection connection = FolderDatabaseConnection.OpenWrite(this._databasePath);
+		using SqliteCommand command = connection.CreateCommand();
+
+		command.CommandText = "DELETE FROM conversation WHERE conversation_id = $conversation;";
+		command.Parameters.AddWithValue("$conversation", conversationId);
+
+		return Task.FromResult(command.ExecuteNonQuery() > 0);
+	}
+
 	// ── IAgentSessionStore ─────────────────────────────────────────────────────
 
 	public Task<JsonElement?> LoadAsync(String agentName, String conversationId, CancellationToken cancellationToken)
@@ -267,6 +430,24 @@ internal sealed class ConversationStore : IAgentSessionStore
 			? first
 			: throw new InvalidOperationException(
 				$"The conversation '{conversationId}' has no row to take message sequences from.");
+	}
+
+	private static ConversationSummary? ReadSummary(SqliteConnection connection, String conversationId)
+	{
+		using SqliteCommand command = connection.CreateCommand();
+		command.CommandText = """
+			SELECT c.conversation_id, c.created_utc, c.updated_utc,
+			       (SELECT COUNT(*) FROM message m WHERE m.conversation_id = c.conversation_id)
+			FROM conversation c
+			WHERE c.conversation_id = $conversation;
+			""";
+		command.Parameters.AddWithValue("$conversation", conversationId);
+
+		using SqliteDataReader reader = command.ExecuteReader();
+
+		return reader.Read()
+			? new ConversationSummary(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt64(3))
+			: null;
 	}
 
 	private static String UtcNow() => DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);

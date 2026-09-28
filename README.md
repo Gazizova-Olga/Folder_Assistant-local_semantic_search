@@ -119,9 +119,9 @@ colour-coded. The third state, built but not yet reachable, held most of the age
 
 **Not built**
 
-- The HTTP surface. A conversation is kept now — its messages and the agent's session are written to a
-  second SQLite database beside the index, so it survives a restart — but the console is the only way to
-  hold one, and nothing can read a conversation back.
+- Most of the HTTP surface: the index-status endpoint, and the OpenAI Responses endpoints with DevUI. A
+  conversation is kept and can be read back — `GET /api/history` lists them and returns one transcript,
+  `DELETE` clears one — but nothing *resumes* one, so the console starts a new conversation each run.
 
 In practice: you can run the application today to **index a folder, watch it follow your edits, ask
 it questions at the console and read the telemetry**. A conversation lasts as long as the process,
@@ -207,7 +207,7 @@ flowchart TB
 
     subgraph surface["Conversation and HTTP — Phase C, SPEC-170"]
         direction LR
-        history["GET/DELETE /api/history"]
+        history["GET/DELETE /api/history<br/>list, transcript, delete; every cut said"]
         status["GET /api/index/status<br/>read-only, bounded failed sample"]
         responses["OpenAI Responses endpoints + DevUI<br/>SQLite conversation storage, loopback only"]
     end
@@ -237,7 +237,7 @@ flowchart TB
     runner --> console & responses
     roster -->|"ChatHistoryProvider on each agent"| convhist
     runner --> convsess
-    history --> convhist
+    history --> convsess
     status --> store
     convhist & convsess --> convboot
 
@@ -247,9 +247,9 @@ flowchart TB
     classDef planned fill:#37474f,stroke:#b0bec5,color:#ffffff
     classDef deferredCls fill:#263238,stroke:#546e7a,color:#b0bec5,stroke-dasharray:4 3
 
-    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,convhist,convsess,conn,blob,vec,rtel,extract live
+    class root,config,metrics,profiles,prog,lsa,ollama,etel,pass,state,indexer,store,bridge,hold,boot,convboot,convhist,convsess,history,conn,blob,vec,rtel,extract live
     class cosine,vecq,floor,reducer,snippet,guard,readt,textsearch,about,searchidx,mutate,provider,facade,roster,runner,batching,console live
-    class history,status,responses planned
+    class status,responses planned
     class webui,approvals,legacydoc,hybrid deferredCls
 ```
 

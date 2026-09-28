@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| Status | Draft — implemented: the database, the history provider and the session store. The HTTP surface that reads history is not built |
-| Version | 0.3.0 |
+| Status | Draft — implemented: the database, the history provider, the session store, and the endpoints that read and clear a conversation |
+| Version | 0.4.0 |
 | Owner | Persistence |
-| Last updated | 2026-09-27 |
+| Last updated | 2026-09-28 |
 
 ## Purpose
 
@@ -18,7 +18,7 @@ serialized agent session each turn continues from.
 
 - The conversation database: where it lives, its schema, and its forward migration path.
 - Which seam writes a conversation's messages, and in what form they are kept.
-- What a front end may read back about a conversation.
+- What a front end may read back about a conversation, and how it is rendered for reading.
 
 **Out of scope**
 
@@ -31,12 +31,12 @@ serialized agent session each turn continues from.
 ## Implementation status
 
 **Live.** The database is created before the server listens, by one bootstrapper that owns its whole
-schema; `ConversationStore` is its only writer, serving two seams over one connection policy — the
-messages, through `SqliteChatHistoryProvider` on every agent, and the sessions, behind the
+schema; `ConversationStore` is its only writer and reader, serving two seams over one connection policy —
+the messages, through `SqliteChatHistoryProvider` on every agent, and the sessions, behind the
 `IAgentSessionStore` the turn already used ([SPEC-100](SPEC-100-conversation-orchestration.md)). A
 conversation survives a restart, which is asserted as that: a second store and provider over the same
-file continue a conversation the first one wrote. **Not built**: the HTTP surface that would let anyone
-read a conversation back, and any pruning of one.
+file continue a conversation the first one wrote. `GET` and `DELETE /api/history` read and clear one.
+**Not built**: resuming a stored conversation from a front end, and any pruning of one.
 
 ## Requirements
 
@@ -172,6 +172,46 @@ the silently plausible wrong answer this system exists to refuse. The failure na
 says the conversation can be deleted to start again, because that is the one action available. Losing a
 session blob costs memory; losing a message changes what was said.
 
+### Reading a conversation back
+
+**`GET /api/history`** lists the conversations the database holds, most recently touched first, each with
+its times and its message count. **`GET /api/history?conversation=<id>`** is one conversation's
+transcript. **`DELETE /api/history?conversation=<id>`** removes one whole — messages and every agent's
+session with it, in one statement, because the cascade is declared on the rows that hang from a
+conversation and three deletes could half-succeed.
+
+One route with an optional conversation rather than a resource tree, because a conversation is not
+something this application creates on request: it is what a turn leaves behind.
+
+**Absent and empty are different answers.** A conversation nobody started is `404`; one that exists and
+holds nothing is `200` with an empty window. A reader shown an empty transcript for a name they mistyped
+would believe the name and conclude the conversation had nothing in it.
+
+**A delete naming no conversation is refused**, not read as *all of them*. There is no undo, and one
+forgotten query parameter should not be able to clear every conversation on the machine. Deleting a name
+that does not exist is `404` rather than a silent success, so a script deleting the wrong one is told.
+
+**Every bound is a constant and every cut is said in the response**, the rule the file tools already hold
+([SPEC-101](SPEC-101-file-tools.md)): the listing says whether it is all of them, a message's rendered
+text carries a truncation flag, and a conversation longer than the window reports how many earlier
+messages it left out. A window silently taken for the whole is how a reader concludes a turn never
+happened.
+
+**The window is the end of the conversation, not its beginning.** Reading a long one from the start stops
+at the part nobody is looking for; where it got to is what a person asks for, and the omitted count is
+what keeps the answer honest about being a window.
+
+**A message is rendered, never re-serialized into storage.** The row keeps the framework's form, and the
+response carries the role, the agent, the text, the tools the message called with their arguments, and
+what those tools returned. A tool result is shown because it is the folder's own content and whoever can
+reach this endpoint owns the folder — bounded, since a passage search's result is the largest thing in a
+conversation.
+
+**A row this reader cannot parse is reported as itself**, with the role `unreadable`, rather than dropped
+or thrown over. A turn refuses to continue such a conversation (above); a person looking at it is
+entitled to see *which* message is the problem, and a listing that failed whole would hide it. The two
+rules are consistent: neither pretends the message was something else.
+
 ### Error model
 
 - An invalid path or configuration is an argument error, thrown before anything is opened.
@@ -211,11 +251,11 @@ pointed at one file through different configuration.
 
 ## Open questions
 
-- **Nothing resumes a stored conversation yet, and that is the visible half of what is missing.** The
-  console names a new conversation on its first turn of every run ([SPEC-100](SPEC-100-conversation-orchestration.md)),
-  so what is written is never read back by the application that wrote it — the rows are there, and only a
-  SQLite client can see them. Resuming is the HTTP surface’s to offer, and a front end that resumed the most
-  recent conversation by default would be a decision about what an operator expects, not a missing wire.
+- **Nothing resumes a stored conversation, only reads one.** The console names a new conversation on its
+  first turn of every run ([SPEC-100](SPEC-100-conversation-orchestration.md)), so an earlier conversation
+  can be read through `GET /api/history` and not continued. Resuming means a front end saying which
+  conversation a turn belongs to, which the runner already accepts; what it needs is a decision about what
+  an operator expects by default, not a missing wire.
 
 - **Whether a conversation is ever pruned.** Nothing ages a conversation out today, and an operator's
   only control is deleting the file. A retention rule needs to know what a conversation costs in
@@ -235,6 +275,14 @@ pointed at one file through different configuration.
 
 ## Changelog
 
+- **0.4.0** (2026-09-28) — a conversation can be read back and cleared: `GET /api/history` for the list and
+  for one transcript, `DELETE` for one conversation, over the store that already held them. Absent and empty
+  are different answers, a delete naming nothing is refused rather than read as all of them, and every bound
+  is a constant with its cut in the response — the listing says whether it is all of them, a message says
+  whether its text was cut, and a conversation says how many earlier messages the window left out. The window
+  is the end of the conversation, because where it got to is what a person asks for. A message is rendered on
+  read and never stored in that form, and a row this reader cannot parse is reported as `unreadable` rather
+  than dropped.
 - **0.3.0** (2026-09-27) — built: `ConversationStore` as the database's one writer over two seams, the
   `SqliteChatHistoryProvider` on every agent, and the session store replacing the in-process one behind the
   seam the turn already used. A conversation now survives a restart. Two properties of the framework's seam
